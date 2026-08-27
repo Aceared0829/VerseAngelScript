@@ -81,4 +81,7 @@ sdk/docs/manual/
 # Exclude AngelScript debug output files
 AS_DEBUG/
 
+# Exclude Codex workspace artifacts
+.codex/
+
 

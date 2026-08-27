@@ -1,9 +1,9 @@
-If you haven't done that already set up an environment variable named MINGDIR
-pointing the the directory where your MinGW is, e.g. "C:\MINGW"
+如果尚未设置，请创建名为 MINGDIR 的环境变量，
+并将其指向 MinGW 所在目录，例如 "C:\MINGW"。
 
-To compile the library, just type in the command line:
+要编译该库，只需在命令行中执行：
 
 make
 make install
 
-Sent in by Jakub "krajzega" Wasilewski
+由 Jakub "krajzega" Wasilewski 提供。

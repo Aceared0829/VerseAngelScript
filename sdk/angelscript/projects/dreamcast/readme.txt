@@ -1,22 +1,22 @@
-Author of sh4 specifics
+SH4 特定内容作者
 -----------------------
-Fredrik Ehnbom - original version in May, 2004
-Fredrik Ehnbom - updated version for 2.0.0wip2 in Jan, 2005
+Fredrik Ehnbom - 2004 年 5 月的原始版本
+Fredrik Ehnbom - 2005 年 1 月针对 2.0.0wip2 更新的版本
 
-Howto use
+使用方法
 -----------------------
-This assumes a working kallistios installation. It was developed with
-kallistios 1.3.x subversion revision 183 and sh-elf-gcc 3.4.3. Though,
-it does not really rely on anything kallistios specific, so it should
-be possible to get it up and running on other sh4-based architectures.
+本文假定你已正确安装 kallistios。此项目使用 kallistios 1.3.x
+的 Subversion 第 183 次修订版本及 sh-elf-gcc 3.4.3 开发。不过，
+它实际上并不依赖任何 kallistios 特有功能，因此应该也能在其他
+基于 SH4 的架构上构建并运行。
 
-AngelScript uses memory.h which does not seem to be provided with kos.
-Don't worry though, the makefile creates one for you ;)
+AngelScript 使用了 KOS 似乎未提供的 memory.h。不过无需担心，
+makefile 会为你创建该文件；)
 
-To build the library, just go to angelscript/source and type
+要构建该库，只需进入 angelscript/source 并执行：
 
 make -f ../projects/dreamcast/Makefile
 
-or wherever you put the makefile shipped with this textdocument.
-The library will be in $KOS_BASE/addons/lib/dreamcast/ together with
-all the other kos addon libraries.
+或者在你放置本文档随附 makefile 的任意位置执行该命令。
+该库将与其他 KOS 附加库一起，位于
+$KOS_BASE/addons/lib/dreamcast/。

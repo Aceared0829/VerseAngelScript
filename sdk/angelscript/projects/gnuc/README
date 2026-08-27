@@ -1,63 +1,48 @@
-If you want to override /usr/local as the default prefix
-(which means /usr/local/include would have the header file and
-/usr/local/lib would have the library files), then run
-make, make install and make uninstall (to build, to
-install and uninstall respectively - you need it for
-all three as I explain below) :
+如果要覆盖默认前缀 /usr/local
+（即头文件将安装在 /usr/local/include，
+库文件将安装在 /usr/local/lib），请依次运行
+make、make install 和 make uninstall（分别用于构建、
+安装与卸载——如下文所述，三条命令都需要
+指定该前缀）：
 
 make PREFIX=/tmp
 make PREFIX=/tmp install
 make PREFIX=/tmp uninstall
 
-The last two will of course have to be done
-as root if you need permissions to write to
-the directory (for /tmp you wouldn't unless
-the files already existed by someone else and
-you didn't have permission).
+当然，若没有目标目录的写入权限，后两条命令
+必须以 root 身份执行（对于 /tmp 则无需如此，除非
+文件已由他人创建且你没有相应权限）。
 
-In any case, the above would install header file
-under '/tmp/include' and the library file(s) under
-'/tmp/lib'.
+无论如何，上述命令会将头文件安装到
+'/tmp/include'，并将库文件安装到
+'/tmp/lib'。
 
-If you want to know the technical details as to why
-you have to (when overriding the install location)
-specify PREFIX= even when building, see the FAQ
-file (summary: it makes it easier for you when linking
-in the shared library).
+若想了解为什么在覆盖安装位置时，构建阶段
+也必须指定 PREFIX=，请参阅 FAQ 文件。
+简而言之：这样可以让你在链接共享库时
+更加方便。
 
-A word of caution to those overriding prefix :
+给覆盖 prefix 的用户的一点提醒：
 --
-You are more than welcome to disregard this but I feel
-it is something I should bring up. If you do override
-the prefix I strongly recommend you do not specify
-'/usr'. Why one might ask. The typical way is
-that user-compiled programs/libraries/etc. go under
-'/usr/local' (other times '/opt'). This has multiple
-benefits: you keep '/usr' clean and if you have a
-package manager then it makes it easy to say:
-"The only files under /usr/include and /usr/lib are
-those that belong to a package."
-In other words it is easier to maintain integrity
-and verify everything. Most important of it all
-(aside the security implications) is this:
-You have less chance of name clashes. If there ever
-is a package that installs to /usr and it includes
-the files (maybe a package for AngelScript) then you
-will have issues.
+你当然可以忽略这条建议，但我认为有必要提出：
+如果确实要覆盖 prefix，强烈建议不要将其设为
+'/usr'。原因是什么？通常，用户自行编译的程序、
+库等会安装在 '/usr/local'（有时为 '/opt'）下。
+这样做有多项好处：你可以保持 '/usr' 整洁；如果使用
+包管理器，也可以明确地说：
+“/usr/include 和 /usr/lib 下的文件只属于某个软件包。”
+换言之，这样更便于维护完整性并验证一切。最重要的是
+（除安全性影响外）：发生名称冲突的可能性更小。如果将来
+某个安装到 /usr 的软件包包含了这些文件（例如 AngelScript
+的软件包），就会产生问题。
 --
 
-Lastly: I don't have a way to test the phone builds
-so I cannot verify the build process (it really
-depends on the environment and architecture, like
-most things); I'm an old-timer that hates the
-"smart" trend (besides: it is a horrible misuse
-of the world 'smart').
+最后：我没有办法测试移动设备构建，因此无法验证构建流程
+（它和大多数事情一样，确实取决于环境与架构）；我是个不喜欢
+“智能”潮流的老派人（况且用“智能”这个词来形容它实在很不恰当）。
 
-CONTACT:
-If you have any questions or concerns, by all
-means have Andreas contact me (at this time I
-don't have an email I feel okay sharing - if it
-seems this is of use to others I will likely
-create an email on my server for this very
-purpose). For now Andreas can forward the
-message to me.
+联系方式：
+如有任何问题或疑虑，请让 Andreas 联系我（目前我没有
+愿意公开的邮箱；如果这对其他人也有帮助，我很可能会在自己的
+服务器上专门创建一个邮箱）。现阶段，Andreas 可以将
+消息转发给我。
