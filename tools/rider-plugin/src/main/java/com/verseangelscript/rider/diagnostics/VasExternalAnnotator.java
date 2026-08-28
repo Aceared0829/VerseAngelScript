@@ -188,22 +188,17 @@ public final class VasExternalAnnotator extends ExternalAnnotator<
         Path source = Path.of(file.getPath()).toAbsolutePath().normalize();
         VasSettingsState settings = VasSettingsState.getInstance(project);
 
-        Path nearestRoot = findNearestToolchainRoot(source.getParent(), projectRoot);
-        Path root = nearestRoot == null ? projectRoot : nearestRoot;
-        Path builder = resolveConfiguredPath(root, settings.builderPath, ".vas/bin/vasbuild.exe");
-        Path config = resolveConfiguredPath(root, settings.configPath, ".vas/vasbuild.config.txt");
-
+        // An external annotator is started merely by opening or editing a file. Never
+        // auto-discover and execute .vas/bin/vasbuild.exe from an arbitrary project.
+        // The user must opt in by configuring a builder path, or use the explicit Build
+        // action, which is a user-initiated operation.
         if (settings.builderPath == null || settings.builderPath.isBlank()) {
-            if (!Files.isRegularFile(builder)) {
-                Path release = projectRoot.resolve(
-                    "out/build/windows-msvc-v145-cxx23/Release/vasbuild.exe"
-                );
-                Path debug = projectRoot.resolve(
-                    "out/build/windows-msvc-v145-cxx23/Debug/vasbuild.exe"
-                );
-                builder = Files.isRegularFile(release) ? release : debug;
-            }
+            return null;
         }
+
+        Path root = projectRoot;
+        Path builder = resolveConfiguredPath(root, settings.builderPath, "");
+        Path config = resolveConfiguredPath(root, settings.configPath, ".vas/vasbuild.config.txt");
         if (settings.configPath == null || settings.configPath.isBlank()) {
             if (!Files.isRegularFile(config)) {
                 config = projectRoot.resolve("tests/vasbuild/fixtures/minimal-config.txt");
@@ -212,19 +207,6 @@ public final class VasExternalAnnotator extends ExternalAnnotator<
         return Files.isRegularFile(builder) && Files.isRegularFile(config)
             ? new Toolchain(root, builder.normalize(), config.normalize())
             : null;
-    }
-
-    private static @Nullable Path findNearestToolchainRoot(Path start, Path projectRoot) {
-        for (Path current = start; current != null; current = current.getParent()) {
-            if (Files.isRegularFile(current.resolve(".vas/bin/vasbuild.exe"))
-                && Files.isRegularFile(current.resolve(".vas/vasbuild.config.txt"))) {
-                return current;
-            }
-            if (current.equals(projectRoot)) {
-                break;
-            }
-        }
-        return null;
     }
 
     private static Path resolveConfiguredPath(Path root, String configured, String fallback) {

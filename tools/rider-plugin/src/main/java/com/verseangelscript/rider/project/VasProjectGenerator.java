@@ -8,6 +8,7 @@ import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.facet.ui.ValidationResult;
 import com.intellij.platform.DirectoryProjectGenerator;
 import com.verseangelscript.rider.VasIcons;
+import com.verseangelscript.rider.build.VasSettingsState;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -64,11 +65,21 @@ public final class VasProjectGenerator implements DirectoryProjectGenerator<Obje
                 write(baseDir, "vas-project.json", PROJECT_CONFIGURATION);
                 write(baseDir, ".gitignore", "out/\n.idea/\n");
                 write(baseDir, "README.md", README);
+                configureBundledToolchain(project, baseDir);
             } catch (IOException exception) {
                 throw new IllegalStateException("Could not create the VAS starter project", exception);
             }
         });
         baseDir.refresh(false, true);
+    }
+
+    private static void configureBundledToolchain(@NotNull Project project, @NotNull VirtualFile baseDir) {
+        VasSettingsState settings = VasSettingsState.getInstance(project);
+        String projectPath = baseDir.getPath();
+        settings.builderPath = projectPath + "/.vas/bin/vasbuild.exe";
+        settings.runnerPath = projectPath + "/.vas/bin/vasrun.exe";
+        settings.configPath = projectPath + "/.vas/vasbuild.config.txt";
+        settings.outputDirectory = projectPath + "/out/rider";
     }
 
     private static void write(VirtualFile directory, String name, String content) throws IOException {

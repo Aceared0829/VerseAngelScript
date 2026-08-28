@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.verseangelscript"
-version = "0.5.3"
+version = "0.5.4"
 
 repositories {
     mavenCentral()
@@ -50,8 +50,8 @@ intellijPlatform {
         """.trimIndent()
 
         changeNotes = """
-            Makes #include file navigation explicit for Rider Go To Declaration and
-            middle-click paths, while retaining PSI and inheritance-index fixes.
+            Prevents automatic diagnostics from executing project-provided tools until
+            the user explicitly configures a VAS builder.
         """.trimIndent()
     }
 }
