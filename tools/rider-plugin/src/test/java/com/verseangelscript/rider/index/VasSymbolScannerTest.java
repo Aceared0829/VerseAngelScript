@@ -76,6 +76,33 @@ public final class VasSymbolScannerTest {
         assertEquals(1, runSymbols.stream().filter(VasSymbol::definition).count());
     }
 
+    @Test
+    public void recordsContainersSignaturesInheritanceAndDeclaredTypes() {
+        String source = """
+            namespace Game {
+                interface Damageable {}
+                class Player : Damageable {
+                    int health;
+                    void Apply(int amount, float scale) {}
+                }
+            }
+            void Player::Reset() {}
+            """;
+
+        List<VasSymbol> symbols = VasSymbolScanner.scan(source);
+        VasSymbol health = find(symbols, "health");
+        VasSymbol apply = find(symbols, "Apply");
+        VasSymbol player = find(symbols, "Player");
+        VasSymbol reset = find(symbols, "Reset");
+
+        assertEquals("Game::Player", health.container());
+        assertEquals("int", health.declaredType());
+        assertEquals("Game::Player::Apply/2", apply.signature());
+        assertEquals(List.of("Damageable"), player.baseTypes());
+        assertEquals("Player", reset.container());
+        assertEquals("void", reset.declaredType());
+    }
+
     private static VasSymbol find(List<VasSymbol> symbols, String name) {
         return symbols.stream()
             .filter(symbol -> symbol.name().equals(name))
