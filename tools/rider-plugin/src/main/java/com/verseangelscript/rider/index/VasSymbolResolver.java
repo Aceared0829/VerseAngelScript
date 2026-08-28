@@ -190,9 +190,10 @@ public final class VasSymbolResolver {
             }
             List<PsiElement> directDeclarations = declarationsInFile(includedPsi, name);
             declarations.addAll(directDeclarations);
-            if (directDeclarations.isEmpty()) {
-                declarations.addAll(findIncludedDeclarations(includedPsi, name, visited));
-            }
+            // A direct include may define the same name with a different overload or
+            // container. Continue through the complete include graph so later
+            // candidate filtering can choose the declaration that actually matches.
+            declarations.addAll(findIncludedDeclarations(includedPsi, name, visited));
         }
         return declarations;
     }
