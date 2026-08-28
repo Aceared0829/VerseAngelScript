@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<idea-plugin>
+    <id>com.verseangelscript.language</id>
+    <name>Verse AngelScript Language Support</name>
+    <vendor>VerseAngelScript</vendor>
+
+    <description><![CDATA[
+      <p>JetBrains Rider plugin for the Verse AngelScript language.</p>
+      <p>Provides <code>.vas</code> file recognition, syntax highlighting, project symbol
+      indexing, cross-file completion, declaration navigation, project templates,
+      and <code>vasbuild</code>/<code>vasrun</code> integration.</p>
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <fileType
+            name="VAS"
+            language="VAS"
+            implementationClass="com.verseangelscript.rider.VasFileType"
+            fieldName="INSTANCE"
+            extensions="vas"/>
+        <lang.parserDefinition
+            language="VAS"
+            implementationClass="com.verseangelscript.rider.lang.VasParserDefinition"/>
+        <lang.syntaxHighlighterFactory
+            language="VAS"
+            implementationClass="com.verseangelscript.rider.lang.VasSyntaxHighlighterFactory"/>
+        <lang.braceMatcher
+            language="VAS"
+            implementationClass="com.verseangelscript.rider.lang.VasBraceMatcher"/>
+        <lang.commenter
+            language="VAS"
+            implementationClass="com.verseangelscript.rider.lang.VasCommenter"/>
+        <completion.contributor
+            language="VAS"
+            implementationClass="com.verseangelscript.rider.lang.VasCompletionContributor"/>
+        <psi.referenceContributor
+            language="VAS"
+            implementation="com.verseangelscript.rider.lang.VasReferenceContributor"/>
+        <fileBasedIndex
+            implementation="com.verseangelscript.rider.index.VasSymbolIndex"/>
+        <directoryProjectGenerator
+            implementation="com.verseangelscript.rider.project.VasProjectGenerator"/>
+        <colorSettingsPage
+            implementation="com.verseangelscript.rider.lang.VasColorSettingsPage"/>
+        <projectConfigurable
+            parentId="tools"
+            id="vas.settings"
+            displayName="VAS"
+            instance="com.verseangelscript.rider.build.VasSettingsConfigurable"/>
+        <notificationGroup
+            id="VAS Build"
+            displayType="BALLOON"
+            isLogByDefault="true"/>
+        <notificationGroup
+            id="VAS Run"
+            displayType="BALLOON"
+            isLogByDefault="true"/>
+    </extensions>
+
+    <actions>
+        <action
+            id="VAS.BuildCurrentFile"
+            class="com.verseangelscript.rider.build.VasBuildAction"
+            text="Build Current VAS File"
+            description="Compile the current .vas file with vasbuild">
+            <add-to-group group-id="BuildMenu" anchor="last"/>
+        </action>
+        <action
+            id="VAS.RunCurrentFile"
+            class="com.verseangelscript.rider.build.VasRunAction"
+            text="Run Current VAS File"
+            description="Run the current .vas file with vasrun">
+            <add-to-group group-id="RunMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>
