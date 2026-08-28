@@ -181,7 +181,9 @@ void MessageCallback(const asSMessageInfo *msg, void *param)
 	else if( msg->type == asMSGTYPE_INFORMATION ) 
 		type = "INFO";
 
-	printf("%s (%d, %d) : %s : %s\n", msg->section, msg->row, msg->col, type, msg->message);
+	FILE *stream = msg->type == asMSGTYPE_INFORMATION ? stdout : stderr;
+	fprintf(stream, "%s (%d, %d) : %s : %s\n", msg->section, msg->row, msg->col, type, msg->message);
+	fflush(stream);
 }
 
 // This function will register the application interface
