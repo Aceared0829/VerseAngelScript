@@ -65,7 +65,7 @@ VAS 源码 ──实时解析──► 语义模型 ──► 可视化 VAS 二�
 
 仓库内附带专门的 **Rider 插件**：
 
-- 可安装插件：`plugins/rider/VerseAngelScript-Rider-Plugin-0.5.1.zip`
+- 可安装插件：`plugins/rider/VerseAngelScript-Rider-Plugin-0.5.4.zip`
 - 插件源码：`tools/rider-plugin`
 - Rider 起步项目模板：`templates/rider/vas-starter`
 
