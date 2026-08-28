@@ -1,0 +1,8 @@
+{
+  "name": "VAS Starter",
+  "entry": "src/main.vas",
+  "runner": ".vas/bin/vasrun.exe",
+  "builder": ".vas/bin/vasbuild.exe",
+  "builderConfig": ".vas/vasbuild.config.txt",
+  "bytecodeOutput": "out/vas/main.vasbc"
+}

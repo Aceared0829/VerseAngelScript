@@ -1,0 +1,8 @@
+#include "math.vas"
+
+void main()
+{
+    int result = add(20, 22);
+    print("Hello from VAS in Rider!\n");
+    print("20 + 22 = " + result + "\n");
+}

@@ -47,6 +47,36 @@ VAS 源码 ──实时解析──► 语义模型 ──► 可视化 VAS 二�
 
 当前仓库仍以 AngelScript `2.39.0 WIP` 为编译器和运行时基线。上述 VAS 语言扩展、Unreal Engine 绑定、热更新、可视化编辑和语义合并均属于规划与后续开发内容，尚未在本仓库实现。
 
+## 当前开发约定
+
+- **VAS 源码后缀为 `.vas`**。新建的 VAS 脚本、示例脚本和脚本间 `#include` 均使用小写 `.vas`。
+- **`vasbuild` 严格检查后缀**：入口脚本和递归引入的脚本必须为 `.vas`；传入旧的 `.as` 文件会在编译前失败并提示迁移。底层 AngelScript API 仍保持通用，以便嵌入式宿主继续使用内存脚本或自定义虚拟文件名。
+- Windows 的正式开发预设使用 Visual Studio 2026、MSVC `v145` 和 C++23：
+
+  ```powershell
+  cmake --preset windows-msvc-v145-cxx23
+  cmake --build --preset windows-msvc-v145-cxx23-release
+  ctest --preset windows-msvc-v145-cxx23-release
+  ```
+
+也可以直接打开仓库根目录的 `VerseAngelScript.sln`。该解决方案提供 `vasbuild`、`VAS Core`、`VAS Runner` 和 `VAS Tests` 四个统一入口，并复用上述 CMake/MSVC C++23 配置。
+
+## JetBrains Rider 插件
+
+仓库内附带专门的 **Rider 插件**：
+
+- 可安装插件：`plugins/rider/VerseAngelScript-Rider-Plugin-0.2.0.zip`
+- 插件源码：`tools/rider-plugin`
+- Rider 起步项目模板：`templates/rider/vas-starter`
+
+当前版本面向 Rider 2026.2（Build 262），支持 `.vas` 文件识别、语法高亮、项目符号索引、当前文件及跨文件补全、`Ctrl+B` 声明跳转，以及 **Build | Build Current VAS File** 和 **Run | Run Current VAS File**。VAS 项目模板通过 Rider 使用的 .NET 模板系统注册；安装后可在 **New Project** 中搜索 **VAS** 或 **Verse AngelScript Project**。模板内置 Windows x64 构建器、运行器、MSBuild 解决方案和示例项目，创建后即可构建运行。安装方式见 `plugins/rider/README.md`。
+
+构建完成后，可按以下方式调用构建器：
+
+```text
+vasbuild <config file> <script.vas> <output>
+```
+
 AngelScript 是一个可嵌入 C++ 应用的跨平台脚本库，为 VAS 提供编译、字节码、执行上下文、暂停/恢复、垃圾回收与原生 API 绑定等基础能力。
 
 - AngelScript 官方仓库：https://github.com/anjo76/angelscript
