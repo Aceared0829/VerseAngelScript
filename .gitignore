@@ -40,6 +40,7 @@
 *.sln.docstates
 *.env
 .vs/
+.idea/
 
 # Build results
 [Dd]ebug/
@@ -83,5 +84,10 @@ AS_DEBUG/
 
 # Exclude Codex workspace artifacts
 .codex/
+
+# Rider plugin generated files
+tools/rider-plugin/.gradle/
+tools/rider-plugin/.intellijPlatform/
+tools/rider-plugin/build/
 
 

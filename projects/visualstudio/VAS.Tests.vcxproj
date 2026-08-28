@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{98DDE629-F04C-4EB0-95C5-A24E34ECA422}</ProjectGuid>
+    <Keyword>MakeFileProj</Keyword>
+    <ProjectName>VAS Tests</ProjectName>
+    <RootNamespace>VASTests</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Makefile</ConfigurationType>
+    <PlatformToolset>v145</PlatformToolset>
+    <UseDebugLibraries>true</UseDebugLibraries>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Makefile</ConfigurationType>
+    <PlatformToolset>v145</PlatformToolset>
+    <UseDebugLibraries>false</UseDebugLibraries>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="Shared" />
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <VasBuildTarget>vasbuild</VasBuildTarget>
+  </PropertyGroup>
+  <Import Project="VAS.CMake.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64' Or '$(Configuration)|$(Platform)'=='Release|x64'">
+    <OutDir>$(VasBuildDirectory)\vs-wrapper\$(ProjectName)\$(Configuration)\</OutDir>
+    <IntDir>$(OutDir)obj\</IntDir>
+    <NMakeBuildCommandLine>cd /d "$(VasRepositoryRoot)" &amp;&amp; $(VasConfigureCommand) &amp;&amp; $(VasBuildCommand) &amp;&amp; $(VasRunTestsCommand)</NMakeBuildCommandLine>
+    <NMakeReBuildCommandLine>cd /d "$(VasRepositoryRoot)" &amp;&amp; $(VasConfigureCommand) &amp;&amp; $(VasRebuildCommand) &amp;&amp; $(VasRunTestsCommand)</NMakeReBuildCommandLine>
+    <NMakeCleanCommandLine>if exist "$(VasBuildDirectory)\CMakeCache.txt" $(VasCleanCommand)</NMakeCleanCommandLine>
+    <NMakeOutput>$(VasBuildDirectory)\$(Configuration)\vasbuild.exe</NMakeOutput>
+    <NMakeIncludeSearchPath>$(VasRepositoryRoot)\sdk\angelscript\include;$(NMakeIncludeSearchPath)</NMakeIncludeSearchPath>
+    <NMakePreprocessorDefinitions>WIN32;_WINDOWS;$(NMakePreprocessorDefinitions)</NMakePreprocessorDefinitions>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <LanguageStandard>stdcpp23</LanguageStandard>
+      <ConformanceMode>true</ConformanceMode>
+      <AdditionalOptions>/Zc:__cplusplus /utf-8 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <None Include="$(VasRepositoryRoot)\tests\vasbuild\assert_rejected.cmake" />
+    <None Include="$(VasRepositoryRoot)\tests\vasbuild\fixtures\*.vas" />
+    <None Include="$(VasRepositoryRoot)\tests\vasbuild\fixtures\minimal-config.txt" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets" />
+</Project>

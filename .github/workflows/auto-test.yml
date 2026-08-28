@@ -86,6 +86,32 @@ jobs:
         cd $env:GITHUB_WORKSPACE/sdk/tests/test_feature/bin
         ./test_feature.exe
 
+  Windows_x86-64_MSVC_CXX23:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: set up MSVC
+      uses: ilammy/msvc-dev-cmd@v1
+    - name: build VAS with MSVC C++23
+      shell: powershell
+      run: |
+        cmake -S $env:GITHUB_WORKSPACE -B $env:RUNNER_TEMP/vasbuild-msvc-cxx23 -G Ninja -DCMAKE_BUILD_TYPE=Release
+        cmake --build $env:RUNNER_TEMP/vasbuild-msvc-cxx23 --config Release
+        ctest --test-dir $env:RUNNER_TEMP/vasbuild-msvc-cxx23 --output-on-failure -C Release
+    - name: build and run full feature tests with MSVC C++23
+      shell: powershell
+      run: |
+        $featureBuild = Join-Path $env:RUNNER_TEMP 'vas-feature-msvc-cxx23'
+        cmake -S $env:GITHUB_WORKSPACE/sdk/tests/test_feature/projects/cmake -B $featureBuild -G Ninja -DCMAKE_BUILD_TYPE=Release '-DCMAKE_CXX_FLAGS=/std:c++23preview /permissive- /Zc:__cplusplus /EHsc'
+        cmake --build $featureBuild --config Release
+        Push-Location $env:GITHUB_WORKSPACE/sdk/tests/test_feature/bin
+        try {
+          ./test_feature.exe
+        }
+        finally {
+          Pop-Location
+        }
+
   Windows_x86-64_Clang-Cl:
     runs-on: windows-latest
     strategy:
