@@ -9,7 +9,6 @@ import com.intellij.codeInsight.lookup.LookupElementBuilder;
 import com.intellij.openapi.project.DumbService;
 import com.intellij.patterns.PlatformPatterns;
 import com.intellij.util.ProcessingContext;
-import com.verseangelscript.rider.VasLanguage;
 import com.verseangelscript.rider.index.VasSymbol;
 import com.verseangelscript.rider.index.VasSymbolResolver;
 import com.verseangelscript.rider.index.VasSymbolScanner;
@@ -22,7 +21,10 @@ public final class VasCompletionContributor extends CompletionContributor {
     public VasCompletionContributor() {
         extend(
             CompletionType.BASIC,
-            PlatformPatterns.psiElement().withLanguage(VasLanguage.INSTANCE),
+            // plugin.xml already restricts this contributor to VAS. Completion uses a
+            // synthetic PSI position whose language may temporarily be ANY, so an
+            // additional withLanguage(VAS) predicate suppresses otherwise valid results.
+            PlatformPatterns.psiElement(),
             new KeywordProvider()
         );
     }

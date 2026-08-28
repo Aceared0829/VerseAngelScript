@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.verseangelscript"
-version = "0.2.0"
+version = "0.2.1"
 
 repositories {
     mavenCentral()
@@ -50,7 +50,8 @@ intellijPlatform {
         """.trimIndent()
 
         changeNotes = """
-            Adds project symbol indexing, cross-file completion, and declaration navigation.
+            Fixes completion activation and cross-file declaration navigation for VAS files
+            opened outside Rider's attached .NET project scope.
         """.trimIndent()
     }
 }

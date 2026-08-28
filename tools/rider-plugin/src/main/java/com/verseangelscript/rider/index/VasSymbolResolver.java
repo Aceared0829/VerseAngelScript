@@ -33,7 +33,10 @@ public final class VasSymbolResolver {
             return List.of();
         }
 
-        GlobalSearchScope scope = GlobalSearchScope.projectScope(project);
+        // Rider can open VAS files that belong to a nested/generated solution without
+        // attaching that solution to the current .NET project model. Those files are
+        // still indexed, but projectScope() filters them out during navigation.
+        GlobalSearchScope scope = GlobalSearchScope.allScope(project);
         Collection<VirtualFile> files = FileBasedIndex.getInstance()
             .getContainingFiles(VasSymbolIndex.NAME, name, scope);
         List<PsiElement> declarations = new ArrayList<>();
