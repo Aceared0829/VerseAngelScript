@@ -945,7 +945,7 @@ bool Test()
 		mod->AddScriptSection("test",
 			"void f(array<int> a = {9}) { \n"
 			"  assert(a[0] == 9); \n"
-			"}﻿ \n"
+			"} \n"
 			"void main() { f(); } \n");
 		r = mod->Build();
 		if (r < 0)

@@ -1,0 +1,39 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows-msvc-v145-cxx23",
+      "displayName": "Windows MSVC v145 C++23",
+      "description": "Build VerseAngelScript with Visual Studio 2026, MSVC v145, and C++23.",
+      "generator": "Visual Studio 18 2026",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "architecture": "x64",
+      "toolset": "v145",
+      "cacheVariables": {
+        "BUILD_TESTING": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-msvc-v145-cxx23-release",
+      "configurePreset": "windows-msvc-v145-cxx23",
+      "configuration": "Release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-msvc-v145-cxx23-release",
+      "configurePreset": "windows-msvc-v145-cxx23",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

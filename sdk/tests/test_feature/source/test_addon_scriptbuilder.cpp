@@ -200,7 +200,7 @@ bool Test()
 
 		CScriptBuilder builder;
 		builder.StartNewModule(engine, "test");
-		builder.AddSectionFromMemory("test", "#include \"scripts/j\xc3\xb6nsson.as\"  \n"); // \xc3\xb6 is utf-8 for ö
+		builder.AddSectionFromMemory("test", "#include \"scripts/j\xc3\xb6nsson.vas\"  \n"); // \xc3\xb6 is utf-8 for ö
 		r = builder.BuildModule();
 		if (r < 0)
 			TEST_FAILED;
@@ -227,12 +227,12 @@ bool Test()
 
 		CScriptBuilder builder;
 		builder.StartNewModule(engine, 0);
-		builder.AddSectionFromMemory("test", "#include \"test.as\\\"  \n// the included file is written incorrectly with a backslash before the quote \n");
+		builder.AddSectionFromMemory("test", "#include \"test.vas\\\"  \n// the included file is written incorrectly with a backslash before the quote \n");
 		r = builder.BuildModule();
 		if (r >= 0)
 			TEST_FAILED;
 
-		if (bout.buffer != "test (0, 0) : Error   : Invalid file name for #include; it contains a line-break: 'test.as\\\"  '\n"
+		if (bout.buffer != "test (0, 0) : Error   : Invalid file name for #include; it contains a line-break: 'test.vas\\\"  '\n"
 						   "test (1, 1) : Error   : Unexpected token '<unrecognized token>'\n")
 		{
 			PRINTF("%s", bout.buffer.c_str());
@@ -522,14 +522,14 @@ bool Test()
 
 		CScriptBuilder builder;
 		builder.StartNewModule(engine, "mod");
-		builder.AddSectionFromMemory("test1","#include 'blah.as'\n");
-		builder.AddSectionFromMemory("test2","#include 'BLAH.AS'\n");
+		builder.AddSectionFromMemory("test1","#include 'blah.vas'\n");
+		builder.AddSectionFromMemory("test2","#include 'BLAH.VAS'\n");
 		r = builder.BuildModule();
 		if( r >= 0 )
 			TEST_FAILED;
 
 		// Should only get error for the first include
-		string error = GetCurrentDir() + "/blah.as (0, 0) : Error   : Failed to open script file '" + GetCurrentDir() + "/blah.as'\n"
+		string error = GetCurrentDir() + "/blah.vas (0, 0) : Error   : Failed to open script file '" + GetCurrentDir() + "/blah.vas'\n"
 			           " (0, 0) : Error   : Nothing was built in the module\n";
 
 		if( bout.buffer != error )
@@ -548,17 +548,17 @@ bool Test()
 
 		CScriptBuilder builder;
 		builder.StartNewModule(engine, "mod");
-		builder.AddSectionFromMemory("test1", "#include 'rel_dir/missing_include.as'\n");
-		builder.AddSectionFromMemory("test2", "#include '/abs_dir/missing_inc.as'\n");
-		builder.AddSectionFromMemory("test3", "#include 'c:/disk_path/missing_inc.as'\n");
-		builder.AddSectionFromMemory("test4", "#include '../bin/scripts/include.as'\n");
+		builder.AddSectionFromMemory("test1", "#include 'rel_dir/missing_include.vas'\n");
+		builder.AddSectionFromMemory("test2", "#include '/abs_dir/missing_inc.vas'\n");
+		builder.AddSectionFromMemory("test3", "#include 'c:/disk_path/missing_inc.vas'\n");
+		builder.AddSectionFromMemory("test4", "#include '../bin/scripts/include.vas'\n");
 		r = builder.BuildModule();
 		if( r < 0 )
 			PRINTF("The build failed. Are you running the test from the correct path?\n");
 		// TODO: The error message should be shown as being from the file that included the other file. Line number should be where the #include directive was found
-		string error = GetCurrentDir() + "/rel_dir/missing_include.as (0, 0) : Error   : Failed to open script file '" + GetCurrentDir() + "/rel_dir/missing_include.as'\n"
-					   "/abs_dir/missing_inc.as (0, 0) : Error   : Failed to open script file '/abs_dir/missing_inc.as'\n"
-					   "c:/disk_path/missing_inc.as (0, 0) : Error   : Failed to open script file 'c:/disk_path/missing_inc.as'\n";
+		string error = GetCurrentDir() + "/rel_dir/missing_include.vas (0, 0) : Error   : Failed to open script file '" + GetCurrentDir() + "/rel_dir/missing_include.vas'\n"
+					   "/abs_dir/missing_inc.vas (0, 0) : Error   : Failed to open script file '/abs_dir/missing_inc.vas'\n"
+					   "c:/disk_path/missing_inc.vas (0, 0) : Error   : Failed to open script file 'c:/disk_path/missing_inc.vas'\n";
 		if( bout.buffer != error )
 			PRINTF("%s", bout.buffer.c_str());
 	}
@@ -570,7 +570,7 @@ bool Test()
 
 		CScriptBuilder builder;
 		builder.StartNewModule(engine, "mod");
-		builder.AddSectionFromMemory("test5", "#include '../bin/./scripts/include.as'\n");
+		builder.AddSectionFromMemory("test5", "#include '../bin/./scripts/include.vas'\n");
 		r = builder.BuildModule();
 		if (r < 0)
 			PRINTF("The build failed. Are you running the test from the correct path?\n");
@@ -578,7 +578,7 @@ bool Test()
 		for (asUINT n = 0; n < builder.GetSectionCount(); n++)
 			sections += builder.GetSectionName(n) + "\n";
 
-		string expected = GetCurrentDir() + "/scripts/include.as\n"
+		string expected = GetCurrentDir() + "/scripts/include.vas\n"
 			              "test5\n";
 		if (sections != expected)
 		{

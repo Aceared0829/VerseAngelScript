@@ -1,0 +1,4 @@
+int getFixtureValue()
+{
+	return 42;
+}

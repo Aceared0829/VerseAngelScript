@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "VerseAngelScript",
+  "classifications": [
+    "VAS",
+    "Console",
+    "Game Scripting"
+  ],
+  "identity": "VerseAngelScript.Starter.Project",
+  "groupIdentity": "VerseAngelScript.Starter",
+  "name": "Verse AngelScript Project",
+  "shortName": "vas",
+  "sourceName": "VASStarter",
+  "preferNameDirectory": true,
+  "description": "A ready-to-run Verse AngelScript project for JetBrains Rider.",
+  "tags": {
+    "language": "VAS",
+    "type": "project"
+  },
+  "sources": [
+    {
+      "source": "./",
+      "target": "./",
+      "include": [
+        "**/*"
+      ],
+      "exclude": [
+        ".template.config/**/*"
+      ]
+    }
+  ],
+  "primaryOutputs": [
+    {
+      "path": "VASStarter.sln"
+    }
+  ]
+}

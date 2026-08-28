@@ -2,7 +2,7 @@
 
 // We're allowed to include files in a circular manner, the
 // application will include each file only once anyway
-#include "script.as"
+#include "script.vas"
 
 void includedFunction()
 {

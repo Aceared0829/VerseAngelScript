@@ -23,6 +23,10 @@ int ConfigureEngine(asIScriptEngine *engine, const char *configFile);
 int CompileScript(asIScriptEngine *engine, const char *scriptFile);
 int SaveBytecode(asIScriptEngine *engine, const char *outputFile);
 static const char *GetCurrentDir(char *buf, size_t size);
+static bool IsVasScriptFile(const char *filename);
+static int ReportInvalidVasScriptExtension(asIScriptEngine *engine, const char *filename, const char *role);
+static string ResolveIncludePath(const char *include, const char *from);
+static int VasIncludeCallback(const char *include, const char *from, CScriptBuilder *builder, void *userParam);
 
 void MessageCallback(const asSMessageInfo *msg, void *param)
 {
@@ -32,7 +36,9 @@ void MessageCallback(const asSMessageInfo *msg, void *param)
 	else if( msg->type == asMSGTYPE_INFORMATION ) 
 		type = "INFO";
 
-	printf("%s (%d, %d) : %s : %s\n", msg->section, msg->row, msg->col, type, msg->message);
+	FILE *stream = msg->type == asMSGTYPE_INFORMATION ? stdout : stderr;
+	fprintf(stream, "%s (%d, %d) : %s : %s\n", msg->section, msg->row, msg->col, type, msg->message);
+	fflush(stream);
 }
 
 int main(int argc, char **argv)
@@ -51,9 +57,9 @@ int main(int argc, char **argv)
 	if( argc < 4 )
 	{
 		cout << "Usage: " << endl;
-		cout << "asbuild <config file> <script file> <output>" << endl;
+		cout << "vasbuild <config file> <script.vas> <output>" << endl;
 		cout << " <config file>  is the file with the application interface" << endl;
-		cout << " <script file>  is the script file that should be compiled" << endl;
+		cout << " <script.vas>  is the VAS script file that should be compiled" << endl;
 		cout << " <output>       is the name that the compiled script will be saved as" << endl;
 		return -1;
 	}
@@ -68,6 +74,15 @@ int main(int argc, char **argv)
 
 	// The script compiler will send any compiler messages to the callback
 	engine->SetMessageCallback(asFUNCTION(MessageCallback), 0, asCALL_CDECL);
+
+	// Reject a legacy extension before attempting to parse the configuration
+	// file, so callers always receive the VAS migration diagnostic first.
+	if( !IsVasScriptFile(argv[2]) )
+	{
+		ReportInvalidVasScriptExtension(engine, argv[2], "entry script");
+		engine->ShutDownAndRelease();
+		return -1;
+	}
 
 	// Configure the script engine with all the functions, 
 	// and variables that the script should be able to use.
@@ -196,10 +211,13 @@ int ConfigureEngine(asIScriptEngine *engine, const char *configFile)
 int CompileScript(asIScriptEngine *engine, const char *scriptFile)
 {
 	int r;
+	if( !IsVasScriptFile(scriptFile) )
+		return ReportInvalidVasScriptExtension(engine, scriptFile, "entry script");
 
 	CScriptBuilder builder;
 	r = builder.StartNewModule(engine, "build");
 	if( r < 0 ) return -1;
+	builder.SetIncludeCallback(VasIncludeCallback, engine);
 
 	r = builder.AddSectionFromFile(scriptFile);
 	if( r < 0 ) return -1;
@@ -214,6 +232,61 @@ int CompileScript(asIScriptEngine *engine, const char *scriptFile)
 	engine->WriteMessage(scriptFile, 0, 0, asMSGTYPE_INFORMATION, "Script successfully built");
 
 	return 0;
+}
+
+// VAS source files use a lower-case .vas extension on every supported platform.
+// Keep this policy in the VAS builder rather than CScriptBuilder: embedders may
+// compile in-memory sections or use their own virtual file system naming scheme.
+static bool IsVasScriptFile(const char *filename)
+{
+	if( filename == 0 )
+		return false;
+
+	string path(filename);
+	string::size_type slash = path.find_last_of("/\\");
+	string::size_type dot = path.find_last_of('.');
+	return dot != string::npos &&
+		(slash == string::npos || dot > slash) &&
+		path.compare(dot, 4, ".vas") == 0;
+}
+
+static int ReportInvalidVasScriptExtension(asIScriptEngine *engine, const char *filename, const char *role)
+{
+	string path = filename ? filename : "";
+	string message = "VAS source files must use the '.vas' extension";
+	if( role && role[0] )
+		message += string(" for the ") + role;
+	message += ". Received '" + path + "'.";
+	engine->WriteMessage(path.c_str(), 0, 0, asMSGTYPE_ERROR, message.c_str());
+	return asERROR;
+}
+
+static string ResolveIncludePath(const char *include, const char *from)
+{
+	string includePath = include ? include : "";
+	if( includePath.find_first_of("/\\") != 0 && includePath.find_first_of(":") == string::npos )
+	{
+		string sourcePath = from ? from : "";
+		string::size_type slash = sourcePath.find_last_of("/\\");
+		if( slash != string::npos )
+			sourcePath.resize(slash + 1);
+		else
+			sourcePath = "";
+
+		return sourcePath + includePath;
+	}
+
+	return includePath;
+}
+
+static int VasIncludeCallback(const char *include, const char *from, CScriptBuilder *builder, void *userParam)
+{
+	asIScriptEngine *engine = reinterpret_cast<asIScriptEngine *>(userParam);
+	string resolvedInclude = ResolveIncludePath(include, from);
+	if( !IsVasScriptFile(resolvedInclude.c_str()) )
+		return ReportInvalidVasScriptExtension(engine, resolvedInclude.c_str(), "included script");
+
+	return builder->AddSectionFromFile(resolvedInclude.c_str());
 }
 
 class CBytecodeStream : public asIBinaryStream

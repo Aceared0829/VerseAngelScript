@@ -27,12 +27,12 @@ int main(int argc, char **argv)
 	int r;
 
 	// Make sure the game is being executed with the correct working directory
-	// At the very least there should be a 'player.as' script for controlling the 
+	// At the very least there should be a 'player.vas' script for controlling the
 	// player character.
-	FILE *f = fopen("player.as", "r");
+	FILE *f = fopen("player.vas", "r");
 	if( f == 0 )
 	{
-		cout << "The game is not executed in the correct location. Make sure you set the working directory to the path where the 'player.as' script is located." << endl;
+		cout << "The game is not executed in the correct location. Make sure you set the working directory to the path where the 'player.vas' script is located." << endl;
 		cout << endl;
 		cout << "Press enter to exit." << endl;
 		char buf[10];

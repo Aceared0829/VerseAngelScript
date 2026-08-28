@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <VasRepositoryRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..'))</VasRepositoryRoot>
+    <VasBuildDirectory>$(VasRepositoryRoot)\out\build\windows-msvc-v145-cxx23</VasBuildDirectory>
+    <VasBundledCMake>$(VSInstallDir)Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe</VasBundledCMake>
+    <VasBundledCTest>$(VSInstallDir)Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\ctest.exe</VasBundledCTest>
+    <VasCMakeCommand Condition="Exists('$(VasBundledCMake)')">&quot;$(VasBundledCMake)&quot;</VasCMakeCommand>
+    <VasCMakeCommand Condition="'$(VasCMakeCommand)' == ''">cmake</VasCMakeCommand>
+    <VasCTestCommand Condition="Exists('$(VasBundledCTest)')">&quot;$(VasBundledCTest)&quot;</VasCTestCommand>
+    <VasCTestCommand Condition="'$(VasCTestCommand)' == ''">ctest</VasCTestCommand>
+    <VasConfigureCommand>$(VasCMakeCommand) --preset windows-msvc-v145-cxx23</VasConfigureCommand>
+    <VasBuildCommand>$(VasCMakeCommand) --build &quot;$(VasBuildDirectory)&quot; --config $(Configuration) --target $(VasBuildTarget) --parallel</VasBuildCommand>
+    <VasRebuildCommand>$(VasCMakeCommand) --build &quot;$(VasBuildDirectory)&quot; --config $(Configuration) --target $(VasBuildTarget) --parallel --clean-first</VasRebuildCommand>
+    <VasCleanCommand>$(VasCMakeCommand) --build &quot;$(VasBuildDirectory)&quot; --config $(Configuration) --target clean</VasCleanCommand>
+    <VasRunTestsCommand>$(VasCTestCommand) --test-dir &quot;$(VasBuildDirectory)&quot; -C $(Configuration) --output-on-failure</VasRunTestsCommand>
+  </PropertyGroup>
+</Project>

@@ -355,7 +355,7 @@ class _String
 {
 public:
 	_String() {}
-	_String(_String &o) { buffer = o.buffer; }
+	_String(const _String &o) { buffer = o.buffer; }
 	~_String() {}
 	_String &operator=(const _String&o) { buffer = o.buffer; return *this; }
 	_String &operator=(const std::string&o) { buffer = o; return *this; }

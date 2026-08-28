@@ -8,7 +8,7 @@
  * A comment in UTF8: ♥♣♠♦
  *
  */
-#include "include.as"
+#include "include.vas"
 
 float main()
 {

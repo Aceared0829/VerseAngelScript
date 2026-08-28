@@ -263,7 +263,7 @@ int CompileScript(asIScriptEngine *engine)
 		cout << "Failed to start new module" << endl;
 		return r;
 	}
-	r = builder.AddSectionFromFile("script.as");
+	r = builder.AddSectionFromFile("script.vas");
 	if( r < 0 )
 	{
 		cout << "Failed to add script file" << endl;

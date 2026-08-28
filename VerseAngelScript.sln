@@ -1,0 +1,81 @@
+﻿Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.0.0.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "vasbuild", "projects\visualstudio\vasbuild.vcxproj", "{D572E3F5-F8D1-46B8-BEE3-27D3AA1DAAE3}"
+	ProjectSection(ProjectDependencies) = postProject
+		{7B6B9386-06DE-4D80-B82E-10B71C753D0A} = {7B6B9386-06DE-4D80-B82E-10B71C753D0A}
+	EndProjectSection
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "VAS Core", "projects\visualstudio\VAS.Core.vcxproj", "{7B6B9386-06DE-4D80-B82E-10B71C753D0A}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "VAS Tests", "projects\visualstudio\VAS.Tests.vcxproj", "{98DDE629-F04C-4EB0-95C5-A24E34ECA422}"
+	ProjectSection(ProjectDependencies) = postProject
+		{D572E3F5-F8D1-46B8-BEE3-27D3AA1DAAE3} = {D572E3F5-F8D1-46B8-BEE3-27D3AA1DAAE3}
+		{57C5F1C4-3B30-4ED0-87BB-D36B3013DC44} = {57C5F1C4-3B30-4ED0-87BB-D36B3013DC44}
+	EndProjectSection
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "VAS Runner", "projects\visualstudio\VAS.Runner.vcxproj", "{57C5F1C4-3B30-4ED0-87BB-D36B3013DC44}"
+	ProjectSection(ProjectDependencies) = postProject
+		{7B6B9386-06DE-4D80-B82E-10B71C753D0A} = {7B6B9386-06DE-4D80-B82E-10B71C753D0A}
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{D95565B8-6E94-47D9-A4E6-A1139A95AB59}"
+	ProjectSection(SolutionItems) = preProject
+		CMakeLists.txt = CMakeLists.txt
+		CMakePresets.json = CMakePresets.json
+		README.md = README.md
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Rider Plugin", "Rider Plugin", "{B8F4FEA5-530E-47D1-90B8-80FA6BA52372}"
+	ProjectSection(SolutionItems) = preProject
+		plugins\rider\README.md = plugins\rider\README.md
+		plugins\rider\VerseAngelScript-Rider-Plugin-0.5.6.zip = plugins\rider\VerseAngelScript-Rider-Plugin-0.5.6.zip
+		tools\rider-plugin\build.gradle.kts = tools\rider-plugin\build.gradle.kts
+		tools\rider-plugin\gradle.properties = tools\rider-plugin\gradle.properties
+		tools\rider-plugin\README.md = tools\rider-plugin\README.md
+		tools\rider-plugin\settings.gradle.kts = tools\rider-plugin\settings.gradle.kts
+		templates\rider\vas-starter\README.md = templates\rider\vas-starter\README.md
+		templates\rider\vas-starter\src\main.vas = templates\rider\vas-starter\src\main.vas
+		templates\rider\vas-starter\src\math.vas = templates\rider\vas-starter\src\math.vas
+		templates\rider\vas-starter\vas-project.json = templates\rider\vas-starter\vas-project.json
+	EndProjectSection
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "App1", "App1\App1.vcxproj", "{C2A88E87-C043-468B-B5A1-354314271C64}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{D572E3F5-F8D1-46B8-BEE3-27D3AA1DAAE3}.Debug|x64.ActiveCfg = Debug|x64
+		{D572E3F5-F8D1-46B8-BEE3-27D3AA1DAAE3}.Debug|x64.Build.0 = Debug|x64
+		{D572E3F5-F8D1-46B8-BEE3-27D3AA1DAAE3}.Release|x64.ActiveCfg = Release|x64
+		{D572E3F5-F8D1-46B8-BEE3-27D3AA1DAAE3}.Release|x64.Build.0 = Release|x64
+		{7B6B9386-06DE-4D80-B82E-10B71C753D0A}.Debug|x64.ActiveCfg = Debug|x64
+		{7B6B9386-06DE-4D80-B82E-10B71C753D0A}.Debug|x64.Build.0 = Debug|x64
+		{7B6B9386-06DE-4D80-B82E-10B71C753D0A}.Release|x64.ActiveCfg = Release|x64
+		{7B6B9386-06DE-4D80-B82E-10B71C753D0A}.Release|x64.Build.0 = Release|x64
+		{98DDE629-F04C-4EB0-95C5-A24E34ECA422}.Debug|x64.ActiveCfg = Debug|x64
+		{98DDE629-F04C-4EB0-95C5-A24E34ECA422}.Debug|x64.Build.0 = Debug|x64
+		{98DDE629-F04C-4EB0-95C5-A24E34ECA422}.Release|x64.ActiveCfg = Release|x64
+		{98DDE629-F04C-4EB0-95C5-A24E34ECA422}.Release|x64.Build.0 = Release|x64
+		{57C5F1C4-3B30-4ED0-87BB-D36B3013DC44}.Debug|x64.ActiveCfg = Debug|x64
+		{57C5F1C4-3B30-4ED0-87BB-D36B3013DC44}.Debug|x64.Build.0 = Debug|x64
+		{57C5F1C4-3B30-4ED0-87BB-D36B3013DC44}.Release|x64.ActiveCfg = Release|x64
+		{57C5F1C4-3B30-4ED0-87BB-D36B3013DC44}.Release|x64.Build.0 = Release|x64
+		{C2A88E87-C043-468B-B5A1-354314271C64}.Debug|x64.ActiveCfg = Debug|x64
+		{C2A88E87-C043-468B-B5A1-354314271C64}.Debug|x64.Build.0 = Debug|x64
+		{C2A88E87-C043-468B-B5A1-354314271C64}.Release|x64.ActiveCfg = Release|x64
+		{C2A88E87-C043-468B-B5A1-354314271C64}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {7A8296F6-6A1D-4E33-AB21-40632D6D6428}
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+	EndGlobalSection
+EndGlobal

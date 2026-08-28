@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{57C5F1C4-3B30-4ED0-87BB-D36B3013DC44}</ProjectGuid>
+    <Keyword>MakeFileProj</Keyword>
+    <ProjectName>VAS Runner</ProjectName>
+    <RootNamespace>VASRunner</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Makefile</ConfigurationType><PlatformToolset>v145</PlatformToolset><UseDebugLibraries>true</UseDebugLibraries>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Makefile</ConfigurationType><PlatformToolset>v145</PlatformToolset><UseDebugLibraries>false</UseDebugLibraries>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="Shared" />
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup><VasBuildTarget>vasrun</VasBuildTarget></PropertyGroup>
+  <Import Project="VAS.CMake.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64' Or '$(Configuration)|$(Platform)'=='Release|x64'">
+    <OutDir>$(VasBuildDirectory)\vs-wrapper\$(ProjectName)\$(Configuration)\</OutDir>
+    <IntDir>$(OutDir)obj\</IntDir>
+    <NMakeBuildCommandLine>cd /d "$(VasRepositoryRoot)" &amp;&amp; $(VasConfigureCommand) &amp;&amp; $(VasBuildCommand)</NMakeBuildCommandLine>
+    <NMakeReBuildCommandLine>cd /d "$(VasRepositoryRoot)" &amp;&amp; $(VasConfigureCommand) &amp;&amp; $(VasRebuildCommand)</NMakeReBuildCommandLine>
+    <NMakeCleanCommandLine>if exist "$(VasBuildDirectory)\CMakeCache.txt" $(VasCleanCommand)</NMakeCleanCommandLine>
+    <NMakeOutput>$(VasBuildDirectory)\$(Configuration)\vasrun.exe</NMakeOutput>
+    <NMakeIncludeSearchPath>$(VasRepositoryRoot)\sdk\angelscript\include;$(VasRepositoryRoot)\sdk\add_on;$(NMakeIncludeSearchPath)</NMakeIncludeSearchPath>
+    <LocalDebuggerCommand>$(VasBuildDirectory)\$(Configuration)\vasrun.exe</LocalDebuggerCommand>
+    <LocalDebuggerCommandArguments>$(VasRepositoryRoot)\templates\rider\vas-starter\src\main.vas</LocalDebuggerCommandArguments>
+    <LocalDebuggerWorkingDirectory>$(VasRepositoryRoot)\templates\rider\vas-starter\src</LocalDebuggerWorkingDirectory>
+    <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
+  </PropertyGroup>
+  <ItemDefinitionGroup><ClCompile><LanguageStandard>stdcpp23</LanguageStandard><ConformanceMode>true</ConformanceMode><AdditionalOptions>/Zc:__cplusplus %(AdditionalOptions)</AdditionalOptions></ClCompile></ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="$(VasRepositoryRoot)\sdk\samples\asrun\source\main.cpp" />
+    <ClCompile Include="$(VasRepositoryRoot)\sdk\add_on\contextmgr\contextmgr.cpp" />
+    <ClCompile Include="$(VasRepositoryRoot)\sdk\add_on\datetime\datetime.cpp" />
+    <ClCompile Include="$(VasRepositoryRoot)\sdk\add_on\debugger\debugger.cpp" />
+    <ClCompile Include="$(VasRepositoryRoot)\sdk\add_on\scriptarray\scriptarray.cpp" />
+    <ClCompile Include="$(VasRepositoryRoot)\sdk\add_on\scriptbuilder\scriptbuilder.cpp" />
+    <ClCompile Include="$(VasRepositoryRoot)\sdk\add_on\scriptdictionary\scriptdictionary.cpp" />
+    <ClCompile Include="$(VasRepositoryRoot)\sdk\add_on\scriptfile\scriptfile.cpp" />
+    <ClCompile Include="$(VasRepositoryRoot)\sdk\add_on\scriptfile\scriptfilesystem.cpp" />
+    <ClCompile Include="$(VasRepositoryRoot)\sdk\add_on\scripthelper\scripthelper.cpp" />
+    <ClCompile Include="$(VasRepositoryRoot)\sdk\add_on\scriptsocket\scriptsocket.cpp" />
+    <ClCompile Include="$(VasRepositoryRoot)\sdk\add_on\scriptstdstring\scriptstdstring.cpp" />
+    <ClCompile Include="$(VasRepositoryRoot)\sdk\add_on\scriptstdstring\scriptstdstring_utils.cpp" />
+    <None Include="$(VasRepositoryRoot)\templates\rider\vas-starter\src\main.vas" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets" />
+</Project>

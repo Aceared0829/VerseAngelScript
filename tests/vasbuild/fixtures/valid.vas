@@ -1,0 +1,6 @@
+#include "shared.vas"
+
+void main()
+{
+    int result = getFixtureValue() + 1;
+}

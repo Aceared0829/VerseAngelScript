@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <Keyword>MakeFileProj</Keyword>
+    <ProjectGuid>{C2A88E87-C043-468B-B5A1-354314271C64}</ProjectGuid>
+    <RootNamespace>VASStarter</RootNamespace>
+    <ProjectName>VASStarter</ProjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Makefile</ConfigurationType>
+    <PlatformToolset>v145</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Makefile</ConfigurationType>
+    <PlatformToolset>v145</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <NMakeBuildCommandLine>if not exist "$(ProjectDir)out" mkdir "$(ProjectDir)out" &amp; "$(ProjectDir).vas\bin\vasbuild.exe" "$(ProjectDir).vas\vasbuild.config.txt" "$(ProjectDir)src\main.vas" "$(ProjectDir)out\main.vasbc"</NMakeBuildCommandLine>
+    <NMakeReBuildCommandLine>$(NMakeBuildCommandLine)</NMakeReBuildCommandLine>
+    <NMakeCleanCommandLine>if exist "$(ProjectDir)out\main.vasbc" del /q "$(ProjectDir)out\main.vasbc"</NMakeCleanCommandLine>
+    <NMakeOutput>$(ProjectDir)out\main.vasbc</NMakeOutput>
+    <LocalDebuggerCommand>$(ProjectDir).vas\bin\vasrun.exe</LocalDebuggerCommand>
+    <LocalDebuggerCommandArguments>"$(ProjectDir)src\main.vas"</LocalDebuggerCommandArguments>
+    <LocalDebuggerWorkingDirectory>$(ProjectDir)</LocalDebuggerWorkingDirectory>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="src\main.vas" />
+    <None Include="src\math.vas" />
+    <None Include="vas-project.json" />
+    <None Include="README.md" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

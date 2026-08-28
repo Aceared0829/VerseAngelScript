@@ -1719,7 +1719,7 @@ typedef int(*PRAGMACALLBACK_t)(const std::string &pragmaText, CScriptBuilder &bu
 Example script with include directive:
 
 <pre>
-  \#include "commonfuncs.as"
+  \#include "commonfuncs.vas"
   
   void main()
   {

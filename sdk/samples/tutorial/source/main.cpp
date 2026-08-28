@@ -250,10 +250,10 @@ int CompileScript(asIScriptEngine *engine)
 	int r;
 
 	// We will load the script from a file on the disk.
-	FILE *f = fopen("script.as", "rb");
+	FILE *f = fopen("script.vas", "rb");
 	if( f == 0 )
 	{
-		cout << "Failed to open the script file 'script.as'." << endl;
+		cout << "Failed to open the script file 'script.vas'." << endl;
 		return -1;
 	}
 
