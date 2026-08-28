@@ -103,6 +103,18 @@ public final class VasSymbolScannerTest {
         assertEquals("void", reset.declaredType());
     }
 
+    @Test
+    public void readsCallArityAndMemberQualifier() {
+        String source = "void main() { player.Apply(10, 0.5f); Reset(); }";
+        int applyOffset = source.indexOf("Apply");
+        int resetOffset = source.indexOf("Reset");
+
+        assertEquals(new VasUsageContext(2, "player"),
+            VasSymbolScanner.usageContext(source, applyOffset));
+        assertEquals(new VasUsageContext(0, ""),
+            VasSymbolScanner.usageContext(source, resetOffset));
+    }
+
     private static VasSymbol find(List<VasSymbol> symbols, String name) {
         return symbols.stream()
             .filter(symbol -> symbol.name().equals(name))

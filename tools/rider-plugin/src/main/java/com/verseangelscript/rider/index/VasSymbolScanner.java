@@ -128,6 +128,38 @@ public final class VasSymbolScanner {
         return List.copyOf(symbols);
     }
 
+    public static @NotNull VasUsageContext usageContext(
+        @NotNull CharSequence source,
+        int identifierOffset
+    ) {
+        List<Token> tokens = tokenize(source);
+        int identifierIndex = -1;
+        for (int index = 0; index < tokens.size(); index++) {
+            if (tokens.get(index).start() == identifierOffset) {
+                identifierIndex = index;
+                break;
+            }
+        }
+        if (identifierIndex < 0) {
+            return VasUsageContext.PLAIN;
+        }
+
+        int arguments = -1;
+        Token next = tokenAt(tokens, identifierIndex + 1);
+        if (next != null && next.type() == VasTypes.LPAREN) {
+            arguments = parameterCount(tokens, identifierIndex + 1);
+        }
+
+        String qualifier = "";
+        Token separator = tokenAt(tokens, identifierIndex - 1);
+        Token owner = tokenAt(tokens, identifierIndex - 2);
+        if (separator != null && owner != null
+            && (".".equals(separator.text()) || "::".equals(separator.text()))) {
+            qualifier = owner.text();
+        }
+        return new VasUsageContext(arguments, qualifier);
+    }
+
     private static boolean looksLikeFunctionDeclaration(List<Token> tokens, int nameIndex) {
         Token previous = tokenAt(tokens, nameIndex - 1);
         if (previous == null || NON_DECLARATION_CALL_PREFIXES.contains(previous.text())) {

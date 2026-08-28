@@ -90,17 +90,68 @@ public final class VasSymbolResolver {
             return declaration == null ? List.of() : List.of(declaration);
         }
 
-        List<PsiElement> sameFile = declarationsInFile(file, name);
+        VasUsageContext context = VasSymbolScanner.usageContext(file.getText(), usageOffset);
+        String ownerType = resolveOwnerType(file, context.qualifier(), usageOffset);
+
+        List<PsiElement> sameFile = filterCandidates(
+            declarationsInFile(file, name),
+            context,
+            ownerType
+        );
         if (!sameFile.isEmpty()) {
             return sameFile;
         }
 
-        List<PsiElement> included = findIncludedDeclarations(file, name);
+        List<PsiElement> included = filterCandidates(
+            findIncludedDeclarations(file, name),
+            context,
+            ownerType
+        );
         if (!included.isEmpty()) {
             return included;
         }
 
-        return findProjectDeclarations(usage.getProject(), name);
+        return filterCandidates(
+            findProjectDeclarations(usage.getProject(), name),
+            context,
+            ownerType
+        );
+    }
+
+    private static @NotNull List<PsiElement> filterCandidates(
+        @NotNull List<PsiElement> candidates,
+        @NotNull VasUsageContext context,
+        @NotNull String ownerType
+    ) {
+        List<PsiElement> exact = candidates.stream()
+            .filter(candidate -> findSymbol(candidate).map(symbol ->
+                (context.argumentCount() < 0
+                    || symbol.kind() != VasSymbolKind.FUNCTION
+                    || symbol.parameterCount() == context.argumentCount())
+                && (ownerType.isEmpty()
+                    || symbol.container().equals(ownerType)
+                    || symbol.container().endsWith("::" + ownerType))
+            ).orElse(false))
+            .toList();
+        return exact.isEmpty() ? candidates : exact;
+    }
+
+    private static @NotNull String resolveOwnerType(
+        @NotNull PsiFile file,
+        @NotNull String qualifier,
+        int usageOffset
+    ) {
+        if (qualifier.isEmpty()) {
+            return "";
+        }
+        return VasSymbolScanner.scan(file.getText()).stream()
+            .filter(symbol -> symbol.name().equals(qualifier))
+            .filter(symbol -> symbol.isVisibleAt(usageOffset))
+            .sorted(Comparator.comparingInt(symbol -> Math.abs(usageOffset - symbol.offset())))
+            .map(VasSymbol::declaredType)
+            .filter(type -> !type.isEmpty())
+            .findFirst()
+            .orElse(qualifier);
     }
 
     static @NotNull List<PsiElement> findIncludedDeclarations(
@@ -171,7 +222,15 @@ public final class VasSymbolResolver {
 
     public static @NotNull List<PsiElement> findImplementations(@NotNull PsiElement declaration) {
         Optional<VasSymbol> target = findSymbol(declaration);
-        if (target.isEmpty() || target.get().kind() != VasSymbolKind.FUNCTION) {
+        if (target.isEmpty()) {
+            return List.of();
+        }
+
+        if (target.get().kind() == VasSymbolKind.CLASS
+            || target.get().kind() == VasSymbolKind.INTERFACE) {
+            return findDerivedTypes(declaration.getProject(), target.get().name());
+        }
+        if (target.get().kind() != VasSymbolKind.FUNCTION) {
             return List.of();
         }
 
@@ -182,10 +241,34 @@ public final class VasSymbolResolver {
         )) {
             Optional<VasSymbol> symbol = findSymbol(candidate);
             if (symbol.isPresent() && symbol.get().kind() == VasSymbolKind.FUNCTION
-                && symbol.get().definition() && !candidate.isEquivalentTo(declaration)) {
+                && symbol.get().definition()
+                && symbol.get().parameterCount() == target.get().parameterCount()
+                && compatibleContainers(target.get().container(), symbol.get().container())
+                && !candidate.isEquivalentTo(declaration)) {
                 implementations.add(candidate);
             }
         }
         return implementations;
+    }
+
+    private static boolean compatibleContainers(String left, String right) {
+        return left.isEmpty() || right.isEmpty() || left.equals(right)
+            || left.endsWith("::" + right) || right.endsWith("::" + left);
+    }
+
+    public static @NotNull List<PsiElement> findDerivedTypes(
+        @NotNull Project project,
+        @NotNull String baseName
+    ) {
+        List<PsiElement> derived = new ArrayList<>();
+        for (String name : allProjectNames(project)) {
+            for (PsiElement candidate : findProjectDeclarations(project, name)) {
+                Optional<VasSymbol> symbol = findSymbol(candidate);
+                if (symbol.isPresent() && symbol.get().baseTypes().contains(baseName)) {
+                    derived.add(candidate);
+                }
+            }
+        }
+        return derived;
     }
 }
