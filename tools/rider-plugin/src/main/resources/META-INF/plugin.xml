@@ -63,6 +63,8 @@
             implementation="com.verseangelscript.rider.lang.VasReferencesCodeVisionProvider"/>
         <fileBasedIndex
             implementation="com.verseangelscript.rider.index.VasSymbolIndex"/>
+        <fileBasedIndex
+            implementation="com.verseangelscript.rider.index.VasInheritanceIndex"/>
         <directoryProjectGenerator
             implementation="com.verseangelscript.rider.project.VasProjectGenerator"/>
         <colorSettingsPage

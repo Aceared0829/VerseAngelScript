@@ -188,8 +188,9 @@ public final class VasSymbolResolver {
             if (includedPsi == null) {
                 continue;
             }
-            declarations.addAll(declarationsInFile(includedPsi, name));
-            if (declarations.isEmpty()) {
+            List<PsiElement> directDeclarations = declarationsInFile(includedPsi, name);
+            declarations.addAll(directDeclarations);
+            if (directDeclarations.isEmpty()) {
                 declarations.addAll(findIncludedDeclarations(includedPsi, name, visited));
             }
         }
@@ -283,11 +284,26 @@ public final class VasSymbolResolver {
         @NotNull Project project,
         @NotNull String baseName
     ) {
+        if (DumbService.isDumb(project)) {
+            return List.of();
+        }
+
+        GlobalSearchScope scope = GlobalSearchScope.allScope(project);
+        Collection<VirtualFile> files = FileBasedIndex.getInstance()
+            .getContainingFiles(VasInheritanceIndex.BASE_TYPE, baseName, scope);
         List<PsiElement> derived = new ArrayList<>();
-        for (String name : allProjectNames(project)) {
-            for (PsiElement candidate : findProjectDeclarations(project, name)) {
-                Optional<VasSymbol> symbol = findSymbol(candidate);
-                if (symbol.isPresent() && symbol.get().baseTypes().contains(baseName)) {
+        PsiManager psiManager = PsiManager.getInstance(project);
+        for (VirtualFile file : files) {
+            PsiFile psiFile = psiManager.findFile(file);
+            if (psiFile == null) {
+                continue;
+            }
+            for (VasSymbol symbol : VasSymbolScanner.scan(psiFile.getText())) {
+                if (!symbol.baseTypes().contains(baseName)) {
+                    continue;
+                }
+                PsiElement candidate = psiFile.findElementAt(symbol.offset());
+                if (candidate != null) {
                     derived.add(candidate);
                 }
             }

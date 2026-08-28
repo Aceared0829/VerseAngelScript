@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.verseangelscript"
-version = "0.5.1"
+version = "0.5.2"
 
 repositories {
     mavenCentral()
@@ -50,9 +50,9 @@ intellijPlatform {
         """.trimIndent()
 
         changeNotes = """
-            Adds VAS Callers and VAS Callees navigation on top of semantic containers,
-            overload/member resolution, gutter navigation, reference Code Vision, and
-            cross-file symbol rename support.
+            Fixes VAS PSI creation so navigation, completion, Find Usages, rename, and
+            Code Vision work at runtime. Also adds a dedicated inheritance index for
+            responsive implementation and inheritor navigation.
         """.trimIndent()
     }
 }
