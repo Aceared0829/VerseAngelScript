@@ -76,6 +76,10 @@ CScriptArray     *GetCommandLineArgs();
 void              SetWorkDir(const string &file);
 void              WaitForUser();
 int               PragmaCallback(const string &pragmaText, CScriptBuilder &builder, void *userParam);
+static bool       IsVasScriptFile(const char *filename);
+static int        ReportInvalidVasScriptExtension(asIScriptEngine *engine, const char *filename, const char *role);
+static string     ResolveIncludePath(const char *include, const char *from);
+static int        VasIncludeCallback(const char *include, const char *from, CScriptBuilder *builder, void *userParam);
 
 // The command line arguments
 CScriptArray *g_commandLineArgs = 0;
@@ -129,6 +133,8 @@ int main(int argc, char **argv)
 		return -1;
 	}
 
+	const int scriptArg = strcmp(argv[1], "-d") == 0 ? 2 : 1;
+
 	// Create the script engine
 	asIScriptEngine *engine = asCreateScriptEngine();
 	if( engine == 0 )
@@ -141,13 +147,19 @@ int main(int argc, char **argv)
 	// and variables that the script should be able to use.
 	r = ConfigureEngine(engine);
 	if( r < 0 ) return -1;
+
+	if( !IsVasScriptFile(argv[scriptArg]) )
+	{
+		ReportInvalidVasScriptExtension(engine, argv[scriptArg], "entry script");
+		engine->ShutDownAndRelease();
+		return -1;
+	}
 	
 	// Check if the script is to be debugged
 	if( strcmp(argv[1], "-d") == 0 )
 		g_doDebug = true;
 
 	// Store the command line arguments for the script
-	int scriptArg = g_doDebug ? 2 : 1;
 	g_argc = argc - (scriptArg + 1);
 	g_argv = argv + (scriptArg + 1);
 
@@ -345,6 +357,8 @@ void InitializeDebugger(asIScriptEngine *engine)
 int CompileScript(asIScriptEngine *engine, const char *scriptFile)
 {
 	int r;
+	if( !IsVasScriptFile(scriptFile) )
+		return ReportInvalidVasScriptExtension(engine, scriptFile, "entry script");
 
 	// We will only initialize the global variables once we're 
 	// ready to execute, so disable the automatic initialization
@@ -354,6 +368,7 @@ int CompileScript(asIScriptEngine *engine, const char *scriptFile)
 
 	// Set the pragma callback so we can detect if the script needs debugging
 	builder.SetPragmaCallback(PragmaCallback, 0);
+	builder.SetIncludeCallback(VasIncludeCallback, engine);
 
 	// Compile the script
 	r = builder.StartNewModule(engine, "script");
@@ -370,6 +385,59 @@ int CompileScript(asIScriptEngine *engine, const char *scriptFile)
 	}
 
 	return 0;
+}
+
+// VAS source files use a lower-case .vas extension on every supported platform.
+static bool IsVasScriptFile(const char *filename)
+{
+	if( filename == 0 )
+		return false;
+
+	string path(filename);
+	string::size_type slash = path.find_last_of("/\\");
+	string::size_type dot = path.find_last_of('.');
+	return dot != string::npos &&
+		(slash == string::npos || dot > slash) &&
+		path.compare(dot, 4, ".vas") == 0;
+}
+
+static int ReportInvalidVasScriptExtension(asIScriptEngine *engine, const char *filename, const char *role)
+{
+	string path = filename ? filename : "";
+	string message = "VAS source files must use the '.vas' extension";
+	if( role && role[0] )
+		message += string(" for the ") + role;
+	message += ". Received '" + path + "'.";
+	engine->WriteMessage(path.c_str(), 0, 0, asMSGTYPE_ERROR, message.c_str());
+	return asERROR;
+}
+
+static string ResolveIncludePath(const char *include, const char *from)
+{
+	string includePath = include ? include : "";
+	if( includePath.find_first_of("/\\") != 0 && includePath.find_first_of(":") == string::npos )
+	{
+		string sourcePath = from ? from : "";
+		string::size_type slash = sourcePath.find_last_of("/\\");
+		if( slash != string::npos )
+			sourcePath.resize(slash + 1);
+		else
+			sourcePath = "";
+
+		return sourcePath + includePath;
+	}
+
+	return includePath;
+}
+
+static int VasIncludeCallback(const char *include, const char *from, CScriptBuilder *builder, void *userParam)
+{
+	asIScriptEngine *engine = reinterpret_cast<asIScriptEngine *>(userParam);
+	string resolvedInclude = ResolveIncludePath(include, from);
+	if( !IsVasScriptFile(resolvedInclude.c_str()) )
+		return ReportInvalidVasScriptExtension(engine, resolvedInclude.c_str(), "included script");
+
+	return builder->AddSectionFromFile(resolvedInclude.c_str());
 }
 
 // Execute the script by calling the main() function

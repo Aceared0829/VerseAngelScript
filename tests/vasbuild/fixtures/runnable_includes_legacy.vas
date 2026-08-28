@@ -1,0 +1,6 @@
+#include "legacy.as"
+
+void main()
+{
+    print("This script must not run.\\n");
+}

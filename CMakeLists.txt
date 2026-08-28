@@ -111,6 +111,20 @@ if(BUILD_TESTING)
 		NAME vasrun_executes_vas
 		COMMAND $<TARGET_FILE:vasrun> "${VASBUILD_FIXTURE_DIR}/runnable.vas"
 	)
+	add_test(
+		NAME vasrun_rejects_legacy_entry_extension
+		COMMAND ${CMAKE_COMMAND}
+			"-DVASRUN=$<TARGET_FILE:vasrun>"
+			"-DSCRIPT=${VASBUILD_FIXTURE_DIR}/legacy.as"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/tests/vasbuild/assert_vasrun_rejected.cmake"
+	)
+	add_test(
+		NAME vasrun_rejects_legacy_include_extension
+		COMMAND ${CMAKE_COMMAND}
+			"-DVASRUN=$<TARGET_FILE:vasrun>"
+			"-DSCRIPT=${VASBUILD_FIXTURE_DIR}/runnable_includes_legacy.vas"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/tests/vasbuild/assert_vasrun_rejected.cmake"
+	)
 	set_tests_properties(vasrun_executes_vas PROPERTIES
 		PASS_REGULAR_EXPRESSION "VAS Rider project is running"
 	)
