@@ -24,6 +24,9 @@ public final class VasDirectNavigationProvider implements DirectNavigationProvid
             }
         }
 
+        if (element.getNode().getElementType() == VasTypes.PREPROCESSOR) {
+            return VasIncludeReference.resolveTarget(element);
+        }
         if (element.getNode().getElementType() != VasTypes.IDENTIFIER) {
             return null;
         }

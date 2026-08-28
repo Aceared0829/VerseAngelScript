@@ -22,20 +22,38 @@ public final class VasIncludeReference extends PsiReferenceBase<PsiElement> {
     }
 
     public static @Nullable VasIncludeReference create(@NotNull PsiElement element) {
+        String includePath = extractIncludePath(element.getText());
+        if (includePath == null) {
+            return null;
+        }
         String text = element.getText();
+        int quoteStart = text.indexOf('"');
+        int quoteEnd = quoteStart < 0 ? -1 : text.indexOf('"', quoteStart + 1);
+        return new VasIncludeReference(
+            element,
+            new TextRange(quoteStart + 1, quoteEnd),
+            includePath
+        );
+    }
+
+    /**
+     * Resolves an include directly for Go To Declaration paths that do not request
+     * PSI references from the preprocessor leaf.
+     */
+    public static @Nullable PsiElement resolveTarget(@NotNull PsiElement element) {
+        VasIncludeReference reference = create(element);
+        return reference == null ? null : reference.resolve();
+    }
+
+    static @Nullable String extractIncludePath(@NotNull String text) {
         if (!text.stripLeading().startsWith("#include")) {
             return null;
         }
         int quoteStart = text.indexOf('"');
         int quoteEnd = quoteStart < 0 ? -1 : text.indexOf('"', quoteStart + 1);
-        if (quoteStart < 0 || quoteEnd <= quoteStart + 1) {
-            return null;
-        }
-        return new VasIncludeReference(
-            element,
-            new TextRange(quoteStart + 1, quoteEnd),
-            text.substring(quoteStart + 1, quoteEnd)
-        );
+        return quoteStart < 0 || quoteEnd <= quoteStart + 1
+            ? null
+            : text.substring(quoteStart + 1, quoteEnd);
     }
 
     @Override

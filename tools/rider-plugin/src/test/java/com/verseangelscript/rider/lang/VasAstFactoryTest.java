@@ -4,6 +4,7 @@ import com.intellij.psi.impl.source.tree.LeafElement;
 import org.junit.Test;
 
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 public final class VasAstFactoryTest {
@@ -16,5 +17,14 @@ public final class VasAstFactoryTest {
         assertTrue(identifier instanceof VasIdentifierPsiElement);
         assertNull(factory.createLeaf(VasTypes.KEYWORD, "class"));
         assertNull(factory.createLeaf(VasTypes.OPERATOR, "+"));
+    }
+
+    @Test
+    public void extractsOnlyQuotedIncludePaths() {
+        assertEquals("shared/math.vas", VasIncludeReference.extractIncludePath(
+            "  #include \"shared/math.vas\""
+        ));
+        assertNull(VasIncludeReference.extractIncludePath("#include <shared/math.vas>"));
+        assertNull(VasIncludeReference.extractIncludePath("#define path \"math.vas\""));
     }
 }

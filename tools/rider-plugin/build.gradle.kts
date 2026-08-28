@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.verseangelscript"
-version = "0.5.2"
+version = "0.5.3"
 
 repositories {
     mavenCentral()
@@ -50,9 +50,8 @@ intellijPlatform {
         """.trimIndent()
 
         changeNotes = """
-            Fixes VAS PSI creation so navigation, completion, Find Usages, rename, and
-            Code Vision work at runtime. Also adds a dedicated inheritance index for
-            responsive implementation and inheritor navigation.
+            Makes #include file navigation explicit for Rider Go To Declaration and
+            middle-click paths, while retaining PSI and inheritance-index fixes.
         """.trimIndent()
     }
 }

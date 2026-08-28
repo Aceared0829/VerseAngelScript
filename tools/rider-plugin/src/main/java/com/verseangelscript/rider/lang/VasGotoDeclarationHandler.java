@@ -44,6 +44,12 @@ public final class VasGotoDeclarationHandler implements GotoDeclarationHandler {
             }
         }
         IElementType elementType = navigationElement.getNode().getElementType();
+        if (targets.isEmpty() && elementType == VasTypes.PREPROCESSOR) {
+            PsiElement includeTarget = VasIncludeReference.resolveTarget(navigationElement);
+            if (includeTarget != null) {
+                targets.add(includeTarget);
+            }
+        }
         if (targets.isEmpty() && elementType == VasTypes.IDENTIFIER) {
             targets.addAll(VasSymbolResolver.findDeclarations(navigationElement));
         }
