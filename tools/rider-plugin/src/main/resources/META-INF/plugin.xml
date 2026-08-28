@@ -35,6 +35,11 @@
         <completion.contributor
             language="VAS"
             implementationClass="com.verseangelscript.rider.lang.VasCompletionContributor"/>
+        <externalAnnotator
+            language="VAS"
+            implementationClass="com.verseangelscript.rider.diagnostics.VasExternalAnnotator"/>
+        <consoleFilterProvider
+            implementation="com.verseangelscript.rider.diagnostics.VasCompilerConsoleFilterProvider"/>
         <psi.referenceContributor
             language="VAS"
             implementation="com.verseangelscript.rider.lang.VasReferenceContributor"/>

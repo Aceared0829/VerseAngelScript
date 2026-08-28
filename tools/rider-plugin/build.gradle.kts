@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.verseangelscript"
-version = "0.2.1"
+version = "0.3.0"
 
 repositories {
     mavenCentral()
@@ -50,8 +50,9 @@ intellijPlatform {
         """.trimIndent()
 
         changeNotes = """
-            Fixes completion activation and cross-file declaration navigation for VAS files
-            opened outside Rider's attached .NET project scope.
+            Adds compiler-backed editor diagnostics with red error and yellow warning
+            highlighting, clickable colored compiler output, while retaining cross-file
+            navigation and completion fixes.
         """.trimIndent()
     }
 }
