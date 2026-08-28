@@ -5,6 +5,7 @@ import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiElementResolveResult;
 import com.intellij.psi.PsiPolyVariantReferenceBase;
 import com.intellij.psi.ResolveResult;
+import com.intellij.psi.PsiNamedElement;
 import com.verseangelscript.rider.index.VasSymbolResolver;
 import org.jetbrains.annotations.NotNull;
 
@@ -25,5 +26,13 @@ public final class VasReference extends PsiPolyVariantReferenceBase<PsiElement> 
             }
         }
         return results.toArray(ResolveResult.EMPTY_ARRAY);
+    }
+
+    @Override
+    public @NotNull PsiElement handleElementRename(@NotNull String newElementName) {
+        if (myElement instanceof PsiNamedElement namedElement) {
+            return namedElement.setName(newElementName);
+        }
+        return super.handleElementRename(newElementName);
     }
 }

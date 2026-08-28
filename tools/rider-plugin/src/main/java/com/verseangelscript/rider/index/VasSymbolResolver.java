@@ -251,6 +251,25 @@ public final class VasSymbolResolver {
         return implementations;
     }
 
+    public static @NotNull List<PsiElement> findDeclarationsForSymbol(
+        @NotNull PsiElement definition
+    ) {
+        Optional<VasSymbol> target = findSymbol(definition);
+        if (target.isEmpty()) {
+            return List.of();
+        }
+        return findProjectDeclarations(definition.getProject(), target.get().name()).stream()
+            .filter(candidate -> !candidate.isEquivalentTo(definition))
+            .filter(candidate -> findSymbol(candidate).map(symbol ->
+                symbol.kind() == target.get().kind()
+                    && !symbol.definition()
+                    && (symbol.kind() != VasSymbolKind.FUNCTION
+                        || symbol.parameterCount() == target.get().parameterCount())
+                    && compatibleContainers(symbol.container(), target.get().container())
+            ).orElse(false))
+            .toList();
+    }
+
     private static boolean compatibleContainers(String left, String right) {
         return left.isEmpty() || right.isEmpty() || left.equals(right)
             || left.endsWith("::" + right) || right.endsWith("::" + left);
