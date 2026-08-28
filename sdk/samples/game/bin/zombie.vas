@@ -1,5 +1,5 @@
 // Include the shared code
-#include 'shared.as'
+#include 'shared.vas'
 
 // This script implements the logic for the zombie
 class CZombie : IController
@@ -110,4 +110,3 @@ enum EDirection
 	DOWN,
 	LEFT
 }
-

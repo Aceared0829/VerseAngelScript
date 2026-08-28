@@ -141,12 +141,12 @@ CScriptMgr::SController *CScriptMgr::GetControllerScript(const string &script)
 
 	// If the script file doesn't exist, then there is no script controller for this type
 	FILE *f;
-	if( (f = fopen((script + ".as").c_str(), "r")) == 0 )
+	if( (f = fopen((script + ".vas").c_str(), "r")) == 0 )
 		return 0;
 	fclose(f);
 
 	// Let the builder load the script, and do the necessary pre-processing (include files, etc)
-	r = builder.AddSectionFromFile((script + ".as").c_str());
+	r = builder.AddSectionFromFile((script + ".vas").c_str());
 	if( r < 0 )
 		return 0;
 

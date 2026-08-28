@@ -36,10 +36,10 @@ bool Test()
 			"  filesystem fs; \n"
 			"  assert( fs.changeCurrentPath('scripts') ); \n"
 			"  assert( fs.makeDir('backup') == 0 ); \n"
-			"  assert( fs.copyFile('TestExecuteScript.as', 'backup/TestExecuteScript.as') == 0 ); \n"
-			"  assert( fs.move('backup/TestExecuteScript.as', 'backup/Test.as') == 0 ); \n"
-			"  assert( fs.getSize('TestExecuteScript.as') == fs.getSize('backup/Test.as') ); \n"
-			"  assert( fs.deleteFile('backup/Test.as') == 0 ); \n"
+			"  assert( fs.copyFile('TestExecuteScript.vas', 'backup/TestExecuteScript.vas') == 0 ); \n"
+			"  assert( fs.move('backup/TestExecuteScript.vas', 'backup/Test.vas') == 0 ); \n"
+			"  assert( fs.getSize('TestExecuteScript.vas') == fs.getSize('backup/Test.vas') ); \n"
+			"  assert( fs.deleteFile('backup/Test.vas') == 0 ); \n"
 			"  assert( fs.removeDir('backup') == 0 ); \n"
 			"} \n");
 		r = mod->Build();
@@ -96,7 +96,7 @@ bool Test()
 			"  array<string> files = fs.getFiles(); \n"					// get the script files in the directory
 			"  assert( files.length() == 3 ); \n"
 			"  file f; \n"
-			"  f.open('scripts/include.as', 'r'); \n"
+			"  f.open('scripts/include.vas', 'r'); \n"
 			"  string str = f.readLine(); \n"
 			"  str = str.substr(3, 25); \n"
 			"  assert( str == 'void MyIncludedFunction()' ); \n"
@@ -134,13 +134,13 @@ bool Test()
 
 		const char *script =
 			"file f;                                                  \n"
-			"int r = f.open(\"scripts/TestExecuteScript.as\", \"r\"); \n"
+			"int r = f.open(\"scripts/TestExecuteScript.vas\", \"r\"); \n"
 			"if( r >= 0 ) {                                           \n"
 			"  assert( f.getSize() > 0 );                             \n"
 			"  string s1 = f.readString(10000);                       \n"
 			"  assert( s1.length() == uint(f.getSize()) );            \n"
 			"  f.close();                                             \n"
-			"  f.open('scripts/TestExecuteScript.as', 'r');           \n"
+			"  f.open('scripts/TestExecuteScript.vas', 'r');           \n"
 			"  string s2;                                             \n"
 			"  while( !f.isEndOfFile() )                              \n"
 			"  {                                                      \n"

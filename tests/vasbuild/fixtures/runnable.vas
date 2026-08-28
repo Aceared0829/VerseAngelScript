@@ -1,0 +1,4 @@
+void main()
+{
+    print("VAS Rider project is running\n");
+}

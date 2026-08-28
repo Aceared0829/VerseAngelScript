@@ -55,7 +55,7 @@ r = engine->RegisterGlobalFunction("void print(const string &in)", asFUNCTION(pr
 After the engine has been configured, the next step is to compile the scripts that should be executed.
 
 The following is our script that will call the registered <tt>print</tt> function to write <tt>Hello world</tt> on the 
-standard output stream. Let's say it's stored in the file <tt>test.as</tt>.
+standard output stream. Let's say it's stored in the file <tt>test.vas</tt>.
 
 <pre>
   void main()
@@ -82,7 +82,7 @@ if( r < 0 )
   printf("Unrecoverable error while starting a new module.\n");
   return;
 }
-r = builder.AddSectionFromFile("test.as");
+r = builder.AddSectionFromFile("test.vas");
 if( r < 0 )
 {
   // The builder wasn't able to load the file. Maybe the file

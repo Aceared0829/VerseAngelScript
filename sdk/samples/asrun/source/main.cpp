@@ -99,16 +99,12 @@ int main(int argc, char **argv)
 	// Ref: https://docs.microsoft.com/en-us/windows/console/console-virtual-terminal-sequences
 	// Ref: https://stackoverflow.com/questions/2048509/how-to-echo-with-different-colors-in-the-windows-command-line
 	HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (hOut == INVALID_HANDLE_VALUE)
-		return -1;
-
-    DWORD dwMode = 0;
-    if (!GetConsoleMode(hOut, &dwMode))
-		return -1;
-
-    dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
-    if (!SetConsoleMode(hOut, dwMode))
-		return -1;
+	DWORD dwMode = 0;
+	if (hOut != INVALID_HANDLE_VALUE && GetConsoleMode(hOut, &dwMode))
+	{
+		dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+		SetConsoleMode(hOut, dwMode);
+	}
 #endif
 
 	int r;
@@ -122,11 +118,11 @@ int main(int argc, char **argv)
 
 	if( !argsValid )
 	{
-		cout << "AngelScript command line runner. Version " << ANGELSCRIPT_VERSION_STRING << endl << endl;
+		cout << "Verse AngelScript command line runner. Version " << ANGELSCRIPT_VERSION_STRING << endl << endl;
 		cout << "Usage: " << endl;
-		cout << "asrun [-d] <script file> [<args>]" << endl;
+		cout << "vasrun [-d] <script.vas> [<args>]" << endl;
 		cout << " -d             inform if the script should be runned with debug" << endl;
-		cout << " <script file>  is the script file that should be runned" << endl;
+		cout << " <script.vas>   is the VAS source file that should be run" << endl;
 		cout << " <args>         zero or more args for the script" << endl;
 
 		WaitForUser();

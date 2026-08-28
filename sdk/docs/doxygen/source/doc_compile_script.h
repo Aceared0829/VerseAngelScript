@@ -53,8 +53,8 @@ asIScriptModule *mod = engine->GetModule("module", asGM_ALWAYS_CREATE);
 
 // Load and add the script sections to the module
 string script;
-LoadScriptFile("script.as", script);
-mod->AddScriptSection("script.as", script.c_str());
+LoadScriptFile("script.vas", script);
+mod->AddScriptSection("script.vas", script.c_str());
 
 // Build the module
 int r = mod->Build();
@@ -74,7 +74,7 @@ your own routines for loading script files, for example:
 void LoadScriptFile(const char *fileName, string &script)
 {
   // Open the file in binary mode
-  FILE *f = fopen("test.as", "rb");
+  FILE *f = fopen("test.vas", "rb");
   
   // Determine the size of the file
   fseek(f, 0, SEEK_END);

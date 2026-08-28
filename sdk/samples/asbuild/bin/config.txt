@@ -187,7 +187,7 @@ objmthd "file" "int writeDouble(double)"
 objmthd "file" "int getPos() const"
 objmthd "file" "int setPos(int)"
 objmthd "file" "int movePos(int)"
-objprop "file" "bool mostSignificantByteFirst"
+objprop "file" "bool mostSignificantByteFirst" 0 0
 objbeh "filesystem" 3 "filesystem@ filesystem()"
 objbeh "filesystem" 5 "void $beh5()"
 objbeh "filesystem" 6 "void $beh6()"
