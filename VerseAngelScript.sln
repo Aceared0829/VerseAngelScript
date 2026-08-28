@@ -30,7 +30,7 @@ EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Rider Plugin", "Rider Plugin", "{B8F4FEA5-530E-47D1-90B8-80FA6BA52372}"
 	ProjectSection(SolutionItems) = preProject
 		plugins\rider\README.md = plugins\rider\README.md
-		plugins\rider\VerseAngelScript-Rider-Plugin-0.5.5.zip = plugins\rider\VerseAngelScript-Rider-Plugin-0.5.5.zip
+		plugins\rider\VerseAngelScript-Rider-Plugin-0.5.6.zip = plugins\rider\VerseAngelScript-Rider-Plugin-0.5.6.zip
 		tools\rider-plugin\build.gradle.kts = tools\rider-plugin\build.gradle.kts
 		tools\rider-plugin\gradle.properties = tools\rider-plugin\gradle.properties
 		tools\rider-plugin\README.md = tools\rider-plugin\README.md

@@ -65,7 +65,7 @@ VAS 源码 ──实时解析──► 语义模型 ──► 可视化 VAS 二�
 
 仓库内附带专门的 **Rider 插件**：
 
-- 可安装插件：`plugins/rider/VerseAngelScript-Rider-Plugin-0.5.5.zip`
+- 可安装插件：`plugins/rider/VerseAngelScript-Rider-Plugin-0.5.6.zip`
 - 插件源码：`tools/rider-plugin`
 - Rider 起步项目模板：`templates/rider/vas-starter`
 
@@ -74,6 +74,8 @@ VAS 源码 ──实时解析──► 语义模型 ──► 可视化 VAS 二�
 0.5.0 进一步支持常见函数重载和成员类型解析、类/接口继承实现导航、声明/定义行标、引用数量 Code Vision，以及跨文件符号重命名。
 
 0.5.1 增加 **VAS Callers** 与 **VAS Callees** 调用关系导航。
+
+0.5.6 新增 Rider Solution Host 集成测试：CI 会实际启动 Rider 前后端、打开 `.sln` 测试项目，并验证 `#include` 文件跳转以及跨嵌套 include 的函数声明跳转。
 
 构建完成后，可按以下方式调用构建器：
 

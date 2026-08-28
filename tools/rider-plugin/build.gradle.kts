@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.verseangelscript"
-version = "0.5.5"
+version = "0.5.6"
 
 repositories {
     mavenCentral()
@@ -21,6 +21,26 @@ val configuredRiderPath = providers.gradleProperty("riderPath")
 
 dependencies {
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.junit.jupiter:junit-jupiter:5.14.4")
+    testRuntimeOnly("org.junit.vintage:junit-vintage-engine:5.14.4")
+    testRuntimeOnly("org.jetbrains.kotlin:kotlin-test:2.4.0")
+    // The Rider framework creates a real Solution Host. LightPlatformTestCase
+    // alone cannot initialize Rider's frontend/backend solution session.
+    testImplementation("com.jetbrains.intellij.rider:rider-test-framework-core:262.8665.401") {
+        isTransitive = false
+    }
+    testImplementation("com.jetbrains.intellij.rider:rider-test-framework:262.8665.401") {
+        isTransitive = false
+    }
+    testImplementation("com.jetbrains.intellij.rider:rider-test-framework-junit:262.8665.401") {
+        isTransitive = false
+    }
+    testImplementation("com.jetbrains.intellij.rider:rider-test-framework-integration-junit:262.8665.401") {
+        isTransitive = false
+    }
+    testRuntimeOnly("com.jetbrains.intellij.platform:ijent-test-framework:262.8665.401") {
+        isTransitive = false
+    }
 
     intellijPlatform {
         if (configuredRiderPath.isPresent) {
@@ -54,8 +74,8 @@ intellijPlatform {
         """.trimIndent()
 
         changeNotes = """
-            Enforces the .vas extension for vasrun entry scripts and includes, resolves
-            nested include declarations, and makes Rider CI use archive dependencies.
+            Adds a Rider Solution Host integration test for nested include and declaration
+            navigation, while retaining the strict .vas entry/include validation.
         """.trimIndent()
     }
 }
@@ -66,6 +86,10 @@ java {
 }
 
 tasks {
+    test {
+        useJUnitPlatform()
+    }
+
     withType<JavaCompile> {
         options.release = 25
         options.encoding = "UTF-8"

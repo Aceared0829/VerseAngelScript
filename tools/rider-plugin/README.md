@@ -27,10 +27,12 @@ $env:JAVA_HOME = 'C:\Program Files\JetBrains\JetBrains Rider 261.20362.35\jbr'
 
 未指定 `riderPath` 时，Gradle 会从 JetBrains 仓库获取 Rider 2026.2.0.2。
 
+`test` 会同时执行普通语言单元测试和 Rider Solution Host 集成测试。后者会启动 Rider 前后端、打开 `testData/solutions/vas-navigation/VasNavigation.sln`，验证 `#include` 文件跳转与跨嵌套 include 的函数声明跳转。
+
 ## 安装
 
 构建后的 ZIP 位于 `build/distributions`。在 Rider 中打开：
 
 **Settings | Plugins | 齿轮菜单 | Install Plugin from Disk**
 
-选择 `VerseAngelScript-Rider-Plugin-0.5.5.zip` 后重启 Rider。仓库同时会在 `plugins/rider` 保留一份可直接安装的插件包。
+选择 `VerseAngelScript-Rider-Plugin-0.5.6.zip` 后重启 Rider。仓库同时会在 `plugins/rider` 保留一份可直接安装的插件包。
