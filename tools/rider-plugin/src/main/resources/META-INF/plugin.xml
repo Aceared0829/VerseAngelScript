@@ -45,6 +45,9 @@
             implementation="com.verseangelscript.rider.lang.VasReferenceContributor"/>
         <gotoDeclarationHandler
             implementation="com.verseangelscript.rider.lang.VasGotoDeclarationHandler"/>
+        <lang.directNavigationProvider
+            language="VAS"
+            implementationClass="com.verseangelscript.rider.lang.VasDirectNavigationProvider"/>
         <lang.findUsagesProvider
             language="VAS"
             implementationClass="com.verseangelscript.rider.lang.VasFindUsagesProvider"/>

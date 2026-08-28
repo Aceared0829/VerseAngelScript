@@ -13,10 +13,18 @@ import org.jetbrains.annotations.NotNull;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public final class VasSymbolResolver {
+    private static final Pattern INCLUDE_PATTERN = Pattern.compile(
+        "(?m)^\\s*#include\\s+\"([^\"]+)\""
+    );
+
     private VasSymbolResolver() {
     }
 
@@ -82,7 +90,72 @@ public final class VasSymbolResolver {
             return declaration == null ? List.of() : List.of(declaration);
         }
 
+        List<PsiElement> sameFile = declarationsInFile(file, name);
+        if (!sameFile.isEmpty()) {
+            return sameFile;
+        }
+
+        List<PsiElement> included = findIncludedDeclarations(file, name);
+        if (!included.isEmpty()) {
+            return included;
+        }
+
         return findProjectDeclarations(usage.getProject(), name);
+    }
+
+    static @NotNull List<PsiElement> findIncludedDeclarations(
+        @NotNull PsiFile sourceFile,
+        @NotNull String name
+    ) {
+        return findIncludedDeclarations(sourceFile, name, new HashSet<>());
+    }
+
+    private static @NotNull List<PsiElement> findIncludedDeclarations(
+        @NotNull PsiFile sourceFile,
+        @NotNull String name,
+        @NotNull Set<VirtualFile> visited
+    ) {
+        VirtualFile source = sourceFile.getVirtualFile();
+        if (source == null || source.getParent() == null || !visited.add(source)) {
+            return List.of();
+        }
+
+        List<PsiElement> declarations = new ArrayList<>();
+        Matcher matcher = INCLUDE_PATTERN.matcher(sourceFile.getText());
+        PsiManager psiManager = PsiManager.getInstance(sourceFile.getProject());
+        while (matcher.find()) {
+            VirtualFile included = source.getParent()
+                .findFileByRelativePath(matcher.group(1).replace('\\', '/'));
+            if (included == null || visited.contains(included)) {
+                continue;
+            }
+            PsiFile includedPsi = psiManager.findFile(included);
+            if (includedPsi == null) {
+                continue;
+            }
+            declarations.addAll(declarationsInFile(includedPsi, name));
+            if (declarations.isEmpty()) {
+                declarations.addAll(findIncludedDeclarations(includedPsi, name, visited));
+            }
+        }
+        return declarations;
+    }
+
+    private static @NotNull List<PsiElement> declarationsInFile(
+        @NotNull PsiFile file,
+        @NotNull String name
+    ) {
+        List<PsiElement> declarations = new ArrayList<>();
+        for (VasSymbol symbol : VasSymbolScanner.scan(file.getText())) {
+            if (!symbol.name().equals(name) || !symbol.isProjectVisible()) {
+                continue;
+            }
+            PsiElement declaration = file.findElementAt(symbol.offset());
+            if (declaration != null) {
+                declarations.add(declaration);
+            }
+        }
+        return declarations;
     }
 
     public static @NotNull Optional<VasSymbol> findSymbol(@NotNull PsiElement element) {

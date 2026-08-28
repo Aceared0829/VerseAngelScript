@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.verseangelscript"
-version = "0.4.0"
+version = "0.4.1"
 
 repositories {
     mavenCentral()
@@ -50,8 +50,8 @@ intellijPlatform {
         """.trimIndent()
 
         changeNotes = """
-            Adds include target navigation, scope-aware function and variable declaration
-            navigation, Find Usages, and Go to Implementation support.
+            Fixes declaration navigation by resolving current-file and transitive include
+            symbols directly before falling back to the project index.
         """.trimIndent()
     }
 }
