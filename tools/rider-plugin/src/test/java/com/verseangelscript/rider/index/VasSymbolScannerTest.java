@@ -5,6 +5,7 @@ import org.junit.Test;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public final class VasSymbolScannerTest {
@@ -39,6 +40,47 @@ public final class VasSymbolScannerTest {
         assertSymbol(symbols, "main", VasSymbolKind.FUNCTION);
         assertTrue(symbols.stream().noneMatch(symbol -> symbol.name().equals("Calculate")));
         assertTrue(symbols.stream().noneMatch(symbol -> symbol.name().equals("Run")));
+    }
+
+    @Test
+    public void indexesProjectSymbolsButKeepsParametersAndLocalsScoped() {
+        String source = """
+            int globalCount;
+            class Player {
+                int health;
+                void ApplyDamage(int amount) {
+                    int remaining = health - amount;
+                }
+            }
+            """;
+
+        List<VasSymbol> symbols = VasSymbolScanner.scan(source);
+        assertTrue(find(symbols, "globalCount").isProjectVisible());
+        assertTrue(find(symbols, "health").isProjectVisible());
+        assertTrue(find(symbols, "ApplyDamage").isProjectVisible());
+        assertFalse(find(symbols, "amount").isProjectVisible());
+        assertFalse(find(symbols, "remaining").isProjectVisible());
+    }
+
+    @Test
+    public void distinguishesFunctionDeclarationsFromImplementations() {
+        String source = """
+            interface Runnable { void Run(); }
+            void Run() {}
+            """;
+
+        List<VasSymbol> runSymbols = VasSymbolScanner.scan(source).stream()
+            .filter(symbol -> symbol.name().equals("Run"))
+            .toList();
+        assertEquals(2, runSymbols.size());
+        assertEquals(1, runSymbols.stream().filter(VasSymbol::definition).count());
+    }
+
+    private static VasSymbol find(List<VasSymbol> symbols, String name) {
+        return symbols.stream()
+            .filter(symbol -> symbol.name().equals(name))
+            .findFirst()
+            .orElseThrow();
     }
 
     private static void assertSymbol(List<VasSymbol> symbols, String name, VasSymbolKind kind) {

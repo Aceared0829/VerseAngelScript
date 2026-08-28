@@ -52,6 +52,6 @@ public final class VasSymbolIndex extends ScalarIndexExtension<String> {
 
     @Override
     public int getVersion() {
-        return 1;
+        return 2;
     }
 }

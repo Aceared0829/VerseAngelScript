@@ -6,10 +6,10 @@
 
 1. 打开 Rider 的 **Settings | Plugins**。
 2. 点击齿轮菜单，选择 **Install Plugin from Disk**。
-3. 选择 `VerseAngelScript-Rider-Plugin-0.3.0.zip`。
+3. 选择 `VerseAngelScript-Rider-Plugin-0.4.0.zip`。
 4. 按提示重启 Rider。
 
-当前安装包面向 Rider 2026.2（Build 262），提供 `.vas` 文件识别、语法高亮、项目符号索引、当前文件与跨文件补全、`Ctrl+B` 声明跳转、编译器驱动的错误/警告波浪线、可点击的红色/黄色控制台诊断，以及调用 `vasbuild`/`vasrun` 构建和运行当前文件的功能。
+当前安装包面向 Rider 2026.2（Build 262），提供 `.vas` 文件识别、语法高亮、项目符号索引、当前文件与跨文件补全、`#include` 目标跳转、函数/变量/类型的 `Ctrl+B`（或 Ctrl+鼠标点击）声明跳转、`Shift+F12` 查找用法、转到函数实现、编译器驱动的错误/警告波浪线、可点击的红色/黄色控制台诊断，以及调用 `vasbuild`/`vasrun` 构建和运行当前文件的功能。鼠标中键是否触发“转到声明”仍由 Rider 的鼠标快捷键映射决定；插件已经提供同一套 VAS 引用目标。
 
 ## 安装 VAS 项目模板
 

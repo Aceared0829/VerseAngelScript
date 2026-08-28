@@ -6,9 +6,17 @@ public record VasSymbol(
     @NotNull String name,
     @NotNull VasSymbolKind kind,
     int offset,
-    int braceDepth
+    int braceDepth,
+    int scopeStart,
+    int scopeEnd,
+    boolean projectVisible,
+    boolean definition
 ) {
     public boolean isProjectVisible() {
-        return kind != VasSymbolKind.VARIABLE || braceDepth == 0;
+        return projectVisible;
+    }
+
+    public boolean isVisibleAt(int usageOffset) {
+        return projectVisible || usageOffset >= scopeStart && usageOffset <= scopeEnd;
     }
 }

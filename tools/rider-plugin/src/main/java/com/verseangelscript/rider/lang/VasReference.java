@@ -19,10 +19,7 @@ public final class VasReference extends PsiPolyVariantReferenceBase<PsiElement> 
     @Override
     public ResolveResult @NotNull [] multiResolve(boolean incompleteCode) {
         List<ResolveResult> results = new ArrayList<>();
-        for (PsiElement declaration : VasSymbolResolver.findProjectDeclarations(
-            myElement.getProject(),
-            myElement.getText()
-        )) {
+        for (PsiElement declaration : VasSymbolResolver.findDeclarations(myElement)) {
             if (!declaration.isEquivalentTo(myElement)) {
                 results.add(new PsiElementResolveResult(declaration));
             }

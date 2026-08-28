@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.verseangelscript"
-version = "0.3.0"
+version = "0.4.0"
 
 repositories {
     mavenCentral()
@@ -45,14 +45,13 @@ intellijPlatform {
 
         description = """
             Rider language support for Verse AngelScript (.vas), including project symbol
-            indexing, cross-file completion, declaration navigation, project templates,
-            and integrated vasbuild/vasrun tools.
+            indexing, cross-file completion, include/declaration/usage/implementation
+            navigation, project templates, and integrated vasbuild/vasrun tools.
         """.trimIndent()
 
         changeNotes = """
-            Adds compiler-backed editor diagnostics with red error and yellow warning
-            highlighting, clickable colored compiler output, while retaining cross-file
-            navigation and completion fixes.
+            Adds include target navigation, scope-aware function and variable declaration
+            navigation, Find Usages, and Go to Implementation support.
         """.trimIndent()
     }
 }

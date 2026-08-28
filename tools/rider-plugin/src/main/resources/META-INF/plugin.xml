@@ -7,8 +7,8 @@
     <description><![CDATA[
       <p>JetBrains Rider plugin for the Verse AngelScript language.</p>
       <p>Provides <code>.vas</code> file recognition, syntax highlighting, project symbol
-      indexing, cross-file completion, declaration navigation, project templates,
-      and <code>vasbuild</code>/<code>vasrun</code> integration.</p>
+      indexing, cross-file completion, include/declaration/usage/implementation navigation,
+      project templates, and <code>vasbuild</code>/<code>vasrun</code> integration.</p>
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
@@ -43,6 +43,13 @@
         <psi.referenceContributor
             language="VAS"
             implementation="com.verseangelscript.rider.lang.VasReferenceContributor"/>
+        <gotoDeclarationHandler
+            implementation="com.verseangelscript.rider.lang.VasGotoDeclarationHandler"/>
+        <lang.findUsagesProvider
+            language="VAS"
+            implementationClass="com.verseangelscript.rider.lang.VasFindUsagesProvider"/>
+        <definitionsSearch
+            implementation="com.verseangelscript.rider.lang.VasDefinitionsSearch"/>
         <fileBasedIndex
             implementation="com.verseangelscript.rider.index.VasSymbolIndex"/>
         <directoryProjectGenerator

@@ -11,8 +11,10 @@ import com.intellij.util.indexing.FileBasedIndex;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 
 public final class VasSymbolResolver {
     private VasSymbolResolver() {
@@ -56,5 +58,61 @@ public final class VasSymbolResolver {
             }
         }
         return declarations;
+    }
+
+    public static @NotNull List<PsiElement> findDeclarations(@NotNull PsiElement usage) {
+        PsiFile file = usage.getContainingFile();
+        if (file == null) {
+            return List.of();
+        }
+
+        String name = usage.getText();
+        int usageOffset = usage.getTextOffset();
+        List<VasSymbol> scoped = VasSymbolScanner.scan(file.getText()).stream()
+            .filter(symbol -> symbol.name().equals(name))
+            .filter(symbol -> !symbol.isProjectVisible())
+            .filter(symbol -> symbol.isVisibleAt(usageOffset))
+            .filter(symbol -> symbol.offset() != usageOffset)
+            .sorted(Comparator
+                .comparingInt((VasSymbol symbol) -> symbol.scopeEnd() - symbol.scopeStart())
+                .thenComparingInt(symbol -> Math.abs(usageOffset - symbol.offset())))
+            .toList();
+        if (!scoped.isEmpty()) {
+            PsiElement declaration = file.findElementAt(scoped.get(0).offset());
+            return declaration == null ? List.of() : List.of(declaration);
+        }
+
+        return findProjectDeclarations(usage.getProject(), name);
+    }
+
+    public static @NotNull Optional<VasSymbol> findSymbol(@NotNull PsiElement element) {
+        PsiFile file = element.getContainingFile();
+        if (file == null) {
+            return Optional.empty();
+        }
+        int offset = element.getTextOffset();
+        return VasSymbolScanner.scan(file.getText()).stream()
+            .filter(symbol -> symbol.offset() == offset)
+            .findFirst();
+    }
+
+    public static @NotNull List<PsiElement> findImplementations(@NotNull PsiElement declaration) {
+        Optional<VasSymbol> target = findSymbol(declaration);
+        if (target.isEmpty() || target.get().kind() != VasSymbolKind.FUNCTION) {
+            return List.of();
+        }
+
+        List<PsiElement> implementations = new ArrayList<>();
+        for (PsiElement candidate : findProjectDeclarations(
+            declaration.getProject(),
+            target.get().name()
+        )) {
+            Optional<VasSymbol> symbol = findSymbol(candidate);
+            if (symbol.isPresent() && symbol.get().kind() == VasSymbolKind.FUNCTION
+                && symbol.get().definition() && !candidate.isEquivalentTo(declaration)) {
+                implementations.add(candidate);
+            }
+        }
+        return implementations;
     }
 }

@@ -24,5 +24,20 @@ public final class VasReferenceContributor extends PsiReferenceContributor {
                 }
             }
         );
+        registrar.registerReferenceProvider(
+            PlatformPatterns.psiElement(VasTypes.PREPROCESSOR),
+            new PsiReferenceProvider() {
+                @Override
+                public PsiReference @NotNull [] getReferencesByElement(
+                    @NotNull PsiElement element,
+                    @NotNull ProcessingContext context
+                ) {
+                    VasIncludeReference reference = VasIncludeReference.create(element);
+                    return reference == null
+                        ? PsiReference.EMPTY_ARRAY
+                        : new PsiReference[] {reference};
+                }
+            }
+        );
     }
 }
