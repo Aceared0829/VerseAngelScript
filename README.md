@@ -65,13 +65,15 @@ VAS 源码 ──实时解析──► 语义模型 ──► 可视化 VAS 二�
 
 仓库内附带专门的 **Rider 插件**：
 
-- 可安装插件：`plugins/rider/VerseAngelScript-Rider-Plugin-0.5.0.zip`
+- 可安装插件：`plugins/rider/VerseAngelScript-Rider-Plugin-0.5.1.zip`
 - 插件源码：`tools/rider-plugin`
 - Rider 起步项目模板：`templates/rider/vas-starter`
 
 当前版本面向 Rider 2026.2（Build 262），支持 `.vas` 文件识别、语法高亮、项目符号索引、当前文件及跨文件补全、`#include` 目标跳转、函数/变量/类型声明跳转、查找用法、转到函数实现、由真实 VAS 编译器提供的红色错误/黄色警告波浪线，以及 **Build | Build Current VAS File** 和 **Run | Run Current VAS File**。VAS 项目模板通过 Rider 使用的 .NET 模板系统注册；安装后可在 **New Project** 中搜索 **VAS** 或 **Verse AngelScript Project**。模板内置 Windows x64 构建器、运行器、MSBuild 解决方案和示例项目，创建后即可构建运行。安装方式见 `plugins/rider/README.md`。
 
 0.5.0 进一步支持常见函数重载和成员类型解析、类/接口继承实现导航、声明/定义行标、引用数量 Code Vision，以及跨文件符号重命名。
+
+0.5.1 增加 **VAS Callers** 与 **VAS Callees** 调用关系导航。
 
 构建完成后，可按以下方式调用构建器：
 

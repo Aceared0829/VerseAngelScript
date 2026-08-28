@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.verseangelscript"
-version = "0.5.0"
+version = "0.5.1"
 
 repositories {
     mavenCentral()
@@ -50,8 +50,8 @@ intellijPlatform {
         """.trimIndent()
 
         changeNotes = """
-            Adds semantic containers, overload arity, inheritance and member resolution,
-            declaration/implementation gutter navigation, reference Code Vision, and
+            Adds VAS Callers and VAS Callees navigation on top of semantic containers,
+            overload/member resolution, gutter navigation, reference Code Vision, and
             cross-file symbol rename support.
         """.trimIndent()
     }
