@@ -5,4 +5,13 @@ void main()
     int result = add(20, 22);
     print("Hello from VAS in Rider!\n");
     print("20 + 22 = " + result + "\n");
+
+    int result2 = subtract(10, 3);
+    print("10 - 3 = " + result2 + "\n");
+
+    int result3 = multiply(5, 6);
+    print("5 * 6 = " + result3 + "\n");
+    
+    int result4 = multiply(20,30);
+    print("20 * 30 = " + result4 + "\n");
 }
