@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.verseangelscript"
-version = "0.4.1"
+version = "0.5.0"
 
 repositories {
     mavenCentral()
@@ -50,8 +50,9 @@ intellijPlatform {
         """.trimIndent()
 
         changeNotes = """
-            Fixes declaration navigation by resolving current-file and transitive include
-            symbols directly before falling back to the project index.
+            Adds semantic containers, overload arity, inheritance and member resolution,
+            declaration/implementation gutter navigation, reference Code Vision, and
+            cross-file symbol rename support.
         """.trimIndent()
     }
 }
