@@ -81,14 +81,15 @@ public final class VasSymbolScanner {
                 if (next != null && next.type() == VasTypes.LPAREN
                     && looksLikeFunctionDeclaration(tokens, index)) {
                     int bodyIndex = functionBodyIndex(tokens, index);
+                    Scope bodyScope = scopeForBrace(tokens, bodyIndex, matchingBraces);
                     add(
                         symbols,
                         declarationOffsets,
                         token,
                         VasSymbolKind.FUNCTION,
                         braceDepth,
-                        -1,
-                        -1,
+                        bodyScope == null ? -1 : bodyScope.start(),
+                        bodyScope == null ? -1 : bodyScope.end(),
                         true,
                         bodyIndex >= 0,
                         functionContainer(tokens, index, braceStack, containerScopes),
@@ -401,6 +402,21 @@ public final class VasSymbolScanner {
             return new Scope(tokens.get(leftIndex).start(), Integer.MAX_VALUE);
         }
         return new Scope(tokens.get(leftIndex).start(), tokens.get(rightIndex).end());
+    }
+
+    private static Scope scopeForBrace(
+        List<Token> tokens,
+        int leftIndex,
+        Map<Integer, Integer> matchingBraces
+    ) {
+        if (leftIndex < 0) {
+            return null;
+        }
+        Integer rightIndex = matchingBraces.get(leftIndex);
+        return new Scope(
+            tokens.get(leftIndex).start(),
+            rightIndex == null ? Integer.MAX_VALUE : tokens.get(rightIndex).end()
+        );
     }
 
     private static Scope parameterScope(

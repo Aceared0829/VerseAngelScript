@@ -6,7 +6,10 @@ import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiManager;
+import com.intellij.psi.PsiReference;
 import com.intellij.psi.search.GlobalSearchScope;
+import com.intellij.psi.search.searches.ReferencesSearch;
+import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.util.indexing.FileBasedIndex;
 import org.jetbrains.annotations.NotNull;
 
@@ -15,6 +18,7 @@ import java.util.Comparator;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
+import java.util.LinkedHashSet;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -289,5 +293,58 @@ public final class VasSymbolResolver {
             }
         }
         return derived;
+    }
+
+    public static @NotNull Optional<PsiElement> findEnclosingFunction(
+        @NotNull PsiElement element
+    ) {
+        PsiFile file = element.getContainingFile();
+        if (file == null) {
+            return Optional.empty();
+        }
+        int offset = element.getTextOffset();
+        return VasSymbolScanner.scan(file.getText()).stream()
+            .filter(symbol -> symbol.kind() == VasSymbolKind.FUNCTION && symbol.definition())
+            .filter(symbol -> symbol.scopeStart() >= 0
+                && offset >= symbol.scopeStart() && offset <= symbol.scopeEnd())
+            .min(Comparator.comparingInt(symbol -> symbol.scopeEnd() - symbol.scopeStart()))
+            .map(symbol -> file.findElementAt(symbol.offset()));
+    }
+
+    public static @NotNull List<PsiElement> findCallers(@NotNull PsiElement callable) {
+        LinkedHashSet<PsiElement> callers = new LinkedHashSet<>();
+        for (PsiReference reference : ReferencesSearch.search(callable).findAll()) {
+            findEnclosingFunction(reference.getElement()).ifPresent(callers::add);
+        }
+        return List.copyOf(callers);
+    }
+
+    public static @NotNull List<PsiElement> findCallees(@NotNull PsiElement callable) {
+        Optional<VasSymbol> function = findSymbol(callable);
+        PsiFile file = callable.getContainingFile();
+        if (function.isEmpty() || file == null
+            || function.get().kind() != VasSymbolKind.FUNCTION
+            || function.get().scopeStart() < 0) {
+            return List.of();
+        }
+
+        LinkedHashSet<PsiElement> callees = new LinkedHashSet<>();
+        PsiElement[] identifiers = PsiTreeUtil.collectElements(file, candidate ->
+            candidate.getNode().getElementType() == com.verseangelscript.rider.lang.VasTypes.IDENTIFIER
+                && candidate.getTextOffset() >= function.get().scopeStart()
+                && candidate.getTextOffset() <= function.get().scopeEnd()
+        );
+        for (PsiElement identifier : identifiers) {
+            if (findSymbol(identifier).isPresent()) {
+                continue;
+            }
+            for (PsiElement target : findDeclarations(identifier)) {
+                if (findSymbol(target).map(symbol -> symbol.kind() == VasSymbolKind.FUNCTION)
+                    .orElse(false)) {
+                    callees.add(target);
+                }
+            }
+        }
+        return List.copyOf(callees);
     }
 }

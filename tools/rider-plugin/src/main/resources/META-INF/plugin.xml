@@ -97,5 +97,19 @@
             description="Run the current .vas file with vasrun">
             <add-to-group group-id="RunMenu" anchor="last"/>
         </action>
+        <action
+            id="VAS.ShowCallers"
+            class="com.verseangelscript.rider.lang.VasShowCallersAction"
+            text="VAS Callers"
+            description="Show functions that call the selected VAS function">
+            <add-to-group group-id="GoToMenu" anchor="last"/>
+        </action>
+        <action
+            id="VAS.ShowCallees"
+            class="com.verseangelscript.rider.lang.VasShowCalleesAction"
+            text="VAS Callees"
+            description="Show functions called by the selected VAS function">
+            <add-to-group group-id="GoToMenu" anchor="last"/>
+        </action>
     </actions>
 </idea-plugin>
