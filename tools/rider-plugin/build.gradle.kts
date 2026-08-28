@@ -6,12 +6,13 @@ plugins {
 }
 
 group = "com.verseangelscript"
-version = "0.5.4"
+version = "0.5.5"
 
 repositories {
     mavenCentral()
     intellijPlatform {
         defaultRepositories()
+        jetbrainsRuntime()
     }
 }
 
@@ -25,7 +26,10 @@ dependencies {
         if (configuredRiderPath.isPresent) {
             local(configuredRiderPath.get())
         } else {
-            rider("2026.2.0.2")
+            rider("2026.2.0.2") {
+                useInstaller = false
+            }
+            jetbrainsRuntime()
         }
         testFramework(TestFrameworkType.Platform)
     }
@@ -50,8 +54,8 @@ intellijPlatform {
         """.trimIndent()
 
         changeNotes = """
-            Prevents automatic diagnostics from executing project-provided tools until
-            the user explicitly configures a VAS builder.
+            Enforces the .vas extension for vasrun entry scripts and includes, resolves
+            nested include declarations, and makes Rider CI use archive dependencies.
         """.trimIndent()
     }
 }
