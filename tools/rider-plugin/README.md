@@ -33,4 +33,4 @@ $env:JAVA_HOME = 'C:\Program Files\JetBrains\JetBrains Rider 261.20362.35\jbr'
 
 **Settings | Plugins | 齿轮菜单 | Install Plugin from Disk**
 
-选择 `VerseAngelScript-Rider-Plugin-0.5.4.zip` 后重启 Rider。仓库同时会在 `plugins/rider` 保留一份可直接安装的插件包。
+选择 `VerseAngelScript-Rider-Plugin-0.5.5.zip` 后重启 Rider。仓库同时会在 `plugins/rider` 保留一份可直接安装的插件包。
