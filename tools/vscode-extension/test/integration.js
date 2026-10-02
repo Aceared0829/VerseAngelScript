@@ -11,6 +11,9 @@ async function eventually(check, description) {
     if (await check()) return;
     await new Promise(resolve => setTimeout(resolve, 50));
   }
+  console.error('Diagnostics at timeout:', JSON.stringify(vscode.languages.getDiagnostics().map(([uri, diagnostics]) => ({
+    uri: uri.toString(), diagnostics: diagnostics.map(item => ({ message: item.message, severity: item.severity, line: item.range.start.line }))
+  }))));
   throw new Error(`Timed out waiting for ${description}`);
 }
 

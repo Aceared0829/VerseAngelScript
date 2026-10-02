@@ -9,8 +9,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: vscode-extension-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   extension:
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
