@@ -315,7 +315,7 @@ static int VasIncludeCallback(const char *include, const char *from, CScriptBuil
 class CBytecodeStream : public asIBinaryStream
 {
 public:
-	CBytecodeStream() {f = 0;}
+	CBytecodeStream() : f(0), failed(false) {}
 	~CBytecodeStream() { if( f ) fclose(f); }
 
 	int Open(const char *filename)
@@ -327,14 +327,24 @@ public:
 	}
 	int Write(const void *ptr, asUINT size) 
 	{
-		if( size == 0 || f == 0 ) return 0; 
-		fwrite(ptr, size, 1, f); 
-		return 0;
+		if( f == 0 || failed ) return -1;
+		if( size && fwrite(ptr, 1, size, f) != size ) failed = true;
+		return failed ? -1 : 0;
+	}
+	int Close()
+	{
+		if( !f ) return -1;
+		// Buffered writes may not fail until fclose flushes the stream. Retain
+		// earlier errors too: the engine need not propagate each Write result.
+		if( fclose(f) != 0 ) failed = true;
+		f = 0;
+		return failed ? -1 : 0;
 	}
 	int Read(void *, asUINT) { return -1; }
 
 protected:
 	FILE *f;
+	bool failed;
 };
 
 int SaveBytecode(asIScriptEngine *engine, const char *outputFile)
@@ -355,7 +365,8 @@ int SaveBytecode(asIScriptEngine *engine, const char *outputFile)
 	}
 
 	r = mod->SaveByteCode(&stream);
-	if( r < 0 )
+	int closeResult = stream.Close();
+	if( r < 0 || closeResult < 0 )
 	{
 		engine->WriteMessage(outputFile, 0, 0, asMSGTYPE_ERROR, "Failed to write the bytecode");
 		return -1;
@@ -365,4 +376,3 @@ int SaveBytecode(asIScriptEngine *engine, const char *outputFile)
 
 	return 0;
 }
-
