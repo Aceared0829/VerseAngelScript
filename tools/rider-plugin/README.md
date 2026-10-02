@@ -36,3 +36,9 @@ $env:JAVA_HOME = 'C:\Program Files\JetBrains\JetBrains Rider 261.20362.35\jbr'
 **Settings | Plugins | 齿轮菜单 | Install Plugin from Disk**
 
 选择 `VerseAngelScript-Rider-Plugin-0.5.6.zip` 后重启 Rider。仓库同时会在 `plugins/rider` 保留一份可直接安装的插件包。
+
+## 后台诊断与项目安全
+
+打开或编辑 `.vas` 文件触发的后台编译诊断，仅在 Rider 已信任项目且已配置 builder 路径时运行。项目配置中的可执行文件路径本身不代表信任；未信任或已释放的项目不会启动后台编译器。插件会在收集输入、处理排队请求和启动进程之前重新检查，不会自动更改信任状态或弹出信任提示。
+
+显式 **Build/Run** 动作和起步项目生成器保持原有行为。原生 Rider 信任回归测试使用隔离的测试信任存储与项目级记录启动器，检查未信任文件的打开/编辑、排队请求、恢复信任后的普通高亮及诊断范围；不会执行项目提供的测试二进制文件。

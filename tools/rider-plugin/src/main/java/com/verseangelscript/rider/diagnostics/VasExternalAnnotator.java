@@ -4,12 +4,17 @@ import com.intellij.execution.ExecutionException;
 import com.intellij.execution.configurations.GeneralCommandLine;
 import com.intellij.execution.process.CapturingProcessHandler;
 import com.intellij.execution.process.ProcessOutput;
+import com.intellij.ide.trustedProjects.TrustedProjects;
 import com.intellij.lang.annotation.AnnotationHolder;
 import com.intellij.lang.annotation.ExternalAnnotator;
 import com.intellij.lang.annotation.HighlightSeverity;
+import com.intellij.openapi.Disposable;
+import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.progress.ProgressManager;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.util.Disposer;
+import com.intellij.openapi.util.Key;
 import com.intellij.openapi.util.TextRange;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiDocumentManager;
@@ -17,6 +22,7 @@ import com.intellij.psi.PsiFile;
 import com.verseangelscript.rider.build.VasSettingsState;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import org.jetbrains.annotations.TestOnly;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -36,23 +42,32 @@ public final class VasExternalAnnotator extends ExternalAnnotator<
     VasExternalAnnotator.Result
 > {
     private static final int TIMEOUT_MS = 20_000;
+    private static final Key<ProcessLauncher> TEST_LAUNCHER = Key.create("vas.diagnostics.testLauncher");
     private static final Pattern INCLUDE = Pattern.compile(
         "(?m)^\\s*#include\\s+\"([^\"]+)\""
     );
 
     @Override
     public @Nullable Request collectInformation(@NotNull PsiFile file) {
-        VirtualFile virtualFile = file.getVirtualFile();
-        if (virtualFile == null || file.getProject().getBasePath() == null) {
+        Project project = file.getProject();
+        if (!canRunDiagnostics(project)) {
             return null;
         }
-        return new Request(file.getProject(), virtualFile, file.getText());
+        VirtualFile virtualFile = file.getVirtualFile();
+        if (virtualFile == null || project.getBasePath() == null) {
+            return null;
+        }
+        return new Request(project, virtualFile, file.getText());
     }
 
     @Override
     public @Nullable Result doAnnotate(Request request) {
         ProgressManager.checkCanceled();
-        Toolchain toolchain = resolveToolchain(request.project(), request.file());
+        // Requests may have been queued while the project was still trusted/open.
+        if (!canRunDiagnostics(request.project()) || request.project().getBasePath() == null) {
+            return null;
+        }
+        Toolchain toolchain = resolveToolchain(request.project());
         if (toolchain == null) {
             return null;
         }
@@ -90,7 +105,15 @@ public final class VasExternalAnnotator extends ExternalAnnotator<
                 )
                 .withWorkDirectory(temporaryRoot.toFile())
                 .withCharset(StandardCharsets.UTF_8);
-            ProcessOutput process = new CapturingProcessHandler(commandLine).runProcess(TIMEOUT_MS);
+            ProgressManager.checkCanceled();
+            // Recheck after preparing the snapshot, immediately before starting a process.
+            if (!canRunDiagnostics(request.project())) {
+                return null;
+            }
+            ProcessLauncher launcher = request.project().getUserData(TEST_LAUNCHER);
+            ProcessOutput process = launcher == null
+                ? new CapturingProcessHandler(commandLine).runProcess(TIMEOUT_MS)
+                : launcher.run(commandLine, TIMEOUT_MS);
             if (process.isTimeout()) {
                 return null;
             }
@@ -126,6 +149,9 @@ public final class VasExternalAnnotator extends ExternalAnnotator<
         Result result,
         @NotNull AnnotationHolder holder
     ) {
+        if (!canRunDiagnostics(file.getProject())) {
+            return;
+        }
         Document document = PsiDocumentManager.getInstance(file.getProject()).getDocument(file);
         if (document == null) {
             return;
@@ -161,15 +187,36 @@ public final class VasExternalAnnotator extends ExternalAnnotator<
         return new TextRange(range.startOffset(), range.endOffset());
     }
 
-    private static @Nullable Toolchain resolveToolchain(Project project, VirtualFile file) {
+    private static boolean canRunDiagnostics(Project project) {
+        return !project.isDisposed() && TrustedProjects.isProjectTrusted(project);
+    }
+
+    // Project-scoped so the actual registered annotator can be exercised without
+    // ever running a project-supplied binary. This is not a user-facing setting.
+    @TestOnly
+    static void installTestLauncher(Project project, ProcessLauncher launcher, Disposable lifetime) {
+        if (!ApplicationManager.getApplication().isUnitTestMode()) {
+            throw new IllegalStateException("Diagnostic launcher replacement is only available in tests");
+        }
+        ProcessLauncher previous = project.getUserData(TEST_LAUNCHER);
+        project.putUserData(TEST_LAUNCHER, launcher);
+        Disposer.register(lifetime, () -> project.putUserData(TEST_LAUNCHER, previous));
+    }
+
+    @FunctionalInterface
+    interface ProcessLauncher {
+        ProcessOutput run(GeneralCommandLine commandLine, int timeoutMs) throws ExecutionException;
+    }
+
+    private static @Nullable Toolchain resolveToolchain(Project project) {
         Path projectRoot = Path.of(project.getBasePath()).toAbsolutePath().normalize();
-        Path source = Path.of(file.getPath()).toAbsolutePath().normalize();
         VasSettingsState settings = VasSettingsState.getInstance(project);
 
         // An external annotator is started merely by opening or editing a file. Never
         // auto-discover and execute .vas/bin/vasbuild.exe from an arbitrary project.
-        // The user must opt in by configuring a builder path, or use the explicit Build
-        // action, which is a user-initiated operation.
+        // A configured path is necessary but not proof of consent: vas.xml may come
+        // from the project itself. The caller must also check actual project trust.
+        // The explicit Build action is a separate, user-initiated operation.
         if (settings.builderPath == null || settings.builderPath.isBlank()) {
             return null;
         }
