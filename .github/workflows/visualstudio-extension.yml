@@ -1,0 +1,55 @@
+name: Visual Studio 2026 extension
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'tools/visualstudio-extension/**'
+      - 'tools/vscode-extension/syntaxes/**'
+      - 'tools/vscode-extension/language-configuration.json'
+      - '.github/workflows/visualstudio-extension.yml'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'tools/visualstudio-extension/**'
+      - 'tools/vscode-extension/syntaxes/**'
+      - 'tools/vscode-extension/language-configuration.json'
+      - '.github/workflows/visualstudio-extension.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: visualstudio-extension-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-editor:
+    # Official runner-images lists this as a supported YAML label. Also probe vswhere
+    # and assert the actual host major/version path instead of trusting the label.
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build VSIX and exercise the real VS2026 editor
+        shell: pwsh
+        run: ./tools/visualstudio-extension/scripts/test-vs2026.ps1
+      - name: Upload focused test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vs2026-editor-results
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            tools/visualstudio-extension/TestResults/VS2026.trx
+            tools/visualstudio-extension/TestResults/host-instance.json
+            tools/visualstudio-extension/TestResults/host-runtime-dependencies.json
+            tools/visualstudio-extension/TestResults/*ActivityLog*
+            tools/visualstudio-extension/TestResults/*editor-options.txt
+            tools/visualstudio-extension/TestResults/harness/Screenshots/*Activity*.xml
+            tools/visualstudio-extension/TestResults/harness/Screenshots/*VSExtensionTestingInstallerLog*.log
