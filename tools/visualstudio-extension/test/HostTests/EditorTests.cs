@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using Process = System.Diagnostics.Process;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -57,10 +58,10 @@ namespace VerseAngelScript.VisualStudio.Tests
                 using (var editor = Open(path))
                 {
                     Assert.Equal(Source, editor.Text);
-                    await AssertClassification(editor, "void", "keyword");
-                    await AssertClassification(editor, "42", "number");
-                    await AssertClassification(editor, "你好 VAS", "string");
-                    await AssertClassification(editor, "Unicode 注释", "comment");
+                    await AssertClassificationAsync(editor, "void", "keyword");
+                    await AssertClassificationAsync(editor, "42", "number");
+                    await AssertClassificationAsync(editor, "你好 VAS", "string");
+                    await AssertClassificationAsync(editor, "Unicode 注释", "comment");
                     Assert.False(editor.View.TextBuffer.ContentType.IsOfType("C/C++"));
                 }
             }
@@ -73,10 +74,10 @@ namespace VerseAngelScript.VisualStudio.Tests
             const string text = "string value = \"\"\"first\r\nraw \\q 你好\r\nlast\"\"\";\r\n/* outer /* inner */ int after = 73;\r\n";
             using (var editor = Open(WriteFixture("grammar.vas", text)))
             {
-                await AssertClassification(editor, "raw \\q 你好", "string");
-                await AssertClassification(editor, "outer", "comment");
-                await AssertClassification(editor, "int", "keyword");
-                await AssertClassification(editor, "73", "number");
+                await AssertClassificationAsync(editor, "raw \\q 你好", "string");
+                await AssertClassificationAsync(editor, "outer", "comment");
+                await AssertClassificationAsync(editor, "int", "keyword");
+                await AssertClassificationAsync(editor, "73", "number");
                 AssertNoClassification(editor, "after", "comment");
             }
         }
@@ -88,7 +89,7 @@ namespace VerseAngelScript.VisualStudio.Tests
             const string text = "int count = 42;";
             using (var editor = Open(WriteFixture("comments.vas", text)))
             {
-                await AssertClassification(editor, "int", "keyword");
+                await AssertClassificationAsync(editor, "int", "keyword");
                 editor.SelectAll();
                 editor.Dte.ExecuteCommand("Edit.CommentSelection");
                 Assert.Equal("//" + text, editor.Text.TrimStart());
@@ -110,7 +111,7 @@ namespace VerseAngelScript.VisualStudio.Tests
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
             using (var editor = Open(WriteFixture("pairs.vas", "// pairs\r\n")))
             {
-                await AssertClassification(editor, "pairs", "comment");
+                await AssertClassificationAsync(editor, "pairs", "comment");
                 editor.End();
                 editor.Type('{');
                 Assert.Equal("// pairs\r\n{}", editor.Text);
@@ -131,7 +132,7 @@ namespace VerseAngelScript.VisualStudio.Tests
             const string text = "void Main() {";
             using (var editor = Open(WriteFixture("indent.vas", text)))
             {
-                await AssertClassification(editor, "void", "keyword");
+                await AssertClassificationAsync(editor, "void", "keyword");
                 editor.View.Options.SetOptionValue(DefaultOptions.ConvertTabsToSpacesOptionId, true);
                 editor.View.Options.SetOptionValue(DefaultOptions.IndentSizeOptionId, 4);
                 editor.End();
@@ -158,7 +159,7 @@ namespace VerseAngelScript.VisualStudio.Tests
             using (var editor = Open(WriteFixture("control.cpp", "// native C++\r\nint value = 42;\r\nmixin Foo;")))
             {
                 Assert.True(editor.View.TextBuffer.ContentType.IsOfType("C/C++"), editor.View.TextBuffer.ContentType.TypeName);
-                await AssertClassification(editor, "int", "keyword");
+                await AssertClassificationAsync(editor, "int", "keyword");
                 AssertNoClassification(editor, "mixin", "keyword");
             }
             using (var editor = Open(WriteFixture("control.as", "mixin Foo;\r\nfuncdef void Callback();")))
@@ -212,7 +213,7 @@ namespace VerseAngelScript.VisualStudio.Tests
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             var dte = (DTE)Package.GetGlobalService(typeof(SDTE));
-            var window = dte.ItemOperations.OpenFile(path, Constants.vsViewKindCode);
+            var window = dte.ItemOperations.OpenFile(path, EnvDTE.Constants.vsViewKindCode);
             window.Activate();
             var manager = (IVsTextManager)Package.GetGlobalService(typeof(SVsTextManager));
             ErrorHandler.ThrowOnFailure(manager.GetActiveView(1, null, out var nativeView));
@@ -222,7 +223,7 @@ namespace VerseAngelScript.VisualStudio.Tests
             return new Editor(dte, window, nativeView, view, components.GetService<IClassifierAggregatorService>().GetClassifier(view.TextBuffer));
         }
 
-        private static async Task AssertClassification(Editor editor, string token, string classification)
+        private static async Task AssertClassificationAsync(Editor editor, string token, string classification)
         {
             for (var attempt = 0; attempt < 100; attempt++)
             {
@@ -230,7 +231,7 @@ namespace VerseAngelScript.VisualStudio.Tests
                     return;
                 await Task.Delay(100);
             }
-            Assert.True(false, $"Expected {classification} for '{token}'. Actual: {editor.Classifications(token)}; content type: {editor.View.TextBuffer.ContentType.TypeName}");
+            Assert.Fail($"Expected {classification} for '{token}'. Actual: {editor.Classifications(token)}; content type: {editor.View.TextBuffer.ContentType.TypeName}");
         }
 
         private static void AssertNoClassification(Editor editor, string token, string classification)
@@ -249,6 +250,7 @@ namespace VerseAngelScript.VisualStudio.Tests
 
             public Editor(DTE dte, Window window, IVsTextView nativeView, IWpfTextView view, IClassifier classifier)
             {
+                ThreadHelper.ThrowIfNotOnUIThread();
                 Dte = dte;
                 this.window = window;
                 commands = (IOleCommandTarget)nativeView;
@@ -275,12 +277,14 @@ namespace VerseAngelScript.VisualStudio.Tests
 
             public void Command(VSConstants.VSStd2KCmdID command)
             {
+                ThreadHelper.ThrowIfNotOnUIThread();
                 var group = VSConstants.VSStd2K;
                 ErrorHandler.ThrowOnFailure(commands.Exec(ref group, (uint)command, 0, IntPtr.Zero, IntPtr.Zero));
             }
 
             public void Type(char character)
             {
+                ThreadHelper.ThrowIfNotOnUIThread();
                 var input = Marshal.AllocCoTaskMem(32);
                 try
                 {
