@@ -284,6 +284,12 @@ public final class VasRiderSolutionIntegrationTest extends PerTestSolutionTestBa
                     .getReferences(number, PsiReferenceService.Hints.NO_HINTS).isEmpty(), literal);
                 assertNull(new VasDirectNavigationProvider().getNavigationElement(number), literal);
             }
+            PsiElement heredoc = source.findElementAt(source.getText().indexOf("\nheredocValue\n") + 1);
+            assertNotNull(heredoc);
+            assertEquals(VasTypes.STRING, heredoc.getNode().getElementType());
+            assertTrue(PsiReferenceService.getService().getReferences(heredoc, PsiReferenceService.Hints.NO_HINTS).isEmpty());
+            assertNull(new VasDirectNavigationProvider().getNavigationElement(heredoc));
+            assertActualUsageOffsets(markedIdentifier(source, "heredoc-declaration"), source, "heredoc-use");
             assertActualUsageOffsets(markedIdentifier(source, "numeric-local-declaration"), source,
                 "numeric-integer-use", "numeric-fraction-use", "numeric-exponent-use", "numeric-dot-use");
             assertActualUsageOffsets(markedIdentifier(source, "literal-name-declaration"), source, "literal-name-use");
@@ -311,6 +317,27 @@ public final class VasRiderSolutionIntegrationTest extends PerTestSolutionTestBa
             undo.undo(null);
             documents.commitAllDocuments();
             assertEquals(before, source.getText());
+
+            renameProcessor(project, markedIdentifier(source, "heredoc-declaration"), "HeredocCodeRenamed").run();
+            documents.commitAllDocuments();
+            assertEquals(before.replace("/*heredoc-declaration*/heredocValue", "/*heredoc-declaration*/HeredocCodeRenamed")
+                .replace("/*heredoc-use*/heredocValue", "/*heredoc-use*/HeredocCodeRenamed"), source.getText(),
+                "rename must preserve every byte of the heredoc's interior");
+            undo.undo(null);
+            documents.commitAllDocuments();
+            assertEquals(before, source.getText());
+            Document sourceDocument = documents.getDocument(source);
+            assertNotNull(sourceDocument);
+            try {
+                String unfinished = before + "\nstring unfinished = \"\"\"\nheredocValue";
+                replaceFixtureText(project, sourceDocument, unfinished);
+                RuntimeException rejected = assertThrows(RuntimeException.class,
+                    () -> renameProcessor(project, markedIdentifier(source, "heredoc-declaration"), "HeredocRejected").run());
+                assertTrue(rejected.getMessage().contains("Include dependencies"), rejected.toString());
+                assertEquals(unfinished, source.getText());
+            } finally {
+                replaceFixtureText(project, sourceDocument, before);
+            }
         });
     }
 
@@ -423,6 +450,62 @@ public final class VasRiderSolutionIntegrationTest extends PerTestSolutionTestBa
                 assertEquals(before.get(4), multiline.getText());
             } finally {
                 replaceFixtureText(project, singleDocument, before.get(2));
+            }
+        });
+    }
+
+    @Test
+    @Tag("season/vas")
+    void refusesUnboundSiblingSectionsButPreservesProvenLocalShadowing() {
+        Project project = getSolutionApiFacade().getProject();
+        Path sourceDirectory = getSolutionApiFacade().getActiveSolutionDirectory().resolve("src");
+        runOnEdtWithWriteIntent(() -> {
+            DumbService.getInstance(project).completeJustSubmittedTasks();
+            PsiFile root = fixture(project, sourceDirectory, "shared-unit-root.vas");
+            PsiFile api = fixture(project, sourceDirectory, "shared-unit-api.vas");
+            PsiFile consumer = fixture(project, sourceDirectory, "shared-unit-consumer.vas");
+            PsiFile unrelated = fixture(project, sourceDirectory, "shared-unit-unrelated.vas");
+            assertProjectIndexedFile(project, root, "SharedUnitRoot");
+            assertProjectIndexedFile(project, api, "SharedContextOnly");
+            assertProjectIndexedFile(project, consumer, "ConsumeShared");
+            assertProjectIndexedFile(project, unrelated, "UnrelatedUnit");
+            PsiDocumentManager documents = PsiDocumentManager.getInstance(project);
+            List<PsiFile> files = List.of(root, api, consumer, unrelated);
+            for (PsiFile file : files) {
+                assertNotNull(documents.getDocument(file));
+            }
+            documents.commitAllDocuments();
+            List<String> before = files.stream().map(PsiFile::getText).toList();
+
+            PsiElement target = markedIdentifier(api, "shared-unit-declaration");
+            assertUnresolved(consumer, "shared-unit-usage");
+            assertTrue(ReferencesSearch.search(target).findAll().isEmpty(),
+                "an outbound-only binding must not claim a sibling usage without a selected compilation context");
+            RuntimeException rejected = assertThrows(RuntimeException.class,
+                () -> renameProcessor(project, target, "SharedContextRejected").run());
+            assertTrue(rejected.getMessage().contains("shares a compilation root"), rejected.toString());
+            for (int index = 0; index < files.size(); index++) {
+                assertEquals(before.get(index), files.get(index).getText(), "sibling coverage rejection must be atomic");
+            }
+
+            Document consumerDocument = documents.getDocument(consumer);
+            assertNotNull(consumerDocument);
+            try {
+                String locallyBound = "void ConsumeShared() { int SharedContextOnly = 1; int copy = SharedContextOnly; }\n";
+                replaceFixtureText(project, consumerDocument, locallyBound);
+                renameProcessor(project, markedIdentifier(api, "shared-unit-declaration"), "SharedContextRenamed").run();
+                documents.commitAllDocuments();
+                assertEquals(before.get(1).replace("SharedContextOnly", "SharedContextRenamed"), api.getText());
+                assertEquals(locallyBound, consumer.getText(), "a sibling's proven local variable is a different symbol");
+                assertEquals(before.get(0), root.getText());
+                assertEquals(before.get(3), unrelated.getText(), "same-name code outside a common root is a separate module");
+                UndoManager.getInstance(project).undo(null);
+                documents.commitAllDocuments();
+                assertEquals(before.get(1), api.getText());
+                assertEquals(locallyBound, consumer.getText());
+                assertEquals(before.get(3), unrelated.getText());
+            } finally {
+                replaceFixtureText(project, consumerDocument, before.get(2));
             }
         });
     }

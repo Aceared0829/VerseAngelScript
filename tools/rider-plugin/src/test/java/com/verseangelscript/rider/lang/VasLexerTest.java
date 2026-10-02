@@ -1,13 +1,18 @@
 package com.verseangelscript.rider.lang;
 
 import com.intellij.psi.tree.IElementType;
+import com.verseangelscript.rider.index.VasIncludeScanner;
+import com.verseangelscript.rider.index.VasSymbolScanner;
 import org.junit.Test;
 
 import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
 
 public final class VasLexerTest {
     @Test
@@ -43,6 +48,71 @@ public final class VasLexerTest {
         }
 
         assertEquals("\"VAS \\\"script\\\"\"", source.substring(lexer.getTokenStart(), lexer.getTokenEnd()));
+    }
+
+    @Test
+    public void heredocsKeepMultilineContentOpaqueAndResumeAfterTheirDelimiter() {
+        String literal = "\"\"\"\nvalue\nint forged;\n#include 'hidden.vas'\n// text\n' \" \\\n\"\"\"";
+        VasLexer lexer = new VasLexer();
+        lexer.start(literal + ";value");
+        assertSame(VasTypes.STRING, lexer.getTokenType());
+        assertEquals(literal.length(), lexer.getTokenEnd());
+        lexer.advance();
+        assertSame(VasTypes.OPERATOR, lexer.getTokenType());
+        lexer.advance();
+        assertSame(VasTypes.IDENTIFIER, lexer.getTokenType());
+        assertEquals(literal.length() + 1, lexer.getTokenStart());
+    }
+
+    @Test
+    public void heredocTerminatorsAreNotEscapedAndEmptyHeredocsAreWhole() {
+        for (String literal : List.of("\"\"\"\"\"\"", "\"\"\"text\\\"\"\"")) {
+            VasLexer lexer = new VasLexer();
+            lexer.start(literal + ";value");
+            assertSame(literal, VasTypes.STRING, lexer.getTokenType());
+            assertEquals(literal, literal.length(), lexer.getTokenEnd());
+            lexer.advance();
+            lexer.advance();
+            assertSame(literal, VasTypes.IDENTIFIER, lexer.getTokenType());
+        }
+    }
+
+    @Test
+    public void incompleteHeredocsRemainOpaqueThroughEndOfInput() {
+        for (String literal : List.of("\"\"\"", "\"\"\"\nvalue", "\"\"\"\nvalue\n\"", "\"\"\"\nvalue\n\"\"")) {
+            VasLexer lexer = new VasLexer();
+            lexer.start(literal);
+            assertSame(literal, VasTypes.STRING, lexer.getTokenType());
+            assertEquals(literal, literal.length(), lexer.getTokenEnd());
+            lexer.advance();
+            assertNull(literal, lexer.getTokenType());
+        }
+    }
+
+    @Test
+    public void ordinaryMultilineStringsRetainEscapesAndIncompleteContent() {
+        for (String literal : List.of("\"first\nvalue\\\"still quoted\nlast\"", "'first\r\nvalue\\'last'",
+            "\"first\nvalue", "'first\r\nvalue")) {
+            VasLexer lexer = new VasLexer();
+            lexer.start(literal);
+            assertSame(literal, VasTypes.STRING, lexer.getTokenType());
+            assertEquals(literal, literal.length(), lexer.getTokenEnd());
+            lexer.advance();
+            assertNull(literal, lexer.getTokenType());
+        }
+    }
+
+    @Test
+    public void stringContentsCannotBecomeSymbolsIncludesOrRenameCandidates() {
+        for (String literal : List.of("\"\"\"\nvalue\nint forged;\n#include 'hidden.vas'\n\"\"\"",
+            "\"\"\"\nvalue\nint forged;\n#include 'hidden.vas'",
+            "\"first\nvalue\nint forged;\n#include 'hidden.vas'\"")) {
+            String source = "string text = " + literal + ";";
+            assertEquals(literal, List.of("text"),
+                VasSymbolScanner.scan(source).stream().map(symbol -> symbol.name()).toList());
+            assertTrue(literal, VasIncludeScanner.scan(source).includes().isEmpty());
+            assertFalse(literal, VasRenameSafety.containsRelevantIdentifier(source, "value", "renamed"));
+        }
     }
 
     @Test

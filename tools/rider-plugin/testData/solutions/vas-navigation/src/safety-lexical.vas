@@ -52,3 +52,11 @@ void ConstHandleLocal()
     HandleB@const /*handle-local-declaration*/object = HandleB();
     int copy = /*handle-local-use*/object./*handle-local-field-use*/field;
 }
+
+int /*heredoc-declaration*/heredocValue;
+string preservedText = """
+heredocValue
+#include "not-a-real-dependency.vas"
+int textOnlySymbol;
+""";
+void ReadHeredocValue() { int copy = /*heredoc-use*/heredocValue; }

@@ -175,6 +175,19 @@ public final class VasLexer extends LexerBase {
     }
 
     private void locateString(char quote) {
+        if (quote == '"' && isHeredocDelimiter(tokenStart)) {
+            // Native VAS heredocs have no escape processing. Their whole body,
+            // including newlines and apparent code, remains one opaque token.
+            tokenEnd = tokenStart + 3;
+            while (tokenEnd < endOffset && !isHeredocDelimiter(tokenEnd)) {
+                tokenEnd++;
+            }
+            if (tokenEnd < endOffset) {
+                tokenEnd += 3;
+            }
+            tokenType = VasTypes.STRING;
+            return;
+        }
         tokenEnd = tokenStart + 1;
         boolean escaped = false;
         while (tokenEnd < endOffset) {
@@ -183,11 +196,16 @@ public final class VasLexer extends LexerBase {
                 escaped = false;
             } else if (value == '\\') {
                 escaped = true;
-            } else if (value == quote || isLineBreak(value)) {
+            } else if (value == quote) {
                 break;
             }
         }
         tokenType = VasTypes.STRING;
+    }
+
+    private boolean isHeredocDelimiter(int offset) {
+        return offset + 2 < endOffset && buffer.charAt(offset) == '"'
+            && buffer.charAt(offset + 1) == '"' && buffer.charAt(offset + 2) == '"';
     }
 
     private void locateNumber() {

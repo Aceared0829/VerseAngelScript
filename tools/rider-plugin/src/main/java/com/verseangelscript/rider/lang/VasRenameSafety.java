@@ -15,6 +15,7 @@ import com.intellij.psi.search.SearchScope;
 import com.intellij.util.IncorrectOperationException;
 import com.verseangelscript.rider.VasFileType;
 import com.verseangelscript.rider.index.VasSymbol;
+import com.verseangelscript.rider.index.VasDependencyCoverage;
 import com.verseangelscript.rider.index.VasSymbolKind;
 import com.verseangelscript.rider.index.VasSymbolResolver;
 import com.verseangelscript.rider.index.VasSymbolScanner;
@@ -24,6 +25,8 @@ import org.jetbrains.annotations.NotNull;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Predicate;
@@ -92,18 +95,40 @@ public final class VasRenameSafety {
             }
         }
 
+        // A module root contributes all included sections to one compiler unit.
+        // Inspect even name-free roots so a sibling consumer cannot disappear
+        // merely because it has no outbound include back to the declaration.
+        Map<PsiFile, VasSymbolResolver.DependencyClosure> dependencies = new LinkedHashMap<>();
+        Map<VirtualFile, List<VirtualFile>> knownUnits = new LinkedHashMap<>();
+        for (PsiFile file : files) {
+            ProgressManager.checkCanceled();
+            VasSymbolResolver.DependencyClosure closure = VasSymbolResolver.inspectDependencyClosure(file);
+            dependencies.put(file, closure);
+            if (file.getVirtualFile() != null) {
+                knownUnits.put(file.getVirtualFile(), closure.includedFiles().stream()
+                    .map(PsiFile::getVirtualFile).filter(java.util.Objects::nonNull).toList());
+            }
+        }
+
         for (PsiFile file : files) {
             ProgressManager.checkCanceled();
             String text = file.getText();
             if (!file.isEquivalentTo(targetFile) && !containsRelevantIdentifier(text, symbol.name(), newName)) {
                 continue;
             }
-            VasSymbolResolver.DependencyClosure closure = VasSymbolResolver.inspectDependencyClosure(file);
+            VasSymbolResolver.DependencyClosure closure = dependencies.get(file);
             if (!closure.complete()) {
                 refuse("Include dependencies for '" + file.getName()
                     + "' could not be verified for this VAS rename: " + String.join("; ", closure.problems().stream().map(VasSymbolResolver.DependencyProblem::message).toList()));
             }
             if (!VasSymbolResolver.isDeclarationVisibleFrom(file, target)) {
+                if (symbol.isProjectVisible() && file.getVirtualFile() != null && targetFile.getVirtualFile() != null
+                    && VasDependencyCoverage.haveCommonRoot(targetFile.getVirtualFile(), file.getVirtualFile(), knownUnits)
+                    && hasUnprovenSiblingName(file, symbol.name(), newName)) {
+                    refuse("A possible usage or declaration in '" + file.getName()
+                        + "' shares a compilation root with this VAS symbol, but sibling-section binding is not verified; "
+                        + "rename was cancelled before changing files.");
+                }
                 continue;
             }
             if (symbol.isProjectVisible()) {
@@ -180,6 +205,39 @@ public final class VasRenameSafety {
                 lexer.advance();
             }
         }
+    }
+
+    private static boolean hasUnprovenSiblingName(PsiFile file, String oldName, String newName) {
+        VasLexer lexer = new VasLexer();
+        String source = file.getText();
+        lexer.start(source);
+        while (lexer.getTokenType() != null) {
+            ProgressManager.checkCanceled();
+            if (lexer.getTokenType() == VasTypes.IDENTIFIER) {
+                String name = source.substring(lexer.getTokenStart(), lexer.getTokenEnd());
+                if (name.equals(oldName) || name.equals(newName)) {
+                    PsiElement occurrence = file.findElementAt(lexer.getTokenStart());
+                    if (occurrence == null) {
+                        return true;
+                    }
+                    VasSymbol declaration = VasSymbolResolver.findSymbol(occurrence).orElse(null);
+                    if (declaration != null) {
+                        if (declaration.isProjectVisible()) {
+                            return true;
+                        }
+                    } else {
+                        List<PsiElement> candidates = VasSymbolResolver.findDeclarations(occurrence);
+                        if (candidates.size() != 1 || VasSymbolResolver.findSymbol(candidates.getFirst())
+                            .map(VasSymbol::isProjectVisible).orElse(true)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            lexer.advance();
+        }
+        // Proven local declarations and local uses cannot bind a sibling global.
+        return false;
     }
 
     static boolean containsRelevantIdentifier(String source, String oldName, String newName) {
