@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <AssemblyName>VerseAngelScript</AssemblyName>
+    <RootNamespace>VerseAngelScript.VisualStudio</RootNamespace>
+    <VSSDKBuildToolsAutoSetup>true</VSSDKBuildToolsAutoSetup>
+    <GeneratePkgDefFile>false</GeneratePkgDefFile>
+    <IncludeAssemblyFromOutputFolderInVSIXContainer>false</IncludeAssemblyFromOutputFolderInVSIXContainer>
+    <IncludeAssemblyInVSIXContainer>false</IncludeAssemblyInVSIXContainer>
+    <IncludeDebugSymbolsInVSIXContainer>false</IncludeDebugSymbolsInVSIXContainer>
+    <DeployExtension>false</DeployExtension>
+    <CopyBuildOutputToOutputDirectory>false</CopyBuildOutputToOutputDirectory>
+    <CopyOutputSymbolsToOutputDirectory>false</CopyOutputSymbolsToOutputDirectory>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="18.5.40034" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <None Update="source.extension.vsixmanifest" />
+    <Content Include="VAS.pkgdef" IncludeInVSIX="true" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Canonical assets are linked, never forked. Validate the packaged bytes in CI. -->
+    <Content Include="..\vscode-extension\syntaxes\vas.tmLanguage.json" Link="Grammars\vas.tmLanguage.json" VSIXSubPath="Grammars" IncludeInVSIX="true" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\vscode-extension\language-configuration.json" Link="language-configuration.json" IncludeInVSIX="true" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Remove="test\**\*.cs" />
+    <EmbeddedResource Remove="test\**\*" />
+    <None Remove="test\**\*" />
+  </ItemGroup>
+</Project>
