@@ -28,6 +28,7 @@ import com.intellij.psi.PsiManager;
 import com.intellij.testFramework.EdtTestUtil;
 import com.intellij.testFramework.LightVirtualFile;
 import com.intellij.testFramework.ServiceContainerUtil;
+import com.jetbrains.rider.test.OpenSolutionParams;
 import com.jetbrains.rider.test.annotations.Solution;
 import com.jetbrains.rider.test.annotations.TestSettings;
 import com.jetbrains.rider.test.enums.BuildTool;
@@ -52,6 +53,14 @@ import static org.junit.jupiter.api.Assertions.*;
 public final class VasRiderTrustIntegrationTest extends PerTestSolutionTestBase {
     private static final String SOURCE = "void main() {\n\t/*漢字😀*/\tmissing();\n}";
     private static final String MESSAGE = "VAS trust fixture diagnostic";
+
+    @Override
+    public void modifyOpenSolutionParams(OpenSolutionParams parameters) {
+        super.modifyOpenSolutionParams(parameters);
+        parameters.setWaitForCaches(true);
+        parameters.setWaitForSolutionBuilder(true);
+        parameters.setRestoreNuGetPackages(false);
+    }
 
     @Test
     @Tag("season/vas")
@@ -95,8 +104,10 @@ public final class VasRiderTrustIntegrationTest extends PerTestSolutionTestBase 
                     output.setExitCode(1);
                     return output;
                 }, lifetime);
-                settings.builderPath = builder.toString();
-                settings.configPath = config.toString();
+                // Relative paths can come from the project's vas.xml itself.
+                Path projectRoot = Path.of(project.getBasePath());
+                settings.builderPath = projectRoot.relativize(builder).toString();
+                settings.configPath = projectRoot.relativize(config).toString();
                 setTrust(project, false);
                 reportFilters(annotator, psi, "untrusted");
             });
