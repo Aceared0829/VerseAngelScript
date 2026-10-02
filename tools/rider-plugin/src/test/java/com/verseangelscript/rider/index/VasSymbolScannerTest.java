@@ -109,10 +109,64 @@ public final class VasSymbolScannerTest {
         int applyOffset = source.indexOf("Apply");
         int resetOffset = source.indexOf("Reset");
 
-        assertEquals(new VasUsageContext(2, "player"),
+        assertEquals(new VasUsageContext(2, "player", VasUsageContext.Access.MEMBER, ""),
             VasSymbolScanner.usageContext(source, applyOffset));
-        assertEquals(new VasUsageContext(0, ""),
+        assertEquals(new VasUsageContext(0, "", VasUsageContext.Access.UNQUALIFIED, ""),
             VasSymbolScanner.usageContext(source, resetOffset));
+    }
+
+    @Test
+    public void recordsDefaultRangesAndNestedInitializerArguments() {
+        String source = "void send(int a, int b = make(1, 2), int c = 3) {}";
+        VasSymbol send = find(VasSymbolScanner.scan(source), "send");
+        assertEquals(3, send.parameterCount());
+        assertEquals(1, send.requiredParameterCount());
+        String call = "send(1, {2, 3}, values[at(1, 2)])";
+        assertEquals(3, VasSymbolScanner.usageContext(call, 0).argumentCount());
+    }
+
+    @Test
+    public void incompleteAndMalformedArgumentsAreUnknownNotZero() {
+        for (String call : List.of("send(", "send(1,)", "send(,1)", "send([1,2)")) {
+            assertEquals(call, VasUsageContext.UNKNOWN_ARGUMENTS,
+                VasSymbolScanner.usageContext(call, 0).argumentCount());
+        }
+    }
+
+    @Test
+    public void distinguishesQualifiedCallsAndRetainsQualifiedTypes() {
+        String source = "namespace A { class B {} } void A::B::reset() {} void run() { A::B item; A::B::reset(); }";
+        List<VasSymbol> symbols = VasSymbolScanner.scan(source);
+        assertEquals(1, symbols.stream().filter(symbol -> symbol.name().equals("reset")).count());
+        assertEquals("A::B", find(symbols, "reset").container());
+        assertEquals("A::B", find(symbols, "item").declaredType());
+        VasUsageContext context = VasSymbolScanner.usageContext(source, source.lastIndexOf("reset"));
+        assertEquals("A::B", context.qualifier());
+        assertEquals(VasUsageContext.Access.QUALIFIED, context.access());
+    }
+
+    @Test
+    public void unsupportedReceiverChainsStayQualified() {
+        for (String call : List.of("a.b.run()", "factory().run()", "items[0].run()")) {
+            assertEquals(call, VasUsageContext.Access.UNSUPPORTED,
+                VasSymbolScanner.usageContext(call, call.lastIndexOf("run")).access());
+        }
+    }
+
+    @Test
+    public void adjacentUnaryOperatorsDoNotHideSeparatorsOrDefaults() {
+        VasSymbol function = find(VasSymbolScanner.scan("void send(int a,int b=-1) {}"), "send");
+        assertEquals(2, function.parameterCount());
+        assertEquals(1, function.requiredParameterCount());
+        assertEquals(2, VasSymbolScanner.usageContext("send(1,-2)", 0).argumentCount());
+    }
+
+    @Test
+    public void localVariablesAreNotVisibleBeforeTheirDeclaration() {
+        String source = "void run() { use(count); int count; use(count); }";
+        VasSymbol count = find(VasSymbolScanner.scan(source), "count");
+        assertFalse(count.isVisibleAt(source.indexOf("count")));
+        assertTrue(count.isVisibleAt(source.lastIndexOf("count")));
     }
 
     private static VasSymbol find(List<VasSymbol> symbols, String name) {

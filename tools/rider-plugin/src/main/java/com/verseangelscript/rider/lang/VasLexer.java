@@ -148,6 +148,10 @@ public final class VasLexer extends LexerBase {
 
         if (tokenType == VasTypes.OPERATOR) {
             while (tokenEnd < endOffset && isOperator(buffer.charAt(tokenEnd))) {
+                if (buffer.charAt(tokenEnd) == '/' && tokenEnd + 1 < endOffset
+                    && (buffer.charAt(tokenEnd + 1) == '/' || buffer.charAt(tokenEnd + 1) == '*')) {
+                    break;
+                }
                 tokenEnd++;
             }
         }

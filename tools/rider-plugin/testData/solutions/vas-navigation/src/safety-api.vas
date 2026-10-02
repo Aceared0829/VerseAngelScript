@@ -1,0 +1,15 @@
+#include "safety-nested.vas"
+
+class SafetyOwner
+{
+    int /*safe-field-declaration*/SafeValue;
+    void /*owned-declaration*/Owned(int value) {}
+}
+
+class OtherOwner
+{
+    void /*foreign-declaration*/Foreign(int value) {}
+}
+
+void /*default-declaration*/Defaulted(int required, int optional = 2) {}
+void /*default-overlap-declaration*/DefaultOverlap(int first, int second = 2) {}

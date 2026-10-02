@@ -16,6 +16,7 @@ public record VasSymbol(
     @NotNull String container,
     @NotNull String declaredType,
     int parameterCount,
+    int requiredParameterCount,
     @NotNull List<String> baseTypes
 ) {
     public boolean isProjectVisible() {
@@ -23,7 +24,7 @@ public record VasSymbol(
     }
 
     public boolean isVisibleAt(int usageOffset) {
-        return projectVisible || usageOffset >= scopeStart && usageOffset <= scopeEnd;
+        return projectVisible || usageOffset >= Math.max(offset, scopeStart) && usageOffset <= scopeEnd;
     }
 
     public @NotNull String qualifiedName() {

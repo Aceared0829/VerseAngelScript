@@ -45,6 +45,18 @@ public final class VasLexerTest {
         assertEquals("\"VAS \\\"script\\\"\"", source.substring(lexer.getTokenStart(), lexer.getTokenEnd()));
     }
 
+    @Test
+    public void commentsAfterOperatorsRemainComments() {
+        VasLexer lexer = new VasLexer();
+        lexer.start("object./*note*/field");
+        lexer.advance();
+        assertSame(VasTypes.OPERATOR, lexer.getTokenType());
+        lexer.advance();
+        assertSame(VasTypes.COMMENT, lexer.getTokenType());
+        lexer.advance();
+        assertSame(VasTypes.IDENTIFIER, lexer.getTokenType());
+    }
+
     private static void assertToken(List<Token> tokens, IElementType expectedType, String expectedText) {
         Token token = tokens.stream()
             .filter(candidate -> candidate.text().equals(expectedText))

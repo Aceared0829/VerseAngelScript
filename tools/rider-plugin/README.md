@@ -36,3 +36,16 @@ $env:JAVA_HOME = 'C:\Program Files\JetBrains\JetBrains Rider 261.20362.35\jbr'
 **Settings | Plugins | 齿轮菜单 | Install Plugin from Disk**
 
 选择 `VerseAngelScript-Rider-Plugin-0.5.6.zip` 后重启 Rider。仓库同时会在 `plugins/rider` 保留一份可直接安装的插件包。
+
+## 解析与重命名的安全边界
+
+普通标识符解析只使用当前文件及递归 `#include` 闭包；项目符号索引仍用于补全和显式的实现/继承搜索，不再作为普通引用的兜底。真实注释里的 `#include` 会被忽略，循环和菱形 include 不会重复加入声明。
+
+- 同文件和 include 中的候选一起筛选，保留作用域遮蔽、参数/局部变量声明顺序及可识别的命名空间/成员所属类型
+- 函数按必需参数数到总参数数筛选，支持尾部默认参数。筛选为空时不会退回不匹配的声明
+- 相同参数数的类型重载，以及默认参数范围重叠的重载，仍属于歧义。直接跳转和调用关系不任意选第一个；Go To Declaration 可以展示候选
+- 不做参数类型推导、转换/重载排序、别名展开或继承成员绑定。复杂接收者（链式、索引、函数返回值）、未知类型/签名、不完整调用和含 `<`/`>` 的实参表达式保守地不解析；派生类中不能识别的成员也不会误绑定到同名全局符号
+- 声明标识符本身不被算作其他声明的引用；只有唯一绑定的引用参与 Find Usages/Code Vision。显式实现/继承搜索仍是原有的语法级发现功能，不能当作类型精确的绑定证据
+- 重命名前检查索引中的 VAS 文件及声明文件：只检查声明所在模块/include 闭包可见范围内的同名标识符，局部变量进一步限于其作用域。出现可能指向目标的歧义引用或未解析用法时，预检会在写入前拒绝该次重命名；索引未就绪时也拒绝。可验证的无歧义声明保留重命名能力；完整类型语义与未索引/外部文件的覆盖仍不在此实现范围内
+
+验证包含 `VasSymbolScannerTest`、`VasSymbolSelectionTest`、`VasLexerTest` 以及真实 Rider Solution Host 的 `VasRiderSolutionIntegrationTest`。后者覆盖跨 include 重载、错误所属类型/参数数、歧义、默认参数、遮蔽、声明自身、未包含文件与循环 include；运行需要 Java 25 和 Rider 2026.2/Build 262。

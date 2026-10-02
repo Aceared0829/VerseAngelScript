@@ -53,7 +53,7 @@ final class VasCallNavigation {
         );
     }
 
-    private static PsiElement resolveCallable(PsiElement source) {
+    static PsiElement resolveCallable(PsiElement source) {
         if (source == null) {
             return null;
         }
@@ -62,11 +62,11 @@ final class VasCallNavigation {
             .orElse(false)) {
             return source;
         }
-        return VasSymbolResolver.findDeclarations(source).stream()
+        List<PsiElement> candidates = VasSymbolResolver.findDeclarations(source).stream()
             .filter(candidate -> VasSymbolResolver.findSymbol(candidate)
                 .map(symbol -> symbol.kind() == VasSymbolKind.FUNCTION)
                 .orElse(false))
-            .findFirst()
-            .orElse(null);
+            .toList();
+        return candidates.size() == 1 ? candidates.get(0) : null;
     }
 }
