@@ -151,36 +151,14 @@ public final class VasExternalAnnotator extends ExternalAnnotator<
         if (document.getTextLength() == 0) {
             return TextRange.EMPTY_RANGE;
         }
-        int line = Math.max(0, Math.min(document.getLineCount() - 1, oneBasedLine - 1));
-        int lineStart = document.getLineStartOffset(line);
-        int lineEnd = document.getLineEndOffset(line);
-        int offset = Math.max(lineStart, Math.min(lineEnd, lineStart + oneBasedColumn - 1));
-        CharSequence chars = document.getCharsSequence();
-
-        while (offset < lineEnd && Character.isWhitespace(chars.charAt(offset))) {
-            offset++;
-        }
-        if (offset >= lineEnd) {
-            return TextRange.from(Math.max(lineStart, lineEnd - 1), 1);
-        }
-
-        int start = offset;
-        int end = offset;
-        if (isIdentifierCharacter(chars.charAt(offset))) {
-            while (start > lineStart && isIdentifierCharacter(chars.charAt(start - 1))) {
-                start--;
-            }
-            while (end < lineEnd && isIdentifierCharacter(chars.charAt(end))) {
-                end++;
-            }
-        } else {
-            end++;
-        }
-        return new TextRange(start, Math.max(start + 1, end));
-    }
-
-    private static boolean isIdentifierCharacter(char value) {
-        return Character.isLetterOrDigit(value) || value == '_';
+        int line = oneBasedLine <= 1 ? 0 : Math.min(document.getLineCount() - 1, oneBasedLine - 1);
+        VasDiagnosticRange.Range range = VasDiagnosticRange.forLine(
+            document.getCharsSequence(),
+            document.getLineStartOffset(line),
+            document.getLineEndOffset(line),
+            oneBasedColumn
+        );
+        return new TextRange(range.startOffset(), range.endOffset());
     }
 
     private static @Nullable Toolchain resolveToolchain(Project project, VirtualFile file) {

@@ -137,6 +137,17 @@ jobs:
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v4
+    - name: build compiler for Rider diagnostic regression tests
+      shell: powershell
+      run: |
+        $build = Join-Path $env:RUNNER_TEMP 'vas-rider-compiler'
+        cmake -S $env:GITHUB_WORKSPACE -B $build
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        cmake --build $build --config Release --target vasbuild --parallel 4
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        $compiler = Join-Path $build 'Release/vasbuild.exe'
+        if (-not (Test-Path $compiler)) { throw 'Missing Rider test compiler' }
+        "VAS_TEST_COMPILER=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
     - name: set up Java 25
       uses: actions/setup-java@v4
       with:
