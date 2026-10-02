@@ -8,6 +8,9 @@
 #include <stdlib.h>
 #include <sstream>
 #include <fstream>
+#if !defined(_WIN32) && !defined(_WIN32_WCE)
+#include <unistd.h> // getcwd
+#endif
 #if defined(_MSC_VER) && !defined(_WIN32_WCE)
 #include <direct.h>
 #include <crtdbg.h>
@@ -390,5 +393,4 @@ static const char *GetCurrentDir(char *buf, size_t size)
 	return "";
 #endif
 }
-
 
