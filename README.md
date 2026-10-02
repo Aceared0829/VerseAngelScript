@@ -85,6 +85,11 @@ VS Code 基础扩展源码与安装说明见 [`tools/vscode-extension`](tools/vs
 vasbuild <config file> <script.vas> <output>
 ```
 
+IDE 等工具可显式使用 `vasbuild --report=jsonl <config file> <script.vas> <output>`，
+从标准输出读取版本化的编译诊断、实际加载的源码及 include 记录和最终结果。
+默认文本输出保持兼容；协议、UTF-8 字节位置及不完整依赖发现的处理方式见
+[编译报告协议 v1](docs/vas-build-report.md)。
+
 AngelScript 是一个可嵌入 C++ 应用的跨平台脚本库，为 VAS 提供编译、字节码、执行上下文、暂停/恢复、垃圾回收与原生 API 绑定等基础能力。
 
 - AngelScript 官方仓库：https://github.com/anjo76/angelscript
