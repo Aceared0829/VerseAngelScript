@@ -22,9 +22,16 @@ if(UNIX AND EXISTS "/dev/full")
 		message(FATAL_ERROR "Failed report transport did not stop the build: ${result}")
 	endif()
 
+	# Report mode rejects special destinations. The unchanged default mode can
+	# still write devices, and must report a real fclose/flush failure truthfully.
 	run_report(OFF output ON config.txt main.vas /dev/full)
-	find_record(d diagnostic message "Failed to write the bytecode")
-	expect_json("${record_${d}}" /dev/full section)
+	find_record(d diagnostic message "Report bytecode output must be a regular file distinct from stdout")
+	execute_process(COMMAND "${VASBUILD}" config.txt main.vas /dev/full
+		WORKING_DIRECTORY "${workspace}" RESULT_VARIABLE result
+		OUTPUT_VARIABLE out ERROR_VARIABLE err ENCODING UTF-8 TIMEOUT 20)
+	if("${result}" STREQUAL "0" OR NOT err MATCHES "Failed to write the bytecode" OR out MATCHES "Bytecode successfully saved")
+		message(FATAL_ERROR "Default bytecode flush failure was not reported truthfully: ${result}\n${out}\n${err}")
+	endif()
 
 	# A larger module also forces an fwrite failure before fclose, exercising
 	# retained write errors rather than only a final buffered flush failure.
@@ -38,8 +45,25 @@ if(UNIX AND EXISTS "/dev/full")
 	if(size LESS_EQUAL 8192)
 		message(FATAL_ERROR "Large-bytecode fixture does not exceed a CRT buffer")
 	endif()
-	run_report(OFF output ON config.txt large.vas /dev/full)
-	find_record(d diagnostic message "Failed to write the bytecode")
+	execute_process(COMMAND "${VASBUILD}" config.txt large.vas /dev/full
+		WORKING_DIRECTORY "${workspace}" RESULT_VARIABLE result
+		OUTPUT_VARIABLE out ERROR_VARIABLE err ENCODING UTF-8 TIMEOUT 20)
+	if("${result}" STREQUAL "0" OR NOT err MATCHES "Failed to write the bytecode" OR out MATCHES "Bytecode successfully saved")
+		message(FATAL_ERROR "Default bytecode write failure was not retained: ${result}\n${out}\n${err}")
+	endif()
+endif()
+
+# Reject devices even when stdout is a pipe: /dev/tty can alias a terminal
+# stdout through a different inode when invoked interactively.
+if(UNIX AND EXISTS "/dev/tty")
+	run_report(OFF output ON config.txt main.vas /dev/tty)
+	find_record(d diagnostic message "Report bytecode output must be a regular file distinct from stdout")
+endif()
+if(WIN32)
+	foreach(device NUL CON CONOUT$ CONIN$ con.txt NUL.txt COM1 LPT1)
+		run_report(OFF output ON config.txt main.vas "${device}")
+		find_record(d diagnostic message "Report bytecode output must be a regular file distinct from stdout")
+	endforeach()
 endif()
 
 # Bytecode must not corrupt the JSONL transport when paths alias stdout.

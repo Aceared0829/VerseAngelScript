@@ -44,3 +44,18 @@ if(UNIX)
 	expect_json("${record_1}" "${workspace}/${name}" entry)
 	find_record(d section_loaded section "${workspace}/${name}")
 endif()
+
+# Invalid source bytes are distinct from malformed path text and must not be
+# newly rejected, including on Windows/APFS where filenames require Unicode.
+string(ASCII 128 192 175 237 160 128 244 144 128 128 194 bad_source)
+file(WRITE "${workspace}/invalid-source.vas" "/* ${bad_source} */\nvoid main() {}\n")
+run_report(ON output ON config.txt invalid-source.vas out.vasbc)
+find_record(d section_loaded section "${workspace}/invalid-source.vas")
+expect_json("${record_${d}}" OFF utf8Valid)
+string(JSON count LENGTH "${record_${d}}" invalidUtf8Fields)
+expect_equal("${count}" 0 "source bytes are not path text fields")
+file(WRITE "${workspace}/literal-�.vas" "void main() {}\n")
+run_report(ON output ON config.txt literal-�.vas out.vasbc)
+expect_json("${record_1}" "${workspace}/literal-�.vas" entry)
+string(JSON count LENGTH "${record_1}" invalidUtf8Fields)
+expect_equal("${count}" 0 "literal replacement character is valid UTF-8")

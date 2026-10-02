@@ -19,7 +19,7 @@ using namespace std;
 // Function prototypes
 int ConfigureEngine(asIScriptEngine *engine, const char *configFile);
 int CompileScript(asIScriptEngine *engine, const char *scriptFile, vas::BuildReport *report);
-int SaveBytecode(asIScriptEngine *engine, const char *outputFile);
+int SaveBytecode(asIScriptEngine *engine, const char *outputFile, bool reportMode);
 static bool IsVasScriptFile(const char *filename);
 static int ReportInvalidVasScriptExtension(asIScriptEngine *engine, const char *filename, const char *role);
 static string ResolveIncludePath(const char *include, const char *from);
@@ -146,12 +146,12 @@ static int Run(int argc, char **argv)
 		if( CompileScript(engine, argv[2], report) < 0 ) break;
 		if( report && report->Failed() ) break;
 		if( report ) report->phase = "output";
-		if( report && vas::IsReportOutput(argv[3]) )
+		if( report && vas::InvalidReportOutput(argv[3]) )
 		{
-			engine->WriteMessage(argv[3], 0, 0, asMSGTYPE_ERROR, "Bytecode output must not refer to report stdout");
+			engine->WriteMessage(argv[3], 0, 0, asMSGTYPE_ERROR, "Report bytecode output must be a regular file distinct from stdout");
 			break;
 		}
-		if( SaveBytecode(engine, argv[3]) < 0 ) break;
+		if( SaveBytecode(engine, argv[3], report != 0) < 0 ) break;
 		success = true;
 	} while( false );
 
@@ -411,11 +411,17 @@ public:
 	CBytecodeStream() : f(0), failed(false) {}
 	~CBytecodeStream() { if( f ) fclose(f); }
 
-	int Open(const char *filename)
+	int Open(const char *filename, bool reportMode)
 	{
 		if( f ) return -1;
-		f = vas::OpenFile(filename, "wb");
+		f = vas::OpenFile(filename, reportMode ? "ab" : "wb");
 		if( f == 0 ) return -1;
+		if( reportMode && !vas::PrepareReportOutput(f) )
+		{
+			fclose(f);
+			f = 0;
+			return -1;
+		}
 		return 0;
 	}
 	int Write(const void *ptr, asUINT size) 
@@ -440,10 +446,10 @@ protected:
 	bool failed;
 };
 
-int SaveBytecode(asIScriptEngine *engine, const char *outputFile)
+int SaveBytecode(asIScriptEngine *engine, const char *outputFile, bool reportMode)
 {
 	CBytecodeStream stream;
-	int r = stream.Open(outputFile);
+	int r = stream.Open(outputFile, reportMode);
 	if( r < 0 )
 	{
 		engine->WriteMessage(outputFile, 0, 0, asMSGTYPE_ERROR, "Failed to open output file for writing");

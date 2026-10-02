@@ -51,10 +51,15 @@ promised when the output channel itself fails. A detected output-channel failure
 produces a nonzero exit; POSIX may terminate via SIGPIPE. The report is attempted
 before any compilation or bytecode output, so a failed first write stops early.
 
-Bytecode destinations that identify the existing stdout sink (including hard links
-and POSIX `/dev/stdout`) are rejected before opening/truncating bytecode output.
-Callers must not concurrently replace or retarget output paths during compilation.
-Use a separate ordinary file for bytecode and a pipe for the report.
+Report mode requires an ordinary regular bytecode file distinct from stdout.
+Existing devices, terminals and FIFOs are rejected, including `/dev/tty`,
+`/dev/stdout`, Windows `NUL` and `CONOUT$`. A regular-file destination that identifies
+stdout (including a hard link) is also rejected before truncation or bytecode
+writes. The actual write handle is checked before truncation as well as probing
+the path, so a failed metadata-only probe cannot allow a console alias through.
+This avoids device aliases whose filesystem identity differs from stdout. The default CLI's output destinations remain unchanged. Callers must not
+concurrently replace or retarget output paths during compilation. Use a separate
+ordinary file for bytecode and a pipe for the report.
 
 ## Records
 
