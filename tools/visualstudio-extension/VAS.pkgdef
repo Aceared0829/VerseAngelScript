@@ -1,0 +1,6 @@
+// Content-only registration. The grammar itself owns only the .vas extension.
+[$RootKey$\TextMate\Repositories]
+"VerseAngelScript"="$PackageFolder$\Grammars"
+
+[$RootKey$\TextMate\LanguageConfiguration\GrammarMapping]
+"source.vas"="$PackageFolder$\language-configuration.json"
