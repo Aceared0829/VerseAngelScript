@@ -137,6 +137,9 @@ jobs:
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v4
+    - name: validate Rider project fixture
+      shell: powershell
+      run: python tools/rider-plugin/scripts/check-project-fixture.py
     - name: build compiler for Rider diagnostic regression tests
       shell: powershell
       run: |

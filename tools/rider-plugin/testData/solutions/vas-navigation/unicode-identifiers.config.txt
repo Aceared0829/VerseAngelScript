@@ -1,0 +1,2 @@
+// Native identifier-boundary fixture only; normal rename proposals stay ASCII.
+ep 25 1

@@ -1,0 +1,55 @@
+#include "safety-api.vas"
+#include "safety-nested.vas"
+
+/*
+#include "safety-commented.vas"
+*/
+
+int /*global-order-declaration*/orderValue;
+
+void SharedChoice(int first, int second) {}
+void /*same-arity-int-declaration*/AmbiguousChoice(int value) {}
+void /*exact-overlap-declaration*/DefaultOverlap(int value) {}
+
+void SafetyCases()
+{
+    print("rename safety");
+    SafetyOwner receiver;
+    int /*unrelated-local-declaration*/Owned = 0;
+    receiver./*member-call*/Owned(1);
+    int fieldValue = receiver./*safe-field-use*/SafeValue;
+    receiver./*wrong-owner-call*/Foreign(1);
+    receiver./*wrong-member-arity-call*/Owned(1, 2);
+    unknownReceiver./*unknown-receiver-call*/Owned(1);
+    {
+        OtherOwner receiver;
+        receiver./*inner-receiver-call*/Foreign(1);
+    }
+    receiver./*outer-receiver-call*/Owned(1);
+
+    /*included-overload-call*/SharedChoice(1);
+    /*wrong-global-arity-call*/SharedChoice(1, 2, 3);
+    /*same-arity-call*/AmbiguousChoice(1);
+    /*default-one-argument-call*/Defaulted(1);
+    /*default-two-arguments-call*/Defaulted(1, 2);
+    /*default-too-few-call*/Defaulted();
+    /*default-too-many-call*/Defaulted(1, 2, 3);
+    /*default-overlap-call*/DefaultOverlap(1);
+    /*cycle-call*/CycleLeaf();
+    /*unrelated-call*/UnrelatedOnly();
+    /*commented-include-call*/CommentedOnly();
+
+    int before = /*before-local-use*/orderValue;
+    int /*local-order-declaration*/orderValue = 1;
+    int after = /*after-local-use*/orderValue;
+    {
+        int /*nested-order-declaration*/orderValue = 2;
+        int inside = /*nested-local-use*/orderValue;
+    }
+    int outside = /*after-nested-use*/orderValue;
+}
+
+void ParameterScope(int /*parameter-declaration*/orderValue)
+{
+    int result = /*parameter-use*/orderValue;
+}

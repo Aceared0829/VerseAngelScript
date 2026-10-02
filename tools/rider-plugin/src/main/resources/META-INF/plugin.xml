@@ -54,6 +54,8 @@
         <lang.findUsagesProvider
             language="VAS"
             implementationClass="com.verseangelscript.rider.lang.VasFindUsagesProvider"/>
+        <renamePsiElementProcessor
+            implementation="com.verseangelscript.rider.lang.VasRenamePsiElementProcessor"/>
         <definitionsSearch
             implementation="com.verseangelscript.rider.lang.VasDefinitionsSearch"/>
         <codeInsight.lineMarkerProvider

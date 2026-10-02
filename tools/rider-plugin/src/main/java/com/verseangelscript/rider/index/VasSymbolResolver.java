@@ -1,5 +1,6 @@
 package com.verseangelscript.rider.index;
 
+import com.intellij.openapi.progress.ProgressManager;
 import com.intellij.openapi.project.DumbService;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.vfs.VirtualFile;
@@ -14,6 +15,7 @@ import com.intellij.util.indexing.FileBasedIndex;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
+import java.util.ArrayDeque;
 import java.util.Comparator;
 import java.util.Collection;
 import java.util.HashSet;
@@ -21,13 +23,21 @@ import java.util.List;
 import java.util.LinkedHashSet;
 import java.util.Optional;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public final class VasSymbolResolver {
-    private static final Pattern INCLUDE_PATTERN = Pattern.compile(
-        "(?m)^\\s*#include\\s+\"([^\"]+)\""
-    );
+    public record DependencyProblem(PsiFile source, int offset, String message) { }
+
+    /** Includes are deduplicated and exclude the source file, even in a cycle. */
+    public record DependencyClosure(List<PsiFile> includedFiles, List<DependencyProblem> problems) {
+        public DependencyClosure {
+            includedFiles = List.copyOf(includedFiles);
+            problems = List.copyOf(problems);
+        }
+
+        public boolean complete() {
+            return problems.isEmpty();
+        }
+    }
 
     private VasSymbolResolver() {
     }
@@ -78,141 +88,134 @@ public final class VasSymbolResolver {
             return List.of();
         }
 
-        String name = usage.getText();
-        int usageOffset = usage.getTextOffset();
-        List<VasSymbol> scoped = VasSymbolScanner.scan(file.getText()).stream()
-            .filter(symbol -> symbol.name().equals(name))
-            .filter(symbol -> !symbol.isProjectVisible())
-            .filter(symbol -> symbol.isVisibleAt(usageOffset))
-            .filter(symbol -> symbol.offset() != usageOffset)
-            .sorted(Comparator
-                .comparingInt((VasSymbol symbol) -> symbol.scopeEnd() - symbol.scopeStart())
-                .thenComparingInt(symbol -> Math.abs(usageOffset - symbol.offset())))
-            .toList();
-        if (!scoped.isEmpty()) {
-            PsiElement declaration = file.findElementAt(scoped.get(0).offset());
-            return declaration == null ? List.of() : List.of(declaration);
+        DependencyClosure closure = inspectDependencyClosure(file);
+        if (!closure.complete()) {
+            // Missing dependencies may contain another viable declaration.
+            return List.of();
         }
-
-        VasUsageContext context = VasSymbolScanner.usageContext(file.getText(), usageOffset);
-        String ownerType = resolveOwnerType(file, context.qualifier(), usageOffset);
-
-        List<PsiElement> sameFile = filterCandidates(
-            declarationsInFile(file, name),
-            context,
-            ownerType
-        );
-        if (!sameFile.isEmpty()) {
-            return sameFile;
-        }
-
-        List<PsiElement> included = filterCandidates(
-            findIncludedDeclarations(file, name),
-            context,
-            ownerType
-        );
-        if (!included.isEmpty()) {
-            return included;
-        }
-
-        return filterCandidates(
-            findProjectDeclarations(usage.getProject(), name),
-            context,
-            ownerType
-        );
+        List<VasSymbolSelection.Candidate<PsiElement>> source = candidatesInFile(file);
+        List<VasSymbolSelection.Candidate<PsiElement>> included = new ArrayList<>();
+        closure.includedFiles().forEach(includedFile -> included.addAll(candidatesInFile(includedFile)));
+        return VasSymbolSelection.select(source, included, usage.getText(), usage.getTextOffset(),
+            VasSymbolScanner.usageContext(file.getText(), usage.getTextOffset()));
     }
 
-    private static @NotNull List<PsiElement> filterCandidates(
-        @NotNull List<PsiElement> candidates,
-        @NotNull VasUsageContext context,
-        @NotNull String ownerType
-    ) {
-        List<PsiElement> exact = candidates.stream()
-            .filter(candidate -> findSymbol(candidate).map(symbol ->
-                (context.argumentCount() < 0
-                    || symbol.kind() != VasSymbolKind.FUNCTION
-                    || symbol.parameterCount() == context.argumentCount())
-                && (ownerType.isEmpty()
-                    || symbol.container().equals(ownerType)
-                    || symbol.container().endsWith("::" + ownerType))
-            ).orElse(false))
-            .toList();
-        return exact.isEmpty() ? candidates : exact;
-    }
-
-    private static @NotNull String resolveOwnerType(
-        @NotNull PsiFile file,
-        @NotNull String qualifier,
-        int usageOffset
-    ) {
-        if (qualifier.isEmpty()) {
-            return "";
+    private static List<VasSymbolSelection.Candidate<PsiElement>> candidatesInFile(PsiFile file) {
+        List<VasSymbolSelection.Candidate<PsiElement>> candidates = new ArrayList<>();
+        for (VasSymbol symbol : VasSymbolScanner.scan(file.getText())) {
+            PsiElement element = file.findElementAt(symbol.offset());
+            if (element != null) {
+                candidates.add(new VasSymbolSelection.Candidate<>(symbol, element));
+            }
         }
-        return VasSymbolScanner.scan(file.getText()).stream()
-            .filter(symbol -> symbol.name().equals(qualifier))
-            .filter(symbol -> symbol.isVisibleAt(usageOffset))
-            .sorted(Comparator.comparingInt(symbol -> Math.abs(usageOffset - symbol.offset())))
-            .map(VasSymbol::declaredType)
-            .filter(type -> !type.isEmpty())
-            .findFirst()
-            .orElse(qualifier);
+        return candidates;
     }
 
     static @NotNull List<PsiElement> findIncludedDeclarations(
-        @NotNull PsiFile sourceFile,
-        @NotNull String name
+        @NotNull PsiFile sourceFile, @NotNull String name
     ) {
-        return findIncludedDeclarations(sourceFile, name, new HashSet<>());
-    }
-
-    private static @NotNull List<PsiElement> findIncludedDeclarations(
-        @NotNull PsiFile sourceFile,
-        @NotNull String name,
-        @NotNull Set<VirtualFile> visited
-    ) {
-        VirtualFile source = sourceFile.getVirtualFile();
-        if (source == null || source.getParent() == null || !visited.add(source)) {
+        DependencyClosure closure = inspectDependencyClosure(sourceFile);
+        if (!closure.complete()) {
             return List.of();
         }
+        List<VasSymbolSelection.Candidate<PsiElement>> candidates = new ArrayList<>();
+        closure.includedFiles().forEach(file -> candidates.addAll(candidatesInFile(file)));
+        return candidates.stream().filter(candidate -> candidate.symbol().isProjectVisible()
+            && candidate.symbol().name().equals(name)).map(VasSymbolSelection.Candidate::target).toList();
+    }
 
-        List<PsiElement> declarations = new ArrayList<>();
-        Matcher matcher = INCLUDE_PATTERN.matcher(sourceFile.getText());
+    /**
+     * Inspect before rejecting a possible consumer on visibility grounds: an
+     * incomplete graph cannot establish that it is unrelated to a rename target.
+     * This models relative file includes, not application-provided include/pragma
+     * callbacks or conditional compilation configuration.
+     */
+    public static @NotNull DependencyClosure inspectDependencyClosure(@NotNull PsiFile sourceFile) {
+        List<PsiFile> includedFiles = new ArrayList<>();
+        List<DependencyProblem> problems = new ArrayList<>();
+        Set<VirtualFile> visited = new HashSet<>();
+        ArrayDeque<PsiFile> pending = new ArrayDeque<>();
+        if (sourceFile.getVirtualFile() != null) {
+            visited.add(sourceFile.getVirtualFile());
+        }
+        pending.add(sourceFile);
         PsiManager psiManager = PsiManager.getInstance(sourceFile.getProject());
-        while (matcher.find()) {
-            VirtualFile included = source.getParent()
-                .findFileByRelativePath(matcher.group(1).replace('\\', '/'));
-            if (included == null || visited.contains(included)) {
-                continue;
+        while (!pending.isEmpty()) {
+            ProgressManager.checkCanceled();
+            PsiFile file = pending.removeFirst();
+            VasIncludeScanner.Result scan = VasIncludeScanner.scan(file.getText());
+            for (VasIncludeScanner.Problem problem : scan.problems()) {
+                problems.add(new DependencyProblem(file, problem.offset(), problem.message()));
             }
-            PsiFile includedPsi = psiManager.findFile(included);
-            if (includedPsi == null) {
-                continue;
+            VirtualFile virtualFile = file.getVirtualFile();
+            for (VasIncludeScanner.Include include : scan.includes()) {
+                ProgressManager.checkCanceled();
+                if (virtualFile == null || virtualFile.getParent() == null) {
+                    problems.add(new DependencyProblem(file, include.offset(), "Include source has no directory"));
+                    continue;
+                }
+                String path = include.path();
+                if (path.startsWith("/") || path.indexOf(':') >= 0
+                    || java.io.File.separatorChar != '\\' && path.indexOf('\\') >= 0) {
+                    problems.add(new DependencyProblem(file, include.offset(), "Unsupported include path: " + path));
+                    continue;
+                }
+                VirtualFile included = virtualFile.getParent().findFileByRelativePath(path.replace('\\', '/'));
+                if (included == null || !included.isValid() || included.isDirectory()) {
+                    problems.add(new DependencyProblem(file, include.offset(), "Unresolved include: " + path));
+                    continue;
+                }
+                if (included.getFileType() != com.verseangelscript.rider.VasFileType.INSTANCE) {
+                    problems.add(new DependencyProblem(file, include.offset(), "Include is not a VAS source: " + path));
+                    continue;
+                }
+                if (visited.add(included)) {
+                    PsiFile includedPsi = psiManager.findFile(included);
+                    if (includedPsi == null) {
+                        problems.add(new DependencyProblem(file, include.offset(), "Include PSI is unavailable: " + path));
+                    } else {
+                        includedFiles.add(includedPsi);
+                        pending.addLast(includedPsi);
+                    }
+                }
             }
-            List<PsiElement> directDeclarations = declarationsInFile(includedPsi, name);
-            declarations.addAll(directDeclarations);
-            // A direct include may define the same name with a different overload or
-            // container. Continue through the complete include graph so later
-            // candidate filtering can choose the declaration that actually matches.
-            declarations.addAll(findIncludedDeclarations(includedPsi, name, visited));
+        }
+        return new DependencyClosure(includedFiles, problems);
+    }
+
+    public static @NotNull List<PsiElement> findModuleDeclarations(
+        @NotNull PsiFile source, @NotNull String name
+    ) {
+        DependencyClosure closure = inspectDependencyClosure(source);
+        if (!closure.complete()) {
+            return List.of();
+        }
+        List<PsiElement> declarations = new ArrayList<>();
+        candidatesInFile(source).stream().filter(candidate -> candidate.symbol().isProjectVisible()
+            && candidate.symbol().name().equals(name)).map(VasSymbolSelection.Candidate::target)
+            .forEach(declarations::add);
+        for (PsiFile included : closure.includedFiles()) {
+            candidatesInFile(included).stream().filter(candidate -> candidate.symbol().isProjectVisible()
+                && candidate.symbol().name().equals(name)).map(VasSymbolSelection.Candidate::target)
+                .forEach(declarations::add);
         }
         return declarations;
     }
 
-    private static @NotNull List<PsiElement> declarationsInFile(
-        @NotNull PsiFile file,
-        @NotNull String name
+    /** Module visibility for conservative rename preflight; never uses project-name fallback. */
+    public static boolean isDeclarationVisibleFrom(
+        @NotNull PsiFile source, @NotNull PsiElement declaration
     ) {
-        List<PsiElement> declarations = new ArrayList<>();
-        for (VasSymbol symbol : VasSymbolScanner.scan(file.getText())) {
-            if (!symbol.name().equals(name) || !symbol.isProjectVisible()) {
-                continue;
-            }
-            PsiElement declaration = file.findElementAt(symbol.offset());
-            if (declaration != null) {
-                declarations.add(declaration);
-            }
+        PsiFile targetFile = declaration.getContainingFile();
+        if (targetFile == null) {
+            return false;
         }
-        return declarations;
+        if (source.isEquivalentTo(targetFile)) {
+            return true;
+        }
+        return findSymbol(declaration).filter(VasSymbol::isProjectVisible).isPresent()
+            && findIncludedDeclarations(source, declaration.getText()).stream()
+                .anyMatch(candidate -> candidate.isEquivalentTo(declaration));
     }
 
     public static @NotNull Optional<VasSymbol> findSymbol(@NotNull PsiElement element) {
@@ -355,7 +358,11 @@ public final class VasSymbolResolver {
             if (findSymbol(identifier).isPresent()) {
                 continue;
             }
-            for (PsiElement target : findDeclarations(identifier)) {
+            List<PsiElement> targets = findDeclarations(identifier);
+            if (targets.size() != 1) {
+                continue;
+            }
+            for (PsiElement target : targets) {
                 if (findSymbol(target).map(symbol -> symbol.kind() == VasSymbolKind.FUNCTION)
                     .orElse(false)) {
                     callees.add(target);

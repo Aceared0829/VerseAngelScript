@@ -1,0 +1,31 @@
+#include "include-forms-single.vas"
+#include "include-forms-compact.vas"
+#include "include-forms-multiline.vas"
+
+bool a;
+bool /*expression-b-declaration*/b;
+int flags;
+int /*expression-mask-declaration*/mask;
+bool /*expression-call-declaration*/BoolCheck() { return true; }
+int /*expression-bit-call-declaration*/MaskCheck() { return 0; }
+void IncludeForms()
+{
+    SingleInclude();
+    CompactInclude();
+    MultilineInclude();
+    if (a && /*expression-and-use*/b) {}
+    if (a || /*expression-or-use*/b) {}
+    bool result = a && /*expression-initializer-use*/b;
+    if ((flags & /*expression-mask-use*/mask) != 0) {}
+    int bits = flags & /*expression-mask-initializer-use*/mask;
+    bool callResult = a && /*expression-call-use*/BoolCheck();
+    int bitCallResult = flags & /*expression-bit-call-use*/MaskCheck();
+}
+
+int /*metadata-global-declaration*/decoratedValue;
+class MetadataScope
+{
+    [Tag]
+    int /*metadata-field-declaration*/decoratedValue;
+    void Use() { int copy = /*metadata-field-use*/decoratedValue; }
+}

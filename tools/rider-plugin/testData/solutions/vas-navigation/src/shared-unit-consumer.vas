@@ -1,0 +1,4 @@
+void ConsumeShared()
+{
+    /*shared-unit-usage*/SharedContextOnly();
+}

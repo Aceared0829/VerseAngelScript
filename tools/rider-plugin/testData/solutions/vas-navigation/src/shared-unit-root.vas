@@ -1,0 +1,3 @@
+#include "shared-unit-api.vas"
+#include "shared-unit-consumer.vas"
+void SharedUnitRoot() { ConsumeShared(); }

@@ -6,6 +6,7 @@ import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiManager;
 import com.intellij.psi.PsiReferenceBase;
+import com.verseangelscript.rider.index.VasIncludeScanner;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -22,17 +23,14 @@ public final class VasIncludeReference extends PsiReferenceBase<PsiElement> {
     }
 
     public static @Nullable VasIncludeReference create(@NotNull PsiElement element) {
-        String includePath = extractIncludePath(element.getText());
-        if (includePath == null) {
+        VasIncludeScanner.Include include = extractInclude(element.getText());
+        if (include == null) {
             return null;
         }
-        String text = element.getText();
-        int quoteStart = text.indexOf('"');
-        int quoteEnd = quoteStart < 0 ? -1 : text.indexOf('"', quoteStart + 1);
         return new VasIncludeReference(
             element,
-            new TextRange(quoteStart + 1, quoteEnd),
-            includePath
+            new TextRange(include.pathStart(), include.pathEnd()),
+            include.path()
         );
     }
 
@@ -46,14 +44,13 @@ public final class VasIncludeReference extends PsiReferenceBase<PsiElement> {
     }
 
     static @Nullable String extractIncludePath(@NotNull String text) {
-        if (!text.stripLeading().startsWith("#include")) {
-            return null;
-        }
-        int quoteStart = text.indexOf('"');
-        int quoteEnd = quoteStart < 0 ? -1 : text.indexOf('"', quoteStart + 1);
-        return quoteStart < 0 || quoteEnd <= quoteStart + 1
-            ? null
-            : text.substring(quoteStart + 1, quoteEnd);
+        VasIncludeScanner.Include include = extractInclude(text);
+        return include == null ? null : include.path();
+    }
+
+    private static @Nullable VasIncludeScanner.Include extractInclude(@NotNull String text) {
+        VasIncludeScanner.Result result = VasIncludeScanner.scan(text);
+        return result.complete() && result.includes().size() == 1 ? result.includes().getFirst() : null;
     }
 
     @Override
@@ -64,6 +61,10 @@ public final class VasIncludeReference extends PsiReferenceBase<PsiElement> {
         }
         VirtualFile directory = sourceFile.getVirtualFile().getParent();
         if (directory == null) {
+            return null;
+        }
+        if (includePath.startsWith("/") || includePath.indexOf(':') >= 0
+            || java.io.File.separatorChar != '\\' && includePath.indexOf('\\') >= 0) {
             return null;
         }
         VirtualFile target = directory.findFileByRelativePath(includePath.replace('\\', '/'));

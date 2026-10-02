@@ -1,0 +1,5 @@
+#include "safety-api.vas"
+
+void /*included-overload-declaration*/SharedChoice(int value) {}
+void /*same-arity-float-declaration*/AmbiguousChoice(float value) {}
+void /*cycle-declaration*/CycleLeaf() {}
