@@ -80,10 +80,12 @@ public final class VasLexer extends LexerBase {
 
         char current = buffer.charAt(tokenStart);
 
-        if (Character.isWhitespace(current) || current == '\uFEFF') {
+        if (isWhitespace(current)) {
             tokenEnd = tokenStart + 1;
-            while (tokenEnd < endOffset && (Character.isWhitespace(buffer.charAt(tokenEnd)) || buffer.charAt(tokenEnd) == '\uFEFF')) {
-                tokenEnd++;
+            if (current != '\uFEFF') {
+                while (tokenEnd < endOffset && isAsciiWhitespace(buffer.charAt(tokenEnd))) {
+                    tokenEnd++;
+                }
             }
             tokenType = TokenType.WHITE_SPACE;
             return;
@@ -133,6 +135,19 @@ public final class VasLexer extends LexerBase {
         }
 
         if (isIdentifierStart(current)) {
+            int asciiEnd = tokenStart;
+            while (asciiEnd < endOffset && isAsciiIdentifierPart(buffer.charAt(asciiEnd))) {
+                asciiEnd++;
+            }
+            // Native reserved-word matching only checks the following ASCII
+            // identifier character. Thus int😀name is keyword int + 😀name,
+            // while contextual words such as get😀name remain whole identifiers.
+            if (asciiEnd > tokenStart && asciiEnd < endOffset && buffer.charAt(asciiEnd) >= 128
+                && VasKeywords.RESERVED.contains(buffer.subSequence(tokenStart, asciiEnd).toString())) {
+                tokenEnd = asciiEnd;
+                tokenType = VasTypes.KEYWORD;
+                return;
+            }
             tokenEnd = tokenStart + 1;
             while (tokenEnd < endOffset) {
                 char value = buffer.charAt(tokenEnd);
@@ -269,13 +284,30 @@ public final class VasLexer extends LexerBase {
     }
 
     private static boolean isIdentifierStart(char value) {
-        return value == '_' || value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z'
-            || value >= 128 && Character.isJavaIdentifierStart(value);
+        // With engine property 25 enabled, the native tokenizer accepts every
+        // high UTF-8 byte in an identifier, including non-Java categories and
+        // supplementary characters. Preserve the whole spelling even when that
+        // per-module setting is unknown; never expose an ASCII suffix as a name.
+        return value == '_' || value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= 128;
     }
 
     private static boolean isIdentifierPart(char value) {
-        return isIdentifierStart(value) || value >= '0' && value <= '9'
-            || value >= 128 && Character.isJavaIdentifierPart(value);
+        return isIdentifierStart(value) || value >= '0' && value <= '9';
+    }
+
+    private static boolean isAsciiIdentifierPart(char value) {
+        return value == '_' || value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z'
+            || value >= '0' && value <= '9';
+    }
+
+    private static boolean isWhitespace(char value) {
+        // A BOM is whitespace only when encountered at a token boundary; once
+        // inside an identifier it is consumed by isIdentifierPart, like native VAS.
+        return isAsciiWhitespace(value) || value == '\uFEFF';
+    }
+
+    private static boolean isAsciiWhitespace(char value) {
+        return value == ' ' || value == '\t' || value == '\r' || value == '\n';
     }
 
     private static boolean isLineBreak(char value) {

@@ -199,6 +199,54 @@ public final class VasLexerTest {
         assertEquals(4, lexer.getTokenEnd());
     }
 
+    @Test
+    public void nonAsciiNativeIdentifiersNeverExposeTheirAsciiSuffix() {
+        for (String name : List.of("😀value", "€value", "\u0301value", "\u2003value", "\u00A0value", "value😀tail", "value\uFEFFtail", "get😀value", "string😀value")) {
+            VasLexer lexer = new VasLexer();
+            lexer.start(name + ";");
+            assertSame(name, VasTypes.IDENTIFIER, lexer.getTokenType());
+            assertEquals(name, name.length(), lexer.getTokenEnd());
+            lexer.advance();
+            assertSame(name, VasTypes.OPERATOR, lexer.getTokenType());
+            assertFalse(name, VasRenameSafety.containsRelevantIdentifier(name + ";", "value", "renamed"));
+        }
+    }
+
+    @Test
+    public void onlyNativeWhitespaceSeparatesIdentifiers() {
+        VasLexer lexer = new VasLexer();
+        lexer.start(" \t\r\n\uFEFFvalue");
+        assertSame(com.intellij.psi.TokenType.WHITE_SPACE, lexer.getTokenType());
+        assertEquals(4, lexer.getTokenEnd());
+        lexer.advance();
+        assertSame(com.intellij.psi.TokenType.WHITE_SPACE, lexer.getTokenType());
+        assertEquals(5, lexer.getTokenEnd());
+        lexer.advance();
+        assertSame(VasTypes.IDENTIFIER, lexer.getTokenType());
+        assertEquals(10, lexer.getTokenEnd());
+        for (String source : List.of("\fvalue", "\u000Bvalue")) {
+            lexer.start(source);
+            assertSame(com.intellij.psi.TokenType.BAD_CHARACTER, lexer.getTokenType());
+        }
+    }
+
+    @Test
+    public void nativeReservedWordsSplitBeforeNonAsciiIdentifierBytes() {
+        for (String suffix : List.of("😀value", "\u2003value", "\uFEFFvalue")) {
+            VasLexer lexer = new VasLexer();
+            lexer.start("int" + suffix);
+            assertSame(VasTypes.KEYWORD, lexer.getTokenType());
+            assertEquals(3, lexer.getTokenEnd());
+            lexer.advance();
+            if (suffix.charAt(0) == '\uFEFF') {
+                assertSame(com.intellij.psi.TokenType.WHITE_SPACE, lexer.getTokenType());
+                lexer.advance();
+            }
+            assertSame(VasTypes.IDENTIFIER, lexer.getTokenType());
+            assertEquals(3 + suffix.length(), lexer.getTokenEnd());
+        }
+    }
+
     private static void assertToken(List<Token> tokens, IElementType expectedType, String expectedText) {
         Token token = tokens.stream()
             .filter(candidate -> candidate.text().equals(expectedText))

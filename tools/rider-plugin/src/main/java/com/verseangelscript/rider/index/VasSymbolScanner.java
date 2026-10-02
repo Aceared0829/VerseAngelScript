@@ -223,8 +223,8 @@ public final class VasSymbolScanner {
                 break;
             }
         }
-        if (identifierIndex < 0) {
-            return VasUsageContext.PLAIN;
+        if (identifierIndex < 0 || tokens.get(identifierIndex).type() != VasTypes.IDENTIFIER) {
+            return new VasUsageContext(VasUsageContext.NOT_A_CALL, "", VasUsageContext.Access.UNSUPPORTED, "");
         }
 
         int arguments = VasUsageContext.NOT_A_CALL;

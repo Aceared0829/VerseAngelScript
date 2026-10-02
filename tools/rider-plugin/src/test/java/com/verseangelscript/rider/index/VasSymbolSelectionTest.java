@@ -1,6 +1,7 @@
 package com.verseangelscript.rider.index;
 
 import org.junit.Test;
+import com.verseangelscript.rider.lang.VasLexer;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -342,6 +343,26 @@ public final class VasSymbolSelectionTest {
             + "void run() { /*use*/act(1); }").isEmpty());
     }
 
+    @Test
+    public void unicodeIdentifierBindingsKeepTheWholeNativeSpelling() {
+        for (String name : List.of("😀value", "€value", "\u0301value", "\u2003value", "value\uFEFFtail")) {
+            String source = "int value; int " + name + "; void run() { value = 1; /*use*/" + name + " = 2; }";
+            assertEquals(name, only(source).name());
+            assertEquals(name, source.indexOf(name), only(source).offset());
+            if (name.endsWith("value")) {
+                int suffix = source.lastIndexOf("value");
+                assertTrue(name, VasSymbolSelection.select(candidates(source), List.of(), "value", suffix,
+                    VasSymbolScanner.usageContext(source, suffix)).isEmpty());
+            }
+        }
+    }
+
+    @Test
+    public void nativeKeywordBomBoundaryKeepsMemberShadowing() {
+        assertEquals("C", only("int value; class C { int\uFEFFvalue; void run() { /*use*/value++; } }").container());
+        assertEquals("😀value", only("int value; int😀value; void run() { /*use*/😀value++; }").name());
+    }
+
     private static VasSymbol only(String source) {
         List<VasSymbol> targets = select(source);
         assertEquals(targets.toString(), 1, targets.size());
@@ -350,7 +371,9 @@ public final class VasSymbolSelectionTest {
 
     private static List<VasSymbol> select(String source, String... includes) {
         int offset = source.indexOf("/*use*/") + "/*use*/".length();
-        String name = source.substring(offset).split("[^a-zA-Z0-9_]", 2)[0];
+        VasLexer lexer = new VasLexer();
+        lexer.start(source, offset, source.length(), 0);
+        String name = source.substring(offset, lexer.getTokenEnd());
         List<VasSymbolSelection.Candidate<VasSymbol>> local = candidates(source);
         List<VasSymbolSelection.Candidate<VasSymbol>> included = new ArrayList<>();
         for (String include : includes) {

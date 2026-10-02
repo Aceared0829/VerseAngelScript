@@ -134,6 +134,17 @@ public final class VasIncludeScannerTest {
         }
     }
 
+    @Test
+    public void nativeUnicodeIdentifierAndWhitespaceBoundariesStayExact() {
+        assertTrue(VasIncludeScanner.scan("\uFEFF#include 'api.vas'").complete());
+        for (String source : List.of("#include\u2003'api.vas'", "#include😀'api.vas'", "#include\uFEFF'api.vas'")) {
+            assertFalse(source, VasIncludeScanner.scan(source).complete());
+            assertTrue(source, VasIncludeScanner.scan(source).includes().isEmpty());
+        }
+        assertFalse(VasIncludeScanner.scan("#include \uFEFF'api.vas'").complete());
+        assertTrue(VasIncludeScanner.scan("int 😀value;\n#include 'api.vas'").complete());
+    }
+
     private static List<String> paths(VasIncludeScanner.Result result) {
         return result.includes().stream().map(VasIncludeScanner.Include::path).toList();
     }

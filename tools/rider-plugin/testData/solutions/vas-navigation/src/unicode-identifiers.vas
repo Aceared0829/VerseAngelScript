@@ -1,0 +1,24 @@
+int /*unicode-ascii-declaration*/value;
+int /*unicode-emoji-declaration*/😀value;
+int /*unicode-currency-declaration*/€value;
+int /*unicode-combining-declaration*/́value;
+int /*unicode-spacing-declaration*/ value;
+int /*unicode-embedded-bom-declaration*/prefix﻿value;
+int /*unicode-contextual-declaration*/get😀value;
+
+void UnicodeIdentifierUses()
+{
+    /*unicode-ascii-use*/value = 1;
+    /*unicode-emoji-use*/😀value = 2;
+    /*unicode-currency-use*/€value = 3;
+    /*unicode-combining-use*/́value = 4;
+    /*unicode-spacing-use*/ value = 5;
+    /*unicode-embedded-bom-use*/prefix﻿value = 6;
+    /*unicode-contextual-use*/get😀value = 7;
+}
+
+class UnicodeBoundaryOwner
+{
+    int﻿/*unicode-bom-member-declaration*/value;
+    void Use() { /*unicode-bom-member-use*/value = 8; }
+}

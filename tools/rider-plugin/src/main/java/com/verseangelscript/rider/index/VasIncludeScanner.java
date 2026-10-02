@@ -1,5 +1,7 @@
 package com.verseangelscript.rider.index;
 
+import com.verseangelscript.rider.lang.VasKeywords;
+
 import java.util.ArrayList;
 import java.util.ArrayDeque;
 import java.util.List;
@@ -41,7 +43,9 @@ public final class VasIncludeScanner {
         boolean containerHeader = false;
         while (offset < length) {
             char character = source.charAt(offset);
-            if (startsWith(source, offset, "//")) {
+            if (isWhitespace(character)) {
+                offset++;
+            } else if (startsWith(source, offset, "//")) {
                 offset = lineEnd(source, offset + 2);
             } else if (startsWith(source, offset, "/*")) {
                 int end = offset + 2;
@@ -88,8 +92,14 @@ public final class VasIncludeScanner {
                     problems.add(new Problem(start, reason));
                     continue;
                 }
-                while (offset < length && isWhitespace(source.charAt(offset))) {
+                // scriptbuilder skips one tokenizer whitespace token. A BOM is
+                // a separate token, so do not collapse ASCII whitespace plus BOM.
+                if (offset < length && source.charAt(offset) == '\uFEFF') {
                     offset++;
+                } else {
+                    while (offset < length && isAsciiWhitespace(source.charAt(offset))) {
+                        offset++;
+                    }
                 }
                 if (offset == length || source.charAt(offset) != '\'' && source.charAt(offset) != '"') {
                     problems.add(new Problem(start, "Expected a quoted include path"));
@@ -113,9 +123,7 @@ public final class VasIncludeScanner {
                 }
             } else if (isIdentifierPart(character)) {
                 int start = offset;
-                do {
-                    offset++;
-                } while (offset < length && isIdentifierPart(source.charAt(offset)));
+                offset = identifierEnd(source, offset);
                 if (bracketDepth == 0) {
                     String token = source.subSequence(start, offset).toString();
                     if (statementStart && (token.equals("class") || token.equals("interface")
@@ -239,12 +247,32 @@ public final class VasIncludeScanner {
     }
 
     private static boolean isWhitespace(char character) {
-        return character == ' ' || character == '\t' || character == '\r' || character == '\n'
-            || character == '\uFEFF';
+        return isAsciiWhitespace(character) || character == '\uFEFF';
+    }
+
+    private static boolean isAsciiWhitespace(char character) {
+        return character == ' ' || character == '\t' || character == '\r' || character == '\n';
+    }
+
+    private static int identifierEnd(CharSequence source, int start) {
+        int asciiEnd = start;
+        while (asciiEnd < source.length() && source.charAt(asciiEnd) < 128 && isIdentifierPart(source.charAt(asciiEnd))) {
+            asciiEnd++;
+        }
+        if (asciiEnd > start && asciiEnd < source.length() && source.charAt(asciiEnd) >= 128
+            && VasKeywords.RESERVED.contains(source.subSequence(start, asciiEnd).toString())) {
+            return asciiEnd;
+        }
+        int end = start + 1;
+        while (end < source.length() && isIdentifierPart(source.charAt(end))) {
+            end++;
+        }
+        return end;
     }
 
     private static boolean isIdentifierPart(char character) {
-        return Character.isLetterOrDigit(character) || character == '_';
+        return character == '_' || character >= 'a' && character <= 'z'
+            || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character >= 128;
     }
 
     private static boolean startsWith(CharSequence source, int offset, String value) {

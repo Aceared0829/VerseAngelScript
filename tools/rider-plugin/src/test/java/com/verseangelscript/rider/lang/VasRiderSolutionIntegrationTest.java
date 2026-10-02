@@ -510,6 +510,42 @@ public final class VasRiderSolutionIntegrationTest extends PerTestSolutionTestBa
         });
     }
 
+    @Test
+    @Tag("season/vas")
+    void asciiRenamePreservesDistinctNativeUnicodeIdentifiers() {
+        Project project = getSolutionApiFacade().getProject();
+        Path sourceDirectory = getSolutionApiFacade().getActiveSolutionDirectory().resolve("src");
+        runOnEdtWithWriteIntent(() -> {
+            DumbService.getInstance(project).completeJustSubmittedTasks();
+            PsiFile source = fixture(project, sourceDirectory, "unicode-identifiers.vas");
+            assertProjectIndexedFile(project, source, "UnicodeIdentifierUses");
+            PsiDocumentManager documents = PsiDocumentManager.getInstance(project);
+            assertNotNull(documents.getDocument(source));
+            documents.commitAllDocuments();
+            PsiElement ascii = markedIdentifier(source, "unicode-ascii-declaration");
+            assertActualUsageOffsets(ascii, source, "unicode-ascii-use");
+            for (String kind : List.of("emoji", "currency", "combining", "spacing", "embedded-bom", "contextual")) {
+                PsiElement use = markedIdentifier(source, "unicode-" + kind + "-use");
+                PsiElement declaration = markedIdentifier(source, "unicode-" + kind + "-declaration");
+                assertTrue(use.getText().length() > "value".length(), kind);
+                assertNotNull(use.getReference(), kind);
+                assertTrue(use.getReference().isReferenceTo(declaration), kind);
+                assertFalse(use.getReference().isReferenceTo(ascii), kind);
+                assertResolvesTo(source, "unicode-" + kind + "-use", source, "unicode-" + kind + "-declaration");
+            }
+            assertResolvesTo(source, "unicode-bom-member-use", source, "unicode-bom-member-declaration");
+            String before = source.getText();
+            renameProcessor(project, ascii, "UnicodeSafeValue").run();
+            documents.commitAllDocuments();
+            assertEquals(before.replace("/*unicode-ascii-declaration*/value", "/*unicode-ascii-declaration*/UnicodeSafeValue")
+                .replace("/*unicode-ascii-use*/value", "/*unicode-ascii-use*/UnicodeSafeValue"), source.getText(),
+                "ASCII rename must preserve entire Unicode identifier spellings and the BOM-separated member");
+            UndoManager.getInstance(project).undo(null);
+            documents.commitAllDocuments();
+            assertEquals(before, source.getText());
+        });
+    }
+
     private static void replaceFixtureText(Project project, Document document, String text) {
         WriteCommandAction.runWriteCommandAction(project, () -> {
             document.setText(text);
