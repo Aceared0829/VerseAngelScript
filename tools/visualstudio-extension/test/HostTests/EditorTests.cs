@@ -144,6 +144,7 @@ namespace VerseAngelScript.VisualStudio.Tests
                     Assert.Equal(original + "()", editor.Text);
                     editor.Type(')');
                     Assert.Equal(original + "()", editor.Text);
+                    Assert.Equal(editor.Text.Length, editor.View.Caret.Position.BufferPosition.Position);
                 }
                 finally { editor.View.Options.SetOptionValue(option, previous); }
             }
