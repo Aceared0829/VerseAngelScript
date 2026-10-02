@@ -5,14 +5,6 @@
 #include <stdlib.h>  // system()
 #include <stdio.h>
 
-#if defined(_MSC_VER) && !defined(_WIN32_WCE) && !defined(__S3E__)
-#include <direct.h>  // _chdir()
-#endif
-#if defined(__S3E__) || defined(__APPLE__) || defined(__GNUC__)
-#include <unistd.h> // chdir()
-#define _chdir(x) chdir(x)
-#endif
-
 #include <sstream>   // stringstream
 #include <angelscript.h>
 #include "../../../add_on/scriptbuilder/scriptbuilder.h"
@@ -26,7 +18,9 @@
 #include "../../../add_on/contextmgr/contextmgr.h"
 #include "../../../add_on/datetime/datetime.h"
 #include "../../../add_on/scriptsocket/scriptsocket.h"
+// Keep add-on declarations ahead of Windows macros from the native helpers.
 #include "../../common/vas_console.h"
+#include "../../common/vas_paths.h"
 
 #ifdef _WIN32
 #include <Windows.h> // WriteConsoleW
@@ -74,7 +68,6 @@ string            GetInput();
 int               ExecSystemCmd(const string &cmd);
 int               ExecSystemCmd(const string &str, string &out);
 CScriptArray     *GetCommandLineArgs();
-void              SetWorkDir(const string &file);
 void              WaitForUser();
 int               PragmaCallback(const string &pragmaText, CScriptBuilder &builder, void *userParam);
 static bool       IsVasScriptFile(const char *filename);
@@ -97,7 +90,21 @@ CDebugger *g_dbg = 0;
 // Context pool
 vector<asIScriptContext*> g_ctxPool;
 
+static int Run(int argc, char **argv);
+
+#ifdef _WIN32
+int wmain(int argc, wchar_t **argv)
+{
+	return vas::RunWithUtf8Arguments(argc, argv, Run);
+}
+#else
 int main(int argc, char **argv)
+{
+	return Run(argc, argv);
+}
+#endif
+
+static int Run(int argc, char **argv)
 {
 #if defined(_WIN32)
 	// Turn on support for virtual terminal sequences to add support for colored text in the console
@@ -164,8 +171,8 @@ int main(int argc, char **argv)
 	g_argc = argc - (scriptArg + 1);
 	g_argv = argv + (scriptArg + 1);
 
-	// Set the current work dir according to the script's location
-	SetWorkDir(argv[scriptArg]);
+	// Preserve the caller's working directory for runtime-relative files. The
+	// script and include names are resolved separately before compilation.
 
 	// Compile the script code
 	r = CompileScript(engine, argv[scriptArg]);
@@ -374,7 +381,14 @@ int CompileScript(asIScriptEngine *engine, const char *scriptFile)
 	r = builder.StartNewModule(engine, "script");
 	if( r < 0 ) return -1;
 
-	r = builder.AddSectionFromFile(scriptFile);
+	// Resolve using native filesystem APIs before passing UTF-8 to the builder.
+	string absoluteScript;
+	if( !vas::AbsolutePath(scriptFile, absoluteScript) )
+	{
+		engine->WriteMessage(scriptFile, 0, 0, asMSGTYPE_ERROR, "Failed to resolve script path");
+		return -1;
+	}
+	r = builder.AddSectionFromFile(absoluteScript.c_str());
 	if( r < 0 ) return -1;
 
 	r = builder.BuildModule();
@@ -437,7 +451,13 @@ static int VasIncludeCallback(const char *include, const char *from, CScriptBuil
 	if( !IsVasScriptFile(resolvedInclude.c_str()) )
 		return ReportInvalidVasScriptExtension(engine, resolvedInclude.c_str(), "included script");
 
-	return builder->AddSectionFromFile(resolvedInclude.c_str());
+	string absoluteInclude;
+	if( !vas::AbsolutePath(resolvedInclude.c_str(), absoluteInclude) )
+	{
+		engine->WriteMessage(resolvedInclude.c_str(), 0, 0, asMSGTYPE_ERROR, "Failed to resolve included script path");
+		return -1;
+	}
+	return builder->AddSectionFromFile(absoluteInclude.c_str());
 }
 
 // Execute the script by calling the main() function
@@ -771,11 +791,6 @@ void ReturnContextCallback(asIScriptEngine *engine, asIScriptContext *ctx, void 
 
 	// Place the context into the pool for when it will be needed again
 	g_ctxPool.push_back(ctx);
-}
-
-void SetWorkDir(const string &file)
-{
-	_chdir(file.c_str());
 }
 
 // This function is used to allow the user to read the output to the console before exiting 

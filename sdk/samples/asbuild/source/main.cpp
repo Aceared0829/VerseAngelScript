@@ -8,16 +8,9 @@
 #include "../../common/vas_console.h"
 #include <stdlib.h>
 #include <sstream>
-#include <fstream>
-#if !defined(_WIN32) && !defined(_WIN32_WCE)
-#include <unistd.h> // getcwd
-#endif
-#if defined(_MSC_VER) && !defined(_WIN32_WCE)
-#include <direct.h>
+#include "../../common/vas_paths.h"
+#if defined(_MSC_VER)
 #include <crtdbg.h>
-#endif
-#ifdef _WIN32_WCE
-#include <windows.h> // For GetModuleFileName
 #endif
 
 using namespace std;
@@ -26,7 +19,6 @@ using namespace std;
 int ConfigureEngine(asIScriptEngine *engine, const char *configFile);
 int CompileScript(asIScriptEngine *engine, const char *scriptFile);
 int SaveBytecode(asIScriptEngine *engine, const char *outputFile);
-static const char *GetCurrentDir(char *buf, size_t size);
 static bool IsVasScriptFile(const char *filename);
 static int ReportInvalidVasScriptExtension(asIScriptEngine *engine, const char *filename, const char *role);
 static string ResolveIncludePath(const char *include, const char *from);
@@ -44,7 +36,21 @@ void MessageCallback(const asSMessageInfo *msg, void *param)
 	vas::WriteDiagnostic(stream, msg->section, msg->row, msg->col, type, msg->message);
 }
 
+static int Run(int argc, char **argv);
+
+#ifdef _WIN32
+int wmain(int argc, wchar_t **argv)
+{
+	return vas::RunWithUtf8Arguments(argc, argv, Run);
+}
+#else
 int main(int argc, char **argv)
+{
+	return Run(argc, argv);
+}
+#endif
+
+static int Run(int argc, char **argv)
 {
 #if defined(_MSC_VER)
 	// Turn on memory leak detection (use _CrtSetBreakAlloc to break at specific allocation)
@@ -186,14 +192,27 @@ int ConfigureEngine(asIScriptEngine *engine, const char *configFile)
 {
 	int r;
 
-	ifstream strm;
-	strm.open(configFile);
-	if( strm.fail() )
+	FILE *config = vas::OpenFile(configFile, "r");
+	if( config == 0 )
 	{
 		// Write a message to the engine's message callback
-		char buf[256];
-		string msg = "Failed to open config file in path: '" + string(GetCurrentDir(buf, 256)) + "'";
+		string msg = "Failed to open config file in path: '" + vas::CurrentDirectory() + "'";
 		engine->WriteMessage(configFile, 0, 0, asMSGTYPE_ERROR, msg.c_str());
+		return -1;
+	}
+
+	// Preserve text-mode configuration parsing while opening the native path
+	// through the wide Windows CRT. The parser consumes a standard C++ stream.
+	stringstream strm;
+	char buffer[4096];
+	size_t count;
+	while( (count = fread(buffer, 1, sizeof(buffer), config)) != 0 )
+		strm.write(buffer, static_cast<streamsize>(count));
+	bool readFailed = ferror(config) != 0;
+	fclose(config);
+	if( readFailed )
+	{
+		engine->WriteMessage(configFile, 0, 0, asMSGTYPE_ERROR, "Failed to read config file");
 		return -1;
 	}
 
@@ -222,7 +241,15 @@ int CompileScript(asIScriptEngine *engine, const char *scriptFile)
 	if( r < 0 ) return -1;
 	builder.SetIncludeCallback(VasIncludeCallback, engine);
 
-	r = builder.AddSectionFromFile(scriptFile);
+	// CScriptBuilder expects UTF-8, including its absolute section names. Resolve
+	// native paths here so its legacy narrow current-directory API is not used.
+	string absoluteScript;
+	if( !vas::AbsolutePath(scriptFile, absoluteScript) )
+	{
+		engine->WriteMessage(scriptFile, 0, 0, asMSGTYPE_ERROR, "Failed to resolve script path");
+		return -1;
+	}
+	r = builder.AddSectionFromFile(absoluteScript.c_str());
 	if( r < 0 ) return -1;
 
 	r = builder.BuildModule();
@@ -289,7 +316,13 @@ static int VasIncludeCallback(const char *include, const char *from, CScriptBuil
 	if( !IsVasScriptFile(resolvedInclude.c_str()) )
 		return ReportInvalidVasScriptExtension(engine, resolvedInclude.c_str(), "included script");
 
-	return builder->AddSectionFromFile(resolvedInclude.c_str());
+	string absoluteInclude;
+	if( !vas::AbsolutePath(resolvedInclude.c_str(), absoluteInclude) )
+	{
+		engine->WriteMessage(resolvedInclude.c_str(), 0, 0, asMSGTYPE_ERROR, "Failed to resolve included script path");
+		return -1;
+	}
+	return builder->AddSectionFromFile(absoluteInclude.c_str());
 }
 
 class CBytecodeStream : public asIBinaryStream
@@ -301,11 +334,7 @@ public:
 	int Open(const char *filename)
 	{
 		if( f ) return -1;
-#if _MSC_VER >= 1500
-		fopen_s(&f, filename, "wb");
-#else
-		f = fopen(filename, "wb");
-#endif
+		f = vas::OpenFile(filename, "wb");
 		if( f == 0 ) return -1;
 		return 0;
 	}
@@ -348,49 +377,5 @@ int SaveBytecode(asIScriptEngine *engine, const char *outputFile)
 	engine->WriteMessage(outputFile, 0, 0, asMSGTYPE_INFORMATION, "Bytecode successfully saved");
 
 	return 0;
-}
-
-static const char *GetCurrentDir(char *buf, size_t size)
-{
-#ifdef _MSC_VER
-#ifdef _WIN32_WCE
-    static TCHAR apppath[MAX_PATH] = TEXT("");
-    if (!apppath[0])
-    {
-        GetModuleFileName(NULL, apppath, MAX_PATH);
-
-        
-        int appLen = _tcslen(apppath);
-
-        // Look for the last backslash in the path, which would be the end
-        // of the path itself and the start of the filename.  We only want
-        // the path part of the exe's full-path filename
-        // Safety is that we make sure not to walk off the front of the 
-        // array (in case the path is nothing more than a filename)
-        while (appLen > 1)
-        {
-            if (apppath[appLen-1] == TEXT('\\'))
-                break;
-            appLen--;
-        }
-
-        // Terminate the string after the trailing backslash
-        apppath[appLen] = TEXT('\0');
-    }
-#ifdef _UNICODE
-    wcstombs(buf, apppath, min(size, wcslen(apppath)*sizeof(wchar_t)));
-#else
-    memcpy(buf, apppath, min(size, strlen(apppath)));
-#endif
-
-    return buf;
-#else
-	return _getcwd(buf, (int)size);
-#endif
-#elif defined(__APPLE__)
-	return getcwd(buf, size);
-#else
-	return "";
-#endif
 }
 

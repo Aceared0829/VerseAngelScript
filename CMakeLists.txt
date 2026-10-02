@@ -61,22 +61,32 @@ add_executable(vasrun
 
 target_link_libraries(vasrun PRIVATE angelscript)
 
+vas_enable_cxx23(vasrun)
+
 if(MSVC)
-	target_compile_options(vasrun PRIVATE
-		"$<$<COMPILE_LANGUAGE:CXX>:/std:c++23preview>"
-		"$<$<COMPILE_LANGUAGE:CXX>:/permissive->"
-		"$<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus>"
-		"$<$<COMPILE_LANGUAGE:CXX>:/EHsc>"
-	)
-else()
-	set_target_properties(vasrun PROPERTIES
-		CXX_STANDARD 23
-		CXX_STANDARD_REQUIRED ON
-		CXX_EXTENSIONS OFF
-	)
+	target_compile_options(vasrun PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/EHsc>")
+endif()
+
+if(MINGW)
+	# The Windows CRT must dispatch to wmain rather than its ANSI main adapter.
+	target_link_options(vasbuild PRIVATE -municode)
+	target_link_options(vasrun PRIVATE -municode)
 endif()
 
 if(BUILD_TESTING)
+	# The same tests run in the MSVC job and each native VS Code CI matrix job.
+	foreach(mode absolute relative failures)
+		add_test(
+			NAME vas_tools_unicode_${mode}
+			COMMAND ${CMAKE_COMMAND}
+				"-DVASBUILD=$<TARGET_FILE:vasbuild>"
+				"-DVASRUN=$<TARGET_FILE:vasrun>"
+				"-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/unicode-${mode}"
+				"-DMODE=${mode}"
+				-P "${CMAKE_CURRENT_SOURCE_DIR}/tests/vasbuild/assert_unicode_paths.cmake"
+		)
+	endforeach()
+
 	set(VASBUILD_FIXTURE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tests/vasbuild/fixtures")
 
 	add_test(

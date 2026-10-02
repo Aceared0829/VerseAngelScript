@@ -30,7 +30,7 @@ DELETER = del /f
 all: $(BIN)
 
 $(BIN): $(OBJ)
-	$(CXX) -static -o $(BIN) $(OBJ) -langelscript -L ../../../../angelscript/lib
+	$(CXX) -municode -static -o $(BIN) $(OBJ) -langelscript -L ../../../../angelscript/lib
 	@echo -------------------------------------------------------------------
 	@echo Done.
 

@@ -18,21 +18,27 @@ async function main() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vas-vscode-test-'));
   try {
     const executable = await downloadAndUnzipVSCode(process.env.VSCODE_TEST_VERSION || '1.96.4');
-    const workspace = path.join(root, 'VAS project with spaces');
+    // Exercise native UTF-16 argv/filesystem boundaries on Windows, including
+    // surrogate pairs as well as spaces in every configurable path.
+    const workspace = path.join(root, 'VAS project 文😀 with spaces');
     await fs.mkdir(path.join(workspace, 'src'), { recursive: true });
-    await fs.writeFile(path.join(workspace, 'src', 'main.vas'), 'void main() { int answer = 42; }\n');
+    await fs.writeFile(path.join(workspace, 'src', 'main 文😀.vas'), 'void main() { int answer = 42; }\n');
     await fs.writeFile(path.join(workspace, 'src', 'warning.vas'), 'void main() { int a; int b = a; }\n');
-    await fs.writeFile(path.join(workspace, 'src', 'broken.vas'), '#include "shared 文.vas"\nvoid main() {}\n');
-    await fs.writeFile(path.join(workspace, 'src', 'shared 文.vas'), '/* 文😀 */ int Broken() { return ; }\n');
-    await fs.copyFile(path.resolve(__dirname, '../../../tests/vasbuild/fixtures/minimal-config.txt'), path.join(workspace, 'api.txt'));
+    await fs.writeFile(path.join(workspace, 'src', 'broken.vas'), '#include "shared 文😀.vas"\nvoid main() {}\n');
+    await fs.writeFile(path.join(workspace, 'src', 'shared 文😀.vas'), '/* 文😀 */ int Broken() { return ; }\n');
+    await fs.mkdir(path.join(workspace, 'config 文😀'));
+    await fs.copyFile(path.resolve(__dirname, '../../../tests/vasbuild/fixtures/minimal-config.txt'),
+      path.join(workspace, 'config 文😀', 'api 接口😀.txt'));
     await fs.mkdir(path.join(workspace, '.vscode'));
     await fs.writeFile(path.join(workspace, '.vscode', 'tasks.json'), JSON.stringify({ version: '2.0.0', tasks: [
-      { label: 'Fixture build', type: 'vas', operation: 'build', file: 'src/main.vas' }
+      { label: 'Fixture build', type: 'vas', operation: 'build', file: 'src/main 文😀.vas' }
     ] }));
-    const secondWorkspace = path.join(root, 'second project');
+    const secondWorkspace = path.join(root, 'second project 二😀');
     await fs.mkdir(secondWorkspace);
-    await fs.writeFile(path.join(secondWorkspace, 'main.vas'), 'void main() {}\n');
-    await fs.copyFile(path.join(workspace, 'api.txt'), path.join(secondWorkspace, 'second-api.txt'));
+    await fs.writeFile(path.join(secondWorkspace, 'main 二😀.vas'), 'void main() {}\n');
+    await fs.mkdir(path.join(secondWorkspace, 'config 二😀'));
+    await fs.copyFile(path.join(workspace, 'config 文😀', 'api 接口😀.txt'),
+      path.join(secondWorkspace, 'config 二😀', 'second api 二😀.txt'));
     const workspaceFile = path.join(root, 'test.code-workspace');
     await fs.writeFile(workspaceFile, JSON.stringify({ folders: [{ path: workspace }, { path: secondWorkspace }] }));
     for (const mode of ['trusted', 'untrusted']) {
