@@ -144,13 +144,20 @@ class TrustEvidenceTests(unittest.TestCase):
                 with self.assertRaisesRegex(EvidenceError, "Missing trust or filter evidence"):
                     verify(self.path)
 
-    def test_filter_count_mismatch_or_duplicate_decision_fails(self):
+    def test_filter_count_mismatch_or_extra_record_fails(self):
         for audit in (AUDIT[:2] + AUDIT[3:], AUDIT[:3] + [AUDIT[2]] + AUDIT[3:]):
             with self.subTest(audit=audit):
                 suite, _ = self.report(audit)
                 self.write(suite)
                 with self.assertRaises(EvidenceError):
                     verify(self.path)
+
+    def test_distinct_extension_instances_may_share_a_class(self):
+        audit = [AUDIT[0], PREFIX + "FILTERS trusted=false count=2", AUDIT[2], AUDIT[2],
+                 AUDIT[3], PREFIX + "FILTERS trusted=true count=2", AUDIT[5], AUDIT[5]]
+        suite, _ = self.report(audit)
+        self.write(suite)
+        self.assertEqual(audit, verify(self.path))
 
     def test_unrelated_stdout_stderr_properties_and_other_tests_are_suppressed(self):
         raw = ["HOME=/private/environment", "/private/project/path", "arbitrary compiler output",

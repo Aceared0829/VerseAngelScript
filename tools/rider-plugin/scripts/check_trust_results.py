@@ -28,7 +28,7 @@ def controlled_audit(stdout):
     lines = []
     trust_states = set()
     counts = {}
-    decisions = {"false": {}, "true": {}}
+    decisions = {"false": [], "true": []}
     for line in stdout.splitlines():
         if not line.startswith(PREFIX):
             continue
@@ -44,9 +44,9 @@ def controlled_audit(stdout):
             lines.append(f"{PREFIX}FILTERS trusted={trusted} count={int(count)}")
         elif match := FILTER.fullmatch(line):
             trusted, class_name, prohibited = match.groups()
-            if trusted not in counts or class_name in decisions[trusted]:
+            if trusted not in counts:
                 raise EvidenceError("Invalid filter enumeration")
-            decisions[trusted][class_name] = prohibited
+            decisions[trusted].append((class_name, prohibited))
             lines.append(f"{PREFIX}FILTER trusted={trusted} class={class_name} prohibited={prohibited}")
         else:
             raise EvidenceError("Malformed controlled audit record")
