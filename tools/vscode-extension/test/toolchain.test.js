@@ -64,8 +64,8 @@ test('problem matchers distinguish compiler errors and warnings including Window
   assert.equal(match[errors.pattern.file], 'C:\\game (demo)\\src\\main.vas');
   assert.equal(match[errors.pattern.line], '12');
   assert.equal(match[errors.pattern.message], 'Expected expression value');
-  // Compiler columns count UTF-8 bytes, not VS Code UTF-16 units. Until a
-  // structured bridge converts them, highlight the exact line, not a wrong column.
+  // Run retains terminal matchers for interactive programs. Their byte columns
+  // cannot map to UTF-16; Build has its own exact pipe-backed diagnostic bridge.
   assert.equal(errors.pattern.column, undefined);
   assert.equal(warnings.pattern.column, undefined);
   assert.equal(errors.severity, 'error');
