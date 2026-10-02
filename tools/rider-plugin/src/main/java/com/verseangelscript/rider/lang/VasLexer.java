@@ -3,6 +3,10 @@ package com.verseangelscript.rider.lang;
 import com.intellij.lexer.LexerBase;
 import com.intellij.psi.TokenType;
 import com.intellij.psi.tree.IElementType;
+import com.verseangelscript.rider.index.VasIncludeScanner;
+
+import java.util.HashMap;
+import java.util.Map;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -12,6 +16,7 @@ public final class VasLexer extends LexerBase {
     private int tokenStart;
     private int tokenEnd;
     private IElementType tokenType;
+    private final Map<Integer, Integer> includeEnds = new HashMap<>();
 
     @Override
     public void start(
@@ -23,6 +28,10 @@ public final class VasLexer extends LexerBase {
         this.buffer = buffer;
         this.endOffset = endOffset;
         this.tokenStart = startOffset;
+        includeEnds.clear();
+        for (VasIncludeScanner.Include include : VasIncludeScanner.scan(buffer.subSequence(0, endOffset)).includes()) {
+            includeEnds.put(include.offset(), include.end());
+        }
         locateToken();
     }
 
@@ -71,9 +80,9 @@ public final class VasLexer extends LexerBase {
 
         char current = buffer.charAt(tokenStart);
 
-        if (Character.isWhitespace(current)) {
+        if (Character.isWhitespace(current) || current == '\uFEFF') {
             tokenEnd = tokenStart + 1;
-            while (tokenEnd < endOffset && Character.isWhitespace(buffer.charAt(tokenEnd))) {
+            while (tokenEnd < endOffset && (Character.isWhitespace(buffer.charAt(tokenEnd)) || buffer.charAt(tokenEnd) == '\uFEFF')) {
                 tokenEnd++;
             }
             tokenType = TokenType.WHITE_SPACE;
@@ -108,9 +117,16 @@ public final class VasLexer extends LexerBase {
         }
 
         if (current == '#') {
-            tokenEnd = tokenStart + 1;
-            while (tokenEnd < endOffset && !isLineBreak(buffer.charAt(tokenEnd))) {
-                tokenEnd++;
+            Integer includeEnd = includeEnds.get(tokenStart);
+            if (includeEnd != null) {
+                // A legal include may span lines; code after its quote is still
+                // code, even when it occurs on the same physical line.
+                tokenEnd = includeEnd;
+            } else {
+                tokenEnd = tokenStart + 1;
+                while (tokenEnd < endOffset && !isLineBreak(buffer.charAt(tokenEnd))) {
+                    tokenEnd++;
+                }
             }
             tokenType = VasTypes.PREPROCESSOR;
             return;

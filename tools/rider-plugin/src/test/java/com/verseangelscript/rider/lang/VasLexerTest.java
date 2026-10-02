@@ -105,6 +105,21 @@ public final class VasLexerTest {
     }
 
     @Test
+    public void includesSpanLegalWhitespaceWithoutHidingFollowingCode() {
+        for (String directive : List.of("#include 'api.vas'", "#include\"api.vas\"", "#include\n\"api.vas\"")) {
+            String source = directive + " int value;";
+            VasLexer lexer = new VasLexer();
+            lexer.start(source);
+            assertSame(directive, VasTypes.PREPROCESSOR, lexer.getTokenType());
+            assertEquals(directive, directive.length(), lexer.getTokenEnd());
+            lexer.advance();
+            lexer.advance();
+            assertSame(directive, VasTypes.KEYWORD, lexer.getTokenType());
+            assertEquals(directive, "int", source.substring(lexer.getTokenStart(), lexer.getTokenEnd()));
+        }
+    }
+
+    @Test
     public void dollarIsNotAnIdentifierButUnicodeSourceRemainsReadable() {
         VasLexer lexer = new VasLexer();
         lexer.start("$renamed");

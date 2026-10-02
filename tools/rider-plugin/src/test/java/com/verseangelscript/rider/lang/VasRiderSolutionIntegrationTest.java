@@ -4,9 +4,11 @@ import com.intellij.openapi.application.Application;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.WriteIntentReadAction;
 import com.intellij.openapi.command.UndoConfirmationPolicy;
+import com.intellij.openapi.command.WriteCommandAction;
 import com.intellij.openapi.command.undo.UndoManager;
 import com.intellij.openapi.project.DumbService;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiElement;
@@ -309,6 +311,126 @@ public final class VasRiderSolutionIntegrationTest extends PerTestSolutionTestBa
             undo.undo(null);
             documents.commitAllDocuments();
             assertEquals(before, source.getText());
+        });
+    }
+
+    @Test
+    @Tag("season/vas")
+    void renamesNativeIncludeConsumersAndExpressionOperandsWithoutPartialEdits() {
+        Project project = getSolutionApiFacade().getProject();
+        Path sourceDirectory = getSolutionApiFacade().getActiveSolutionDirectory().resolve("src");
+        runOnEdtWithWriteIntent(() -> {
+            DumbService.getInstance(project).completeJustSubmittedTasks();
+            PsiFile source = fixture(project, sourceDirectory, "include-forms.vas");
+            PsiFile api = fixture(project, sourceDirectory, "include-forms-api.vas");
+            PsiFile single = fixture(project, sourceDirectory, "include-forms-single.vas");
+            PsiFile compact = fixture(project, sourceDirectory, "include-forms-compact.vas");
+            PsiFile multiline = fixture(project, sourceDirectory, "include-forms-multiline.vas");
+            assertProjectIndexedFile(project, source, "IncludeForms");
+            assertProjectIndexedFile(project, api, "IncludeStable");
+            assertProjectIndexedFile(project, single, "SingleInclude");
+            assertProjectIndexedFile(project, compact, "CompactInclude");
+            assertProjectIndexedFile(project, multiline, "MultilineInclude");
+            for (PsiFile consumer : List.of(single, compact, multiline)) {
+                PsiElement directive = consumer.findElementAt(consumer.getText().indexOf("#include"));
+                assertNotNull(directive);
+                PsiElement includeDestination = new VasDirectNavigationProvider().getNavigationElement(directive);
+                assertNotNull(includeDestination, consumer.getName());
+                assertTrue(api.isEquivalentTo(includeDestination), consumer.getName());
+            }
+            PsiDocumentManager documents = PsiDocumentManager.getInstance(project);
+            List<PsiFile> files = List.of(source, api, single, compact, multiline);
+            for (PsiFile file : files) {
+                assertNotNull(documents.getDocument(file));
+            }
+            documents.commitAllDocuments();
+
+            assertActualUsageOffsets(markedIdentifier(source, "expression-b-declaration"), source,
+                "expression-and-use", "expression-or-use", "expression-initializer-use");
+            assertActualUsageOffsets(markedIdentifier(source, "expression-mask-declaration"), source,
+                "expression-mask-use", "expression-mask-initializer-use");
+            assertActualUsageOffsets(markedIdentifier(source, "metadata-global-declaration"), source);
+            assertActualUsageOffsets(markedIdentifier(source, "metadata-field-declaration"), source, "metadata-field-use");
+            assertResolvesTo(source, "metadata-field-use", source, "metadata-field-declaration");
+            assertActualUsageOffsets(markedIdentifier(source, "expression-call-declaration"), source, "expression-call-use");
+            assertActualUsageOffsets(markedIdentifier(source, "expression-bit-call-declaration"), source, "expression-bit-call-use");
+            for (List<String> markers : List.of(
+                List.of("expression-b-declaration", "expression-and-use", "expression-or-use", "expression-initializer-use"),
+                List.of("expression-mask-declaration", "expression-mask-use", "expression-mask-initializer-use"),
+                List.of("expression-call-declaration", "expression-call-use"),
+                List.of("expression-bit-call-declaration", "expression-bit-call-use"),
+                List.of("metadata-field-declaration", "metadata-field-use"))) {
+                String before = source.getText();
+                PsiElement target = markedIdentifier(source, markers.getFirst());
+                String expected = before;
+                for (String marker : markers) {
+                    expected = expected.replace("/*" + marker + "*/" + target.getText(), "/*" + marker + "*/OperandRenamed");
+                }
+                renameProcessor(project, target, "OperandRenamed").run();
+                documents.commitAllDocuments();
+                assertEquals(expected, source.getText(), "logical and bitwise RHS occurrences must be renamed");
+                UndoManager.getInstance(project).undo(null);
+                documents.commitAllDocuments();
+                assertEquals(before, source.getText());
+            }
+
+            PsiElement includeTarget = markedIdentifier(api, "include-target");
+            Collection<PsiReference> uses = ReferencesSearch.search(includeTarget).findAll();
+            assertEquals(3, uses.size(), "all compiler-supported include forms must participate in default reference search");
+            for (PsiElement expected : List.of(markedIdentifier(single, "include-single-use"),
+                markedIdentifier(compact, "include-compact-use"), markedIdentifier(multiline, "include-multiline-use"))) {
+                assertTrue(uses.stream().anyMatch(reference -> reference.getElement().isEquivalentTo(expected)));
+            }
+            List<String> before = files.stream().map(PsiFile::getText).toList();
+            renameProcessor(project, includeTarget, "IncludeRenamed").run();
+            documents.commitAllDocuments();
+            for (int index = 0; index < files.size(); index++) {
+                assertEquals(before.get(index).replace("IncludeStable", "IncludeRenamed"), files.get(index).getText());
+            }
+            UndoManager.getInstance(project).undo(null);
+            documents.commitAllDocuments();
+            for (int index = 0; index < files.size(); index++) {
+                assertEquals(before.get(index), files.get(index).getText());
+            }
+
+            Document singleDocument = documents.getDocument(single);
+            assertNotNull(singleDocument);
+            try {
+                for (String incomplete : List.of(
+                    before.get(2).replace("include-forms-api.vas", "missing-include-target.vas"),
+                    "#if UNKNOWN_FEATURE\n" + before.get(2) + "#endif\n")) {
+                    replaceFixtureText(project, singleDocument, incomplete);
+                    RuntimeException rejected = assertThrows(RuntimeException.class,
+                        () -> renameProcessor(project, markedIdentifier(api, "include-target"), "IncludeRejected").run());
+                    assertTrue(rejected.getMessage().contains("Include dependencies"), rejected.toString());
+                    assertEquals(incomplete, single.getText());
+                    assertEquals(before.get(1), api.getText());
+                    assertEquals(before.get(3), compact.getText());
+                    assertEquals(before.get(4), multiline.getText());
+                }
+                String unrelated = "#include \"missing-include-target.vas\"\nvoid IrrelevantDependency() {}\n";
+                replaceFixtureText(project, singleDocument, unrelated);
+                renameProcessor(project, markedIdentifier(api, "include-target"), "IncludeRenamed").run();
+                documents.commitAllDocuments();
+                assertEquals(unrelated, single.getText(), "a name-free broken module must not block or join this rename");
+                assertEquals(before.get(1).replace("IncludeStable", "IncludeRenamed"), api.getText());
+                assertEquals(before.get(3).replace("IncludeStable", "IncludeRenamed"), compact.getText());
+                assertEquals(before.get(4).replace("IncludeStable", "IncludeRenamed"), multiline.getText());
+                UndoManager.getInstance(project).undo(null);
+                documents.commitAllDocuments();
+                assertEquals(before.get(1), api.getText());
+                assertEquals(before.get(3), compact.getText());
+                assertEquals(before.get(4), multiline.getText());
+            } finally {
+                replaceFixtureText(project, singleDocument, before.get(2));
+            }
+        });
+    }
+
+    private static void replaceFixtureText(Project project, Document document, String text) {
+        WriteCommandAction.runWriteCommandAction(project, () -> {
+            document.setText(text);
+            PsiDocumentManager.getInstance(project).commitDocument(document);
         });
     }
 

@@ -1,0 +1,2 @@
+#include 'include-forms-api.vas'
+void SingleInclude() { /*include-single-use*/IncludeStable(); }

@@ -280,7 +280,7 @@ public final class VasSymbolSelectionTest {
 
     @Test
     public void lifecycleLocalsAndParametersDoNotLeakIntoOtherMethods() {
-        for (String lifecycle : List.of("C() { int value; }", "~C() { int value; }", "C(int value) {}")) {
+        for (String lifecycle : List.of("C() { int value; }", "~C() { int value; }", "C(int value) {}", "[tag] C() { int value; }", "[tag] ~C() { int value; }")) {
             VasSymbol target = only("int value; class C { " + lifecycle + " void run() { /*use*/value; } }");
             assertEquals(lifecycle, "", target.container());
             assertEquals(lifecycle, 4, target.offset());
@@ -294,6 +294,52 @@ public final class VasSymbolSelectionTest {
         assertEquals(false, only("int value; class C { ~C() { int value; /*use*/value; } }").isProjectVisible());
         assertEquals("B", only("class A { int field; } class B { int field; } A object; "
             + "class C { C(B@const object) { object./*use*/field; } }").container());
+    }
+
+    @Test
+    public void expressionOperatorsDoNotTurnRightOperandsIntoDeclarations() {
+        String declarations = "bool a; bool b; int flags; int mask; ";
+        for (String expression : List.of("if(a && /*use*/b) {}", "if(a || /*use*/b) {}",
+            "bool result = a && /*use*/b;", "consume(a && /*use*/b);")) {
+            assertEquals(expression, 13, only(declarations + "void run() { " + expression + " }").offset());
+        }
+        for (String expression : List.of("if((flags & /*use*/mask) != 0) {}", "flags & /*use*/mask;",
+            "int result = flags & /*use*/mask;", "consume(flags & /*use*/mask);")) {
+            assertEquals(expression, 31, only(declarations + "void run() { " + expression + " }").offset());
+        }
+    }
+
+    @Test
+    public void logicalAndBitwiseFunctionCallsAreNotFunctionDeclarations() {
+        for (String expression : List.of("return a && /*use*/check();", "a && /*use*/check();",
+            "a & /*use*/check();", "return a & /*use*/check();")) {
+            assertEquals(expression, 5, only("bool check() { return true; } bool a; "
+                + "bool run() { " + expression + " }").offset());
+        }
+    }
+
+    @Test
+    public void declarationHeadsKeepUnknownTypesAsShadowingBlockers() {
+        String declarations = "class A { int field; } A object; ";
+        for (String declaration : List.of("Unknown object;", "Unknown@const object;", "array<Unknown> object;",
+            "Unknown[] object;", "const Unknown object;", "Unknown object();", "Unknown object(1);", "::Unknown object;")) {
+            assertTrue(declaration, select(declarations + "void run() { " + declaration
+                + " object./*use*/field; }").isEmpty());
+        }
+        assertTrue(select(declarations
+            + "void run() { for (Unknown object; true; ) { object./*use*/field; } }").isEmpty());
+        assertEquals("B", only("class A { int field; } class B { B(int input) {} int field; } A object; "
+            + "void run() { B object(1); object./*use*/field; }").container());
+    }
+
+    @Test
+    public void declarationMetadataDoesNotHideMembersOrOverloads() {
+        assertEquals("C", only("int value; class C { [tag] int value; void run() { /*use*/value; } }").container());
+        assertEquals("C", only("int value; class C { [tag(1)][other] private int value; void run() { /*use*/value; } }").container());
+        assertEquals(2, select("[tag] void act(int value) {} void act(string value) {} "
+            + "void run() { /*use*/act(1); }").size());
+        assertTrue(select("[tag] void act(array<int> value) {} void act(int value) {} "
+            + "void run() { /*use*/act(1); }").isEmpty());
     }
 
     private static VasSymbol only(String source) {

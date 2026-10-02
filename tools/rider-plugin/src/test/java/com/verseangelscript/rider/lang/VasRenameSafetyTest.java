@@ -19,4 +19,14 @@ public final class VasRenameSafetyTest {
             assertFalse(name, VasRenameSafety.isValidNewName(name));
         }
     }
+    @Test
+    public void dependencyPreflightOnlyConsidersRelevantIdentifierSpellings() {
+        assertTrue(VasRenameSafety.containsRelevantIdentifier("bool renamed; if (left && value) {}", "value", "renamed"));
+        assertTrue(VasRenameSafety.containsRelevantIdentifier("int renamed;", "value", "renamed"));
+        assertTrue(VasRenameSafety.containsRelevantIdentifier("#if FEATURE value;", "value", "renamed"));
+        assertFalse(VasRenameSafety.containsRelevantIdentifier(
+            "#include \"missing.vas\"\n// value renamed\nstring text = \"value renamed\"; int valueElse;", "value", "renamed"));
+        assertFalse(VasRenameSafety.containsRelevantIdentifier("int number = 0b101;", "b101", "renamed"));
+    }
+
 }

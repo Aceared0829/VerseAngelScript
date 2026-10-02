@@ -28,5 +28,11 @@ public final class VasAstFactoryTest {
         ));
         assertNull(VasIncludeReference.extractIncludePath("#include <shared/math.vas>"));
         assertNull(VasIncludeReference.extractIncludePath("#define path \"math.vas\""));
+        assertEquals("shared/math.vas", VasIncludeReference.extractIncludePath("#include'shared/math.vas'"));
+        assertEquals("shared/math.vas", VasIncludeReference.extractIncludePath("#include\"shared/math.vas\""));
+        assertEquals("shared/math.vas", VasIncludeReference.extractIncludePath("#include\n'shared/math.vas'"));
+        assertNull(VasIncludeReference.extractIncludePath("#included \"math.vas\""));
+        assertNull(VasIncludeReference.extractIncludePath("// #include 'math.vas'"));
+        assertNull(VasIncludeReference.extractIncludePath("#include /* comment */'math.vas'"));
     }
 }

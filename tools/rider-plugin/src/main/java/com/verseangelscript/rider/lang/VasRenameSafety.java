@@ -94,13 +94,21 @@ public final class VasRenameSafety {
 
         for (PsiFile file : files) {
             ProgressManager.checkCanceled();
+            String text = file.getText();
+            if (!file.isEquivalentTo(targetFile) && !containsRelevantIdentifier(text, symbol.name(), newName)) {
+                continue;
+            }
+            VasSymbolResolver.DependencyClosure closure = VasSymbolResolver.inspectDependencyClosure(file);
+            if (!closure.complete()) {
+                refuse("Include dependencies for '" + file.getName()
+                    + "' could not be verified for this VAS rename: " + String.join("; ", closure.problems().stream().map(VasSymbolResolver.DependencyProblem::message).toList()));
+            }
             if (!VasSymbolResolver.isDeclarationVisibleFrom(file, target)) {
                 continue;
             }
             if (symbol.isProjectVisible()) {
                 checkDeclarationCollisions(file, target, symbol);
             }
-            String text = file.getText();
             List<VasSymbol> newNameDeclarations = new ArrayList<>();
             if (!newName.equals(symbol.name())) {
                 VasSymbolScanner.scan(text).stream()
@@ -172,6 +180,26 @@ public final class VasRenameSafety {
                 lexer.advance();
             }
         }
+    }
+
+    static boolean containsRelevantIdentifier(String source, String oldName, String newName) {
+        VasLexer lexer = new VasLexer();
+        lexer.start(source);
+        while (lexer.getTokenType() != null) {
+            if (lexer.getTokenType() == VasTypes.IDENTIFIER) {
+                String text = source.substring(lexer.getTokenStart(), lexer.getTokenEnd());
+                if (text.equals(oldName) || text.equals(newName)) {
+                    return true;
+                }
+            } else if (lexer.getTokenType() == VasTypes.PREPROCESSOR
+                && containsRelevantIdentifier(source.substring(lexer.getTokenStart() + 1, lexer.getTokenEnd()).replace('#', ' '), oldName, newName)) {
+                // Unsupported directives may have same-line code. Inspect names
+                // after '#' too, while still excluding comment/string interiors.
+                return true;
+            }
+            lexer.advance();
+        }
+        return false;
     }
 
     static boolean isValidNewName(String name) {

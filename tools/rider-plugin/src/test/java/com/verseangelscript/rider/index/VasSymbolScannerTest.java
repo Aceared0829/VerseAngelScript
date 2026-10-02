@@ -182,7 +182,7 @@ public final class VasSymbolScannerTest {
 
     @Test
     public void findsExplicitLifecycleFamiliesWithoutConfusingConstructorUses() {
-        for (String body : List.of("Foo() {}", "Foo(int value) {}", "~Foo() {}", "private Foo() {}", "void run() {} ~Foo() {}")) {
+        for (String body : List.of("Foo() {}", "Foo(int value) {}", "~Foo() {}", "private Foo() {}", "[tag] Foo() {}", "[tag] explicit Foo(int value) {}", "[tag] ~Foo() {}", "void run() {} ~Foo() {}")) {
             String source = "namespace N { class Foo { " + body + " } }";
             assertTrue(body, VasSymbolScanner.hasExplicitLifecycleDeclaration(source, find(VasSymbolScanner.scan(source), "Foo")));
         }
@@ -200,6 +200,28 @@ public final class VasSymbolScannerTest {
         assertEquals("N::Inner", find(symbols, "value").container());
         assertTrue(find(symbols, "N").baseTypes().isEmpty());
         assertTrue(find(symbols, "Inner").baseTypes().isEmpty());
+    }
+
+    @Test
+    public void ordinaryExpressionsDoNotDeclareVariables() {
+        String source = "bool a; bool b; int flags; int mask; void run() { "
+            + "if (a && b) {} if (a || b) {} if ((flags & mask) != 0) {} "
+            + "consume(flags & mask); flags & mask; bool result = a && b; int bits = flags & mask; }";
+        List<VasSymbol> symbols = VasSymbolScanner.scan(source);
+        for (String name : List.of("a", "b", "flags", "mask")) {
+            assertEquals(name, 1, symbols.stream().filter(symbol -> symbol.name().equals(name)).count());
+        }
+        assertFalse(find(symbols, "result").isProjectVisible());
+        assertFalse(find(symbols, "bits").isProjectVisible());
+    }
+
+    @Test
+    public void includesDoNotHideFollowingDeclarationHeads() {
+        for (String directive : List.of("#include 'api.vas'", "#include\"api.vas\"", "#include\n\"api.vas\"")) {
+            List<VasSymbol> symbols = VasSymbolScanner.scan("\uFEFF" + directive + " int value; void run() { value; }");
+            assertEquals(2, symbols.size());
+            assertTrue(find(symbols, "value").isProjectVisible());
+        }
     }
 
     private static VasSymbol find(List<VasSymbol> symbols, String name) {

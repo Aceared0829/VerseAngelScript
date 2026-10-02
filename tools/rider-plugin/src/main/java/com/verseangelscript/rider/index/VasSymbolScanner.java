@@ -202,17 +202,8 @@ public final class VasSymbolScanner {
             } else if (depth == 0 && token.type() == VasTypes.IDENTIFIER
                 && token.text().equals(className) && tokenAt(tokens, index + 1) != null
                 && tokens.get(index + 1).type() == VasTypes.LPAREN) {
-                int prefix = index - 1;
-                if ("~".equals(tokens.get(prefix).text())) {
-                    prefix--;
-                }
-                while (prefix > body && Set.of("private", "protected", "public", "explicit")
-                    .contains(tokens.get(prefix).text())) {
-                    prefix--;
-                }
-                Token previous = tokens.get(prefix);
-                if (previous.type() == VasTypes.LBRACE || previous.type() == VasTypes.RBRACE
-                    || ";".equals(previous.text())) {
+                int nameStart = "~".equals(tokens.get(index - 1).text()) ? index - 1 : index;
+                if (isStatementDeclarationHead(tokens, nameStart)) {
                     names.add(index);
                 }
             }
@@ -321,20 +312,25 @@ public final class VasSymbolScanner {
             return false;
         }
 
-        if ("::".equals(previous.text())) {
-            int start = qualifiedNameStart(tokens, nameIndex);
-            Token returnType = tokenAt(tokens, start - 1);
-            return returnType != null && (returnType.type() == VasTypes.IDENTIFIER
-                || (returnType.type() == VasTypes.KEYWORD && BUILTIN_TYPES.contains(returnType.text()))
-                || "@".equals(returnType.text()) || "&".equals(returnType.text())
-                || hasUnsupportedTypeSuffix(tokens, start));
+        int typeEnd = qualifiedNameStart(tokens, nameIndex) - 1;
+        if (typeEnd >= 0 && "&".equals(tokens.get(typeEnd).text())) {
+            typeEnd--;
         }
-        return previous.type() == VasTypes.IDENTIFIER
-            || hasUnsupportedTypeSuffix(tokens, nameIndex)
-            || previous.type() == VasTypes.KEYWORD && BUILTIN_TYPES.contains(previous.text())
-            || (previous.type() == VasTypes.OPERATOR
-                && (previous.text().contains("@") || previous.text().contains("&")
-                    || "::".equals(previous.text())));
+        int typeStart = declarationTypeStart(tokens, typeEnd);
+        if (typeStart < 0 || !isStatementDeclarationHead(tokens, typeStart)) {
+            return false;
+        }
+        Deque<Integer> braces = new ArrayDeque<>();
+        for (int index = 0; index < typeStart; index++) {
+            if (tokens.get(index).type() == VasTypes.LBRACE) {
+                braces.addLast(index);
+            } else if (tokens.get(index).type() == VasTypes.RBRACE && !braces.isEmpty()) {
+                braces.removeLast();
+            }
+        }
+        // Functions live at module/namespace/type scope. A typed-looking
+        // expression inside another body is not a nested function declaration.
+        return braces.isEmpty() || containerScopes(tokens).containsKey(braces.getLast());
     }
 
     private static int functionBodyIndex(List<Token> tokens, int nameIndex) {
@@ -354,8 +350,15 @@ public final class VasSymbolScanner {
     private static boolean looksLikeVariableDeclaration(List<Token> tokens, int nameIndex) {
         Token previous = tokenAt(tokens, nameIndex - 1);
         Token next = tokenAt(tokens, nameIndex + 1);
-        if (previous == null || next == null || next.type() == VasTypes.LPAREN) {
+        if (previous == null || next == null) {
             return false;
+        }
+        if (next.type() == VasTypes.LPAREN) {
+            int close = matchingRightParen(tokens, nameIndex + 1);
+            next = tokenAt(tokens, close + 1);
+            if (close < 0 || next == null || !(";".equals(next.text()) || ",".equals(next.text()))) {
+                return false;
+            }
         }
         if (!("=".equals(next.text()) || ";".equals(next.text()) || ",".equals(next.text())
             || next.type() == VasTypes.RBRACKET || next.type() == VasTypes.RPAREN
@@ -366,23 +369,144 @@ public final class VasSymbolScanner {
         if (",".equals(previous.text())) {
             return previousDeclarator(tokens, nameIndex) >= 0;
         }
-        int typeIndex = nameIndex - 1;
-        if (Set.of("in", "out", "inout").contains(previous.text())) {
-            Token reference = tokenAt(tokens, typeIndex - 1);
-            if (reference == null || !"&".equals(reference.text())) {
+        int typeEnd = nameIndex - 1;
+        if (Set.of("in", "out", "inout").contains(tokens.get(typeEnd).text())) {
+            typeEnd--;
+            if (typeEnd < 0 || !"&".equals(tokens.get(typeEnd).text())) {
                 return false;
             }
-            typeIndex -= 2;
         }
-        // Handle constness belongs to the type suffix: B@const object and
-        // const B@const &in object must both shadow an outer variable.
-        while (typeIndex >= 0 && Set.of("@", "&", "const").contains(tokens.get(typeIndex).text())) {
-            typeIndex--;
+        boolean reference = typeEnd >= 0 && "&".equals(tokens.get(typeEnd).text());
+        if (reference) {
+            typeEnd--;
         }
-        Token type = tokenAt(tokens, typeIndex);
-        return type != null && (type.type() == VasTypes.IDENTIFIER
-            || type.type() == VasTypes.KEYWORD && BUILTIN_TYPES.contains(type.text())
-            || hasUnsupportedTypeSuffix(tokens, typeIndex + 1));
+        int typeStart = declarationTypeStart(tokens, typeEnd);
+        if (typeStart < 0) {
+            return false;
+        }
+        boolean parameter = isParameterDeclarationHead(tokens, typeStart);
+        // '&' is a TYPEMOD for parameters, not part of a local/global variable
+        // TYPE. In expressions, flags & mask must remain a use of mask.
+        return parameter || !reference && isStatementDeclarationHead(tokens, typeStart);
+    }
+
+    private static int declarationTypeStart(List<Token> tokens, int typeEnd) {
+        int index = typeEnd;
+        // TYPE suffixes are (@ const?) and []. Keep unfamiliar array/generic
+        // types as scoped declarations, without claiming their member owner.
+        while (index >= 0) {
+            if ("const".equals(tokens.get(index).text())) {
+                if (index == 0 || !"@".equals(tokens.get(index - 1).text())) {
+                    return -1;
+                }
+                index -= 2;
+            } else if ("@".equals(tokens.get(index).text())) {
+                index--;
+            } else if (tokens.get(index).type() == VasTypes.RBRACKET) {
+                if (index == 0 || tokens.get(index - 1).type() != VasTypes.LBRACKET) {
+                    return -1;
+                }
+                index -= 2;
+            } else {
+                break;
+            }
+        }
+        if (index >= 0 && ">".equals(tokens.get(index).text())) {
+            int depth = 1;
+            while (--index >= 0 && depth > 0) {
+                String text = tokens.get(index).text();
+                if (">".equals(text)) {
+                    depth++;
+                } else if ("<".equals(text)) {
+                    depth--;
+                } else if (";".equals(text) || tokens.get(index).type() == VasTypes.LBRACE
+                    || tokens.get(index).type() == VasTypes.RBRACE) {
+                    return -1;
+                }
+            }
+            if (depth != 0) {
+                return -1;
+            }
+        }
+        Token type = tokenAt(tokens, index);
+        if (type == null || !(type.type() == VasTypes.IDENTIFIER
+            || type.type() == VasTypes.KEYWORD && BUILTIN_TYPES.contains(type.text()))) {
+            return -1;
+        }
+        index = qualifiedNameStart(tokens, index);
+        if (index > 0 && "::".equals(tokens.get(index - 1).text())) {
+            index--;
+        }
+        if (index > 0 && "const".equals(tokens.get(index - 1).text())) {
+            index--;
+        }
+        return index;
+    }
+
+    private static boolean isParameterDeclarationHead(List<Token> tokens, int typeStart) {
+        Token before = tokenAt(tokens, typeStart - 1);
+        if (before == null || !(before.type() == VasTypes.LPAREN || ",".equals(before.text()))) {
+            return false;
+        }
+        int leftParen = enclosingLeftParen(tokens, typeStart);
+        if (leftParen <= 0 || tokens.get(leftParen - 1).type() != VasTypes.IDENTIFIER) {
+            return false;
+        }
+        int name = leftParen - 1;
+        return looksLikeFunctionDeclaration(tokens, name) || lifecycleNames(tokens).contains(name);
+    }
+
+    private static boolean isStatementDeclarationHead(List<Token> tokens, int typeStart) {
+        int head = typeStart - 1;
+        while (head >= 0) {
+            if (Set.of("private", "protected", "public", "shared", "external", "explicit")
+                .contains(tokens.get(head).text())) {
+                head--;
+            } else if (tokens.get(head).type() == VasTypes.RBRACKET) {
+                // scriptbuilder removes metadata blocks before compiling a
+                // declaration; they are not an expression preceding its type.
+                int depth = 1;
+                while (--head >= 0 && depth > 0) {
+                    if (tokens.get(head).type() == VasTypes.RBRACKET) {
+                        depth++;
+                    } else if (tokens.get(head).type() == VasTypes.LBRACKET) {
+                        depth--;
+                    }
+                }
+                if (depth != 0) {
+                    return false;
+                }
+            } else {
+                break;
+            }
+        }
+        Token before = tokenAt(tokens, head);
+        if (before == null || before.type() == VasTypes.LBRACE || before.type() == VasTypes.RBRACE) {
+            return true;
+        }
+        if (";".equals(before.text())) {
+            return enclosingLeftParen(tokens, head) < 0;
+        }
+        return before.type() == VasTypes.LPAREN && head > 0
+            && Set.of("for", "foreach").contains(tokens.get(head - 1).text());
+    }
+
+    private static int enclosingLeftParen(List<Token> tokens, int beforeIndex) {
+        int depth = 0;
+        for (int index = beforeIndex - 1; index >= 0; index--) {
+            IElementType type = tokens.get(index).type();
+            if (type == VasTypes.RPAREN) {
+                depth++;
+            } else if (type == VasTypes.LPAREN) {
+                if (depth == 0) {
+                    return index;
+                }
+                depth--;
+            } else if (depth == 0 && (type == VasTypes.LBRACE || type == VasTypes.RBRACE)) {
+                break;
+            }
+        }
+        return -1;
     }
 
     private static boolean hasUnsupportedTypeSuffix(List<Token> tokens, int nameIndex) {
@@ -566,8 +690,13 @@ public final class VasSymbolScanner {
             typeIndex--;
         }
         Token type = tokenAt(tokens, typeIndex);
-        return type == null || !(type.type() == VasTypes.IDENTIFIER || type.type() == VasTypes.KEYWORD)
-            ? "" : qualifiedName(tokens, typeIndex);
+        if (type == null || !(type.type() == VasTypes.IDENTIFIER || type.type() == VasTypes.KEYWORD)) {
+            return "";
+        }
+        int start = qualifiedNameStart(tokens, typeIndex);
+        // Keep the declaration as a lexical blocker until global-qualified type
+        // identity is supported, rather than treating ::T as a relative T.
+        return start > 0 && "::".equals(tokens.get(start - 1).text()) ? "" : qualifiedName(tokens, typeIndex);
     }
 
     private static int argumentCount(List<Token> tokens, int leftParenIndex) {
@@ -853,7 +982,8 @@ public final class VasSymbolScanner {
                         int start = index++;
                         char first = text.charAt(start);
                         if (index < text.length() && (text.charAt(index) == '=' && "=!<>+-*/%&|^".indexOf(first) >= 0
-                            || first == ':' && text.charAt(index) == ':')) {
+                            || first == ':' && text.charAt(index) == ':'
+                            || (first == '&' || first == '|') && text.charAt(index) == first)) {
                             index++;
                         }
                         tokens.add(new Token(type, text.substring(start, index),
