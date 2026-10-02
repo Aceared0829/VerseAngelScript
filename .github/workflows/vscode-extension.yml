@@ -1,0 +1,69 @@
+name: VS Code extension
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vscode-extension-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  extension:
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        vscode: ['1.96.4', stable]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: tools/vscode-extension/package-lock.json
+      - name: Build runtime tools
+        run: |
+          cmake -S . -B out/vscode-test -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build out/vscode-test --config Release --parallel 4
+          ctest --test-dir out/vscode-test --output-on-failure -C Release
+      - name: Install extension test dependencies
+        working-directory: tools/vscode-extension
+        run: npm ci
+      - name: Unit and real TextMate tests
+        working-directory: tools/vscode-extension
+        run: npm test
+      - name: Package VSIX
+        working-directory: tools/vscode-extension
+        run: npm run package
+      - name: Native extension host tests (Linux)
+        if: runner.os == 'Linux'
+        working-directory: tools/vscode-extension
+        env:
+          VSCODE_TEST_VERSION: ${{ matrix.vscode }}
+          VAS_TEST_COMPILER: ${{ github.workspace }}/out/vscode-test/vasbuild
+          VAS_TEST_RUNNER: ${{ github.workspace }}/out/vscode-test/vasrun
+        run: xvfb-run -a npm run test:integration
+      - name: Native extension host tests (macOS)
+        if: runner.os == 'macOS'
+        working-directory: tools/vscode-extension
+        env:
+          VSCODE_TEST_VERSION: ${{ matrix.vscode }}
+          VAS_TEST_COMPILER: ${{ github.workspace }}/out/vscode-test/vasbuild
+          VAS_TEST_RUNNER: ${{ github.workspace }}/out/vscode-test/vasrun
+        run: npm run test:integration
+      - name: Native extension host tests (Windows)
+        if: runner.os == 'Windows'
+        working-directory: tools/vscode-extension
+        env:
+          VSCODE_TEST_VERSION: ${{ matrix.vscode }}
+          VAS_TEST_COMPILER: ${{ github.workspace }}/out/vscode-test/Release/vasbuild.exe
+          VAS_TEST_RUNNER: ${{ github.workspace }}/out/vscode-test/Release/vasrun.exe
+        run: npm run test:integration

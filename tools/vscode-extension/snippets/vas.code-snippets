@@ -1,0 +1,77 @@
+{
+  "VAS entry point": {
+    "prefix": "main",
+    "body": ["void main()", "{", "\t$0", "}"],
+    "description": "Standalone VAS runner entry point"
+  },
+  "Include VAS file": {
+    "prefix": "include",
+    "body": ["#include \"${1:shared}.vas\"", "$0"],
+    "description": "Include another lowercase .vas source file"
+  },
+  "Function": {
+    "prefix": "func",
+    "body": ["${1:void} ${2:functionName}(${3})", "{", "\t$0", "}"],
+    "description": "Declare a VAS function"
+  },
+  "Class": {
+    "prefix": "class",
+    "body": ["class ${1:ClassName}", "{", "\t${1:ClassName}()", "\t{", "\t\t$0", "\t}", "}"],
+    "description": "Declare a script class with a constructor"
+  },
+  "Interface": {
+    "prefix": "interface",
+    "body": ["interface ${1:InterfaceName}", "{", "\tvoid ${2:methodName}();", "\t$0", "}"],
+    "description": "Declare a VAS interface"
+  },
+  "Enumeration": {
+    "prefix": "enum",
+    "body": ["enum ${1:EnumName}", "{", "\t${2:FirstValue},", "\t${3:SecondValue}", "}", "$0"],
+    "description": "Declare a VAS enumeration"
+  },
+  "Namespace": {
+    "prefix": "namespace",
+    "body": ["namespace ${1:Name}", "{", "\t$0", "}"],
+    "description": "Group declarations in a namespace"
+  },
+  "If statement": {
+    "prefix": "if",
+    "body": ["if (${1:condition})", "{", "\t$0", "}"],
+    "description": "Conditional block"
+  },
+  "If else statement": {
+    "prefix": "ifelse",
+    "body": ["if (${1:condition})", "{", "\t${2}", "}", "else", "{", "\t$0", "}"],
+    "description": "Conditional block with an alternative"
+  },
+  "For loop": {
+    "prefix": "for",
+    "body": ["for (int ${1:i} = 0; ${1:i} < ${2:count}; ${1:i}++)", "{", "\t$0", "}"],
+    "description": "Counted loop"
+  },
+  "Foreach loop": {
+    "prefix": "foreach",
+    "body": ["foreach (auto ${1:value} : ${2:collection})", "{", "\t$0", "}"],
+    "description": "Loop over a collection that supports VAS iteration"
+  },
+  "While loop": {
+    "prefix": "while",
+    "body": ["while (${1:condition})", "{", "\t$0", "}"],
+    "description": "Conditional loop"
+  },
+  "Object handle": {
+    "prefix": "handle",
+    "body": ["${1:ClassName}@ ${2:instance} = null;", "$0"],
+    "description": "Declare a nullable object handle"
+  },
+  "Function handle signature": {
+    "prefix": "funcdef",
+    "body": ["funcdef ${1:void} ${2:Callback}(${3});", "$0"],
+    "description": "Declare a function-handle signature"
+  },
+  "Heredoc string": {
+    "prefix": "heredoc",
+    "body": ["\"\"\"", "${1:text}", "\"\"\"$0"],
+    "description": "Multiline raw string with no escape processing"
+  }
+}

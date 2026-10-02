@@ -5,9 +5,13 @@
 #include "../../../add_on/scriptbuilder/scriptbuilder.h"
 #include "../../../add_on/scripthelper/scripthelper.h"
 #include <stdio.h>
+#include "../../common/vas_console.h"
 #include <stdlib.h>
 #include <sstream>
 #include <fstream>
+#if !defined(_WIN32) && !defined(_WIN32_WCE)
+#include <unistd.h> // getcwd
+#endif
 #if defined(_MSC_VER) && !defined(_WIN32_WCE)
 #include <direct.h>
 #include <crtdbg.h>
@@ -37,8 +41,7 @@ void MessageCallback(const asSMessageInfo *msg, void *param)
 		type = "INFO";
 
 	FILE *stream = msg->type == asMSGTYPE_INFORMATION ? stdout : stderr;
-	fprintf(stream, "%s (%d, %d) : %s : %s\n", msg->section, msg->row, msg->col, type, msg->message);
-	fflush(stream);
+	vas::WriteDiagnostic(stream, msg->section, msg->row, msg->col, type, msg->message);
 }
 
 int main(int argc, char **argv)
@@ -390,5 +393,4 @@ static const char *GetCurrentDir(char *buf, size_t size)
 	return "";
 #endif
 }
-
 

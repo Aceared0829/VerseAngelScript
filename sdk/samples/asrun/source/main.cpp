@@ -26,6 +26,7 @@
 #include "../../../add_on/contextmgr/contextmgr.h"
 #include "../../../add_on/datetime/datetime.h"
 #include "../../../add_on/scriptsocket/scriptsocket.h"
+#include "../../common/vas_console.h"
 
 #ifdef _WIN32
 #include <Windows.h> // WriteConsoleW
@@ -194,8 +195,7 @@ void MessageCallback(const asSMessageInfo *msg, void *param)
 		type = "INFO";
 
 	FILE *stream = msg->type == asMSGTYPE_INFORMATION ? stdout : stderr;
-	fprintf(stream, "%s (%d, %d) : %s : %s\n", msg->section, msg->row, msg->col, type, msg->message);
-	fflush(stream);
+	vas::WriteDiagnostic(stream, msg->section, msg->row, msg->col, type, msg->message);
 }
 
 // This function will register the application interface
@@ -859,5 +859,4 @@ int PragmaCallback(const string &pragmaText, CScriptBuilder &builder, void * /*u
 	// The #pragma directive was not accepted
 	return -1;
 }
-
 

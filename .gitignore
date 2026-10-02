@@ -91,3 +91,8 @@ tools/rider-plugin/.intellijPlatform/
 tools/rider-plugin/build/
 
 
+
+# VS Code extension generated files
+tools/vscode-extension/node_modules/
+tools/vscode-extension/.vscode-test/
+tools/vscode-extension/*.vsix

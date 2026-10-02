@@ -86,6 +86,13 @@ java {
 }
 
 tasks {
+    // Plugin 2.18.1 instrumentation tasks share Gradle's non-thread-safe
+    // AntBuilder (JetBrains/intellij-platform-gradle-plugin#2193). Keep both
+    // main and test instrumentation enabled, but never run them concurrently.
+    named("instrumentTestCode") {
+        mustRunAfter(named("instrumentCode"))
+    }
+
     test {
         useJUnitPlatform()
     }
