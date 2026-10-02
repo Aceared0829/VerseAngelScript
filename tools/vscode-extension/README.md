@@ -58,6 +58,8 @@ Windows 使用本机 `.exe`，如 `C:\\VAS\\vasbuild.exe`。不接受 PATH 查�
 - Build 生成 `.vas/build/<源文件相对路径>.vasbc`，不同目录的同名文件不会相互覆盖
 - Run 由 `vasrun` 重新编译并执行源文件，不执行 Build 产生的字节码
 - 真实编译错误与警告进入 Problems，包含被 include 文件的诊断；完整工具输出保留在集成终端
+- Problems 定位到行；编译器当前报告 UTF-8 字节列，不能直接当作 VS Code UTF-16 列使用，精确列映射在后续结构化诊断模块实现
+- VAS 任务共用一个 Problems 诊断集合：后续任务可能替换或清除其他入口/工作区的诊断；并行任务不隔离诊断，较早启动的长任务结束时也可能清除较新的结果。还不是持久的全工程诊断服务
 - 使用 VS Code 的 **Tasks: Terminate Task** 停止运行；程序可通过终端读取输入
 - Restricted Mode 保留静态编辑功能，但禁用构建和运行；仅打开/编辑文件不会启动工具
 
@@ -77,6 +79,8 @@ Windows 使用本机 `.exe`，如 `C:\\VAS\\vasbuild.exe`。不接受 PATH 查�
 ```
 
 将其保存为工程 `.vscode/tasks.json` 后使用 **Run Build Task**。扩展不推断入口模块；将依赖入口声明的辅助文件直接编译可能产生编译错误。
+
+Windows 现有命令行工具仍使用窄字符 `argv` 和部分文件 API；含非 ASCII 字符的入口、工程根目录、配置或输出路径尚未保证可用。这是运行时工具链需要补齐的能力，不以 JS 路径测试宣称已解决。
 
 ## 测试
 

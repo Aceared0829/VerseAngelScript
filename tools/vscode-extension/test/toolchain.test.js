@@ -64,6 +64,10 @@ test('problem matchers distinguish compiler errors and warnings including Window
   assert.equal(match[errors.pattern.file], 'C:\\game (demo)\\src\\main.vas');
   assert.equal(match[errors.pattern.line], '12');
   assert.equal(match[errors.pattern.message], 'Expected expression value');
+  // Compiler columns count UTF-8 bytes, not VS Code UTF-16 units. Until a
+  // structured bridge converts them, highlight the exact line, not a wrong column.
+  assert.equal(errors.pattern.column, undefined);
+  assert.equal(warnings.pattern.column, undefined);
   assert.equal(errors.severity, 'error');
   assert.equal(warnings.severity, 'warning');
   assert.equal(new RegExp(warnings.pattern.regexp).test(line), false);

@@ -14,16 +14,18 @@ async function eventually(check, description) {
   throw new Error(`Timed out waiting for ${description}`);
 }
 
-async function commandExit(command) {
+async function taskExit(start, label) {
   const ended = new Map();
   const listener = vscode.tasks.onDidEndTaskProcess(event => ended.set(event.execution, event.exitCode));
   try {
-    const execution = await vscode.commands.executeCommand(command);
-    assert.ok(execution, `${command} must start a task`);
-    await eventually(() => ended.has(execution), `${command} process exit`);
+    const execution = await start();
+    assert.ok(execution, `${label} must start a task`);
+    await eventually(() => ended.has(execution), `${label} process exit`);
     return ended.get(execution);
   } finally { listener.dispose(); }
 }
+
+const commandExit = command => taskExit(() => vscode.commands.executeCommand(command), command);
 
 async function run() {
   const folder = vscode.workspace.workspaceFolders[0];
@@ -61,21 +63,67 @@ async function run() {
   await config.update('configFile', 'api.txt', vscode.ConfigurationTarget.WorkspaceFolder);
   await config.update('outputDirectory', '.vas/build', vscode.ConfigurationTarget.WorkspaceFolder);
 
+  const edit = new vscode.WorkspaceEdit();
+  edit.insert(document.uri, new vscode.Position(0, 0), '// saved by explicit build\n');
+  assert.equal(await vscode.workspace.applyEdit(edit), true);
+  assert.equal(document.isDirty, true);
   assert.equal(await commandExit('vas.buildCurrentFile'), 0);
+  assert.equal(document.isDirty, false);
+  assert.match(await fs.readFile(document.uri.fsPath, 'utf8'), /saved by explicit build/);
   assert.ok((await fs.stat(path.join(root, '.vas/build/src/main.vasbc'))).size > 0);
   assert.equal(await commandExit('vas.runCurrentFile'), 0);
 
+  const configured = (await vscode.tasks.fetchTasks({ type: 'vas' })).find(task => task.name === 'Fixture build');
+  assert.ok(configured, 'tasks.json provider must resolve the configured build');
+  assert.equal(await taskExit(() => vscode.tasks.executeTask(configured), 'configured VAS task'), 0);
+
+  await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(uri('warning.vas')));
+  assert.equal(await commandExit('vas.buildCurrentFile'), 0);
+  await eventually(() => vscode.languages.getDiagnostics(uri('warning.vas')).some(diagnostic =>
+    diagnostic.severity === vscode.DiagnosticSeverity.Warning), 'compiler warning in Problems');
+
   const broken = await vscode.workspace.openTextDocument(uri('broken.vas'));
   await vscode.window.showTextDocument(broken);
+  const included = await vscode.workspace.openTextDocument(uri('shared 文.vas'));
+  const includeEdit = new vscode.WorkspaceEdit();
+  includeEdit.insert(included.uri, new vscode.Position(0, 0), '/* unsaved */ ');
+  assert.equal(await vscode.workspace.applyEdit(includeEdit), true);
+  assert.equal(included.isDirty, true);
+  let started = 0;
+  const listener = vscode.tasks.onDidStartTask(() => started++);
+  try {
+    assert.equal(await vscode.commands.executeCommand('vas.buildCurrentFile'), undefined);
+    assert.equal(started, 0, 'dirty include must block compiler execution');
+  } finally { listener.dispose(); }
+  assert.equal(await included.save(), true);
   assert.notEqual(await commandExit('vas.buildCurrentFile'), 0);
   await eventually(() => vscode.languages.getDiagnostics(uri('shared 文.vas')).some(diagnostic =>
     diagnostic.severity === vscode.DiagnosticSeverity.Error && diagnostic.range.start.line === 0),
   'compiler error on the included file in the Problems view');
-  await fs.writeFile(uri('shared 文.vas').fsPath, 'int Broken() { return 1; }\n');
+
+  // Native task matchers intentionally show the latest VAS task results. Verify
+  // that boundary, and that configuration follows the selected workspace root.
+  const second = vscode.workspace.workspaceFolders[1];
+  const secondConfig = vscode.workspace.getConfiguration('vas', second.uri);
+  await secondConfig.update('configFile', 'second-api.txt', vscode.ConfigurationTarget.WorkspaceFolder);
+  await secondConfig.update('outputDirectory', '.vas/second', vscode.ConfigurationTarget.WorkspaceFolder);
+  await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(vscode.Uri.joinPath(second.uri, 'main.vas')));
+  assert.equal(await commandExit('vas.buildCurrentFile'), 0);
+  assert.ok((await fs.stat(path.join(second.uri.fsPath, '.vas/second/main.vasbc'))).size > 0);
+  await eventually(() => vscode.languages.getDiagnostics(uri('shared 文.vas')).length === 0, 'latest-task diagnostics replacing the prior task');
+
+  await vscode.window.showTextDocument(broken);
+  assert.notEqual(await commandExit('vas.buildCurrentFile'), 0);
+  await eventually(() => vscode.languages.getDiagnostics(uri('shared 文.vas')).length > 0, 'rebuilt entry diagnostics');
+  const fix = new vscode.WorkspaceEdit();
+  fix.replace(included.uri, new vscode.Range(included.positionAt(0), included.positionAt(included.getText().length)), 'int Broken() { return 1; }\n');
+  assert.equal(await vscode.workspace.applyEdit(fix), true);
+  assert.equal(await included.save(), true);
   assert.equal(await commandExit('vas.buildCurrentFile'), 0);
   await eventually(() => vscode.languages.getDiagnostics(uri('shared 文.vas')).length === 0, 'stale diagnostics to clear after a clean build');
   await fs.rm(path.join(root, '.vas'), { recursive: true, force: true });
-  console.log('PASS: native build/run tasks, bytecode, include-file diagnostics, and diagnostic clearing');
+  await fs.rm(path.join(second.uri.fsPath, '.vas'), { recursive: true, force: true });
+  console.log('PASS: native build/run, bytecode, errors/warnings, include diagnostics, multi-root configuration and latest-task clearing');
 }
 
 module.exports = { run };

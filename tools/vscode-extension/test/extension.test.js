@@ -27,7 +27,14 @@ function host({ trusted = true, file = '/project/src/main.vas', dirty = [], fail
     realpath: async target => target === '/project' ? '/project' : (realDirectory || target),
     lstat: async () => { const error = new Error('missing'); error.code = 'ENOENT'; throw error; }
   };
-  const sandbox = { module: { exports: {} }, require: name => name === 'vscode' ? vscode : name === 'node:fs/promises' ? files : name === './toolchain' ? require('../src/toolchain') : require(name) };
+  // Keep mock fixture paths platform-independent; the pure path suite separately
+  // tests win32 rules, and native integration tests use the real host filesystem.
+  const pure = require('../src/toolchain');
+  const sandbox = { module: { exports: {} }, require: name => name === 'vscode' ? vscode : name === 'node:fs/promises' ? files :
+    name === 'node:path' ? path.posix : name === './toolchain' ? {
+      contains: (root, file) => pure.contains(root, file, path.posix),
+      createPlan: options => pure.createPlan(options, path.posix)
+    } : require(name) };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/extension.js'), 'utf8'), sandbox);
   sandbox.module.exports.activate({ subscriptions: [] });
   return { commands, executed, errors, created, provider, folder };

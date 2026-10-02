@@ -5,53 +5,171 @@
   "version": "0.1.0",
   "publisher": "VerseAngelScript",
   "license": "SEE LICENSE IN LICENSE.md",
-  "repository": { "type": "git", "url": "https://github.com/Aceared0829/VerseAngelScript.git" },
-  "engines": { "vscode": "^1.96.0" },
-  "categories": ["Programming Languages"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Aceared0829/VerseAngelScript.git"
+  },
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
   "main": "./src/extension.js",
-  "extensionKind": ["workspace"],
-  "activationEvents": ["onTaskType:vas"],
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onTaskType:vas"
+  ],
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
       "description": "Syntax editing is available; building and running VAS requires a trusted workspace.",
-      "restrictedConfigurations": ["vas.compilerPath", "vas.runnerPath", "vas.configFile", "vas.outputDirectory"]
+      "restrictedConfigurations": [
+        "vas.compilerPath",
+        "vas.runnerPath",
+        "vas.configFile",
+        "vas.outputDirectory"
+      ]
     },
-    "virtualWorkspaces": { "supported": false, "description": "The VAS toolchain requires a local or remote filesystem workspace." }
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "The VAS toolchain requires a local or remote filesystem workspace."
+    }
   },
   "contributes": {
-    "languages": [{ "id": "vas", "aliases": ["Verse AngelScript", "VAS"], "extensions": [".vas"], "configuration": "./language-configuration.json" }],
-    "grammars": [{ "language": "vas", "scopeName": "source.vas", "path": "./syntaxes/vas.tmLanguage.json" }],
-    "snippets": [{ "language": "vas", "path": "./snippets/vas.code-snippets" }],
+    "languages": [
+      {
+        "id": "vas",
+        "aliases": [
+          "Verse AngelScript",
+          "VAS"
+        ],
+        "extensions": [
+          ".vas"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "vas",
+        "scopeName": "source.vas",
+        "path": "./syntaxes/vas.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "vas",
+        "path": "./snippets/vas.code-snippets"
+      }
+    ],
     "commands": [
-      { "command": "vas.buildCurrentFile", "title": "VAS: Build Current File", "enablement": "isWorkspaceTrusted && editorLangId == vas" },
-      { "command": "vas.runCurrentFile", "title": "VAS: Run Current File", "enablement": "isWorkspaceTrusted && editorLangId == vas" }
+      {
+        "command": "vas.buildCurrentFile",
+        "title": "VAS: Build Current File",
+        "enablement": "isWorkspaceTrusted && editorLangId == vas"
+      },
+      {
+        "command": "vas.runCurrentFile",
+        "title": "VAS: Run Current File",
+        "enablement": "isWorkspaceTrusted && editorLangId == vas"
+      }
     ],
     "menus": {
       "editor/context": [
-        { "command": "vas.buildCurrentFile", "when": "editorLangId == vas", "group": "vas@1" },
-        { "command": "vas.runCurrentFile", "when": "editorLangId == vas", "group": "vas@2" }
+        {
+          "command": "vas.buildCurrentFile",
+          "when": "editorLangId == vas",
+          "group": "vas@1"
+        },
+        {
+          "command": "vas.runCurrentFile",
+          "when": "editorLangId == vas",
+          "group": "vas@2"
+        }
       ]
     },
     "configuration": {
       "title": "Verse AngelScript",
       "properties": {
-        "vas.compilerPath": { "type": "string", "default": "", "scope": "machine", "description": "Absolute path to a trusted vasbuild executable. Configure in User or Remote settings; workspace executables are never auto-discovered." },
-        "vas.runnerPath": { "type": "string", "default": "", "scope": "machine", "description": "Absolute path to a trusted vasrun executable. Configure in User or Remote settings." },
-        "vas.configFile": { "type": "string", "default": "${workspaceFolder}/.vas/vasbuild.config.txt", "scope": "resource", "description": "Application interface configuration for vasbuild. Relative paths resolve from the containing workspace folder; ${workspaceFolder} is supported." },
-        "vas.outputDirectory": { "type": "string", "default": "${workspaceFolder}/.vas/build", "scope": "resource", "description": "Bytecode directory inside the workspace. Source subdirectories are preserved to avoid name collisions." }
+        "vas.compilerPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Absolute path to a trusted vasbuild executable. Configure in User or Remote settings; workspace executables are never auto-discovered."
+        },
+        "vas.runnerPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Absolute path to a trusted vasrun executable. Configure in User or Remote settings."
+        },
+        "vas.configFile": {
+          "type": "string",
+          "default": "${workspaceFolder}/.vas/vasbuild.config.txt",
+          "scope": "resource",
+          "description": "Application interface configuration for vasbuild. Relative paths resolve from the containing workspace folder; ${workspaceFolder} is supported."
+        },
+        "vas.outputDirectory": {
+          "type": "string",
+          "default": "${workspaceFolder}/.vas/build",
+          "scope": "resource",
+          "description": "Bytecode directory inside the workspace. Source subdirectories are preserved to avoid name collisions."
+        }
       }
     },
-    "taskDefinitions": [{
-      "type": "vas", "required": ["operation", "file"],
-      "properties": {
-        "operation": { "type": "string", "enum": ["build", "run"], "description": "Build bytecode or compile and run the saved source with vasrun." },
-        "file": { "type": "string", "description": "Entry .vas file relative to this task's workspace folder (or an absolute path inside it). Supports ${workspaceFolder}." }
+    "taskDefinitions": [
+      {
+        "type": "vas",
+        "required": [
+          "operation",
+          "file"
+        ],
+        "properties": {
+          "operation": {
+            "type": "string",
+            "enum": [
+              "build",
+              "run"
+            ],
+            "description": "Build bytecode or compile and run the saved source with vasrun."
+          },
+          "file": {
+            "type": "string",
+            "description": "Entry .vas file relative to this task's workspace folder (or an absolute path inside it). Supports ${workspaceFolder}."
+          }
+        }
       }
-    }],
+    ],
     "problemMatchers": [
-      { "name": "vas-errors", "owner": "vas", "source": "vasbuild", "fileLocation": "absolute", "severity": "error", "pattern": { "regexp": "^(.+?)\\s*\\((\\d+),\\s*(\\d+)\\)\\s*:\\s*ERR\\s*:\\s*(.+)$", "file": 1, "line": 2, "column": 3, "message": 4 } },
-      { "name": "vas-warnings", "owner": "vas", "source": "vasbuild", "fileLocation": "absolute", "severity": "warning", "pattern": { "regexp": "^(.+?)\\s*\\((\\d+),\\s*(\\d+)\\)\\s*:\\s*WARN\\s*:\\s*(.+)$", "file": 1, "line": 2, "column": 3, "message": 4 } }
+      {
+        "name": "vas-errors",
+        "owner": "vas",
+        "source": "vasbuild",
+        "fileLocation": "absolute",
+        "severity": "error",
+        "pattern": {
+          "regexp": "^(.+?)\\s*\\((\\d+),\\s*(\\d+)\\)\\s*:\\s*ERR\\s*:\\s*(.+)$",
+          "file": 1,
+          "line": 2,
+          "message": 4
+        }
+      },
+      {
+        "name": "vas-warnings",
+        "owner": "vas",
+        "source": "vasbuild",
+        "fileLocation": "absolute",
+        "severity": "warning",
+        "pattern": {
+          "regexp": "^(.+?)\\s*\\((\\d+),\\s*(\\d+)\\)\\s*:\\s*WARN\\s*:\\s*(.+)$",
+          "file": 1,
+          "line": 2,
+          "message": 4
+        }
+      }
     ]
   },
   "scripts": {
