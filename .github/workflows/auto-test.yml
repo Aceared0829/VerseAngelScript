@@ -140,6 +140,9 @@ jobs:
     - name: validate Rider project fixture
       shell: powershell
       run: python tools/rider-plugin/scripts/check-project-fixture.py
+    - name: validate Rider trust evidence parser
+      shell: powershell
+      run: python -B -m unittest discover -s tools/rider-plugin/scripts -p test_trust_results.py
     - name: build compiler for Rider diagnostic regression tests
       shell: powershell
       run: |
@@ -159,7 +162,13 @@ jobs:
     - name: test and package Rider plugin
       shell: powershell
       working-directory: tools/rider-plugin
-      run: .\gradlew.bat test buildPlugin --no-daemon
+      run: |
+        .\gradlew.bat test buildPlugin --no-daemon
+        $gradleExitCode = $LASTEXITCODE
+        python -B scripts/check_trust_results.py build/test-results/test/TEST-com.verseangelscript.rider.diagnostics.VasRiderTrustIntegrationTest.xml
+        $evidenceExitCode = $LASTEXITCODE
+        if ($gradleExitCode -ne 0) { exit $gradleExitCode }
+        exit $evidenceExitCode
 
   Windows_x86-64_Clang-Cl:
     runs-on: windows-latest
