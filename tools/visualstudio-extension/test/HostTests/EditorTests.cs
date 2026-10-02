@@ -17,6 +17,7 @@ using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Classification;
+using Microsoft.VisualStudio.Text.BraceCompletion;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
 using Xunit;
@@ -92,7 +93,9 @@ namespace VerseAngelScript.VisualStudio.Tests
                 await AssertClassificationAsync(editor, "int", "keyword");
                 editor.SelectAll();
                 editor.Dte.ExecuteCommand("Edit.CommentSelection");
-                Assert.Equal("//" + text, editor.Text.TrimStart());
+                var commented = editor.Text;
+                Assert.StartsWith("//", commented);
+                Assert.Equal(text, commented.Substring(2).TrimStart(' ', '\t'));
                 editor.Dte.ExecuteCommand("Edit.Undo");
                 Assert.Equal(text, editor.Text);
                 editor.SelectAll();
@@ -101,7 +104,7 @@ namespace VerseAngelScript.VisualStudio.Tests
                 editor.Dte.ExecuteCommand("Edit.UncommentSelection");
                 Assert.Equal(text, editor.Text);
                 editor.Dte.ExecuteCommand("Edit.Undo");
-                Assert.Equal("//" + text, editor.Text.TrimStart());
+                Assert.Equal(commented, editor.Text);
             }
         }
 
@@ -109,19 +112,40 @@ namespace VerseAngelScript.VisualStudio.Tests
         public async Task BracePairingAndTypingAreUndoable()
         {
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-            using (var editor = Open(WriteFixture("pairs.vas", "// pairs\r\n")))
+            const string original = "// pairs\r\n";
+            using (var editor = Open(WriteFixture("pairs.vas", original)))
             {
                 await AssertClassificationAsync(editor, "pairs", "comment");
-                editor.End();
-                editor.Type('{');
-                Assert.Equal("// pairs\r\n{}", editor.Text);
-                Assert.Equal(editor.Text.Length - 1, editor.View.Caret.Position.BufferPosition.Position);
-                editor.Dte.ExecuteCommand("Edit.Undo");
-                Assert.Equal("// pairs\r\n", editor.Text);
-                editor.Type('(');
-                Assert.Equal("// pairs\r\n()", editor.Text);
-                editor.Type(')');
-                Assert.Equal("// pairs\r\n()", editor.Text);
+                var option = DefaultTextViewOptions.BraceCompletionEnabledOptionName;
+                var previous = editor.View.Options.GetOptionValue<bool>(option);
+                try
+                {
+                    // Exercise the supported editor preference in this test view only.
+                    // The production content-only VSIX never changes user preferences.
+                    editor.View.Options.SetOptionValue(option, false);
+                    editor.End();
+                    editor.Type('{');
+                    Assert.Equal(original + "{", editor.Text);
+                    editor.Dte.ExecuteCommand("Edit.Undo");
+                    Assert.Equal(original, editor.Text);
+
+                    editor.View.Options.SetOptionValue(option, true);
+                    var components = (IComponentModel)Package.GetGlobalService(typeof(SComponentModel));
+                    var manager = components.GetService<IBraceCompletionManagerFactory>().TryGetBraceCompletionManager(editor.View);
+                    File.WriteAllText(Path.Combine(Environment.GetEnvironmentVariable("VAS_TEST_RESULTS"), "brace-editor-options.txt"),
+                        $"CommandRoute=SUIHostCommandDispatcher\r\nBraceCompletionEnabled={editor.View.Options.GetOptionValue<bool>(option)}\r\nManagerEnabled={manager?.Enabled.ToString() ?? "missing"}\r\nContentType={editor.View.TextBuffer.ContentType.TypeName}");
+                    editor.End();
+                    editor.Type('{');
+                    Assert.Equal(original + "{}", editor.Text);
+                    Assert.Equal(editor.Text.Length - 1, editor.View.Caret.Position.BufferPosition.Position);
+                    editor.Dte.ExecuteCommand("Edit.Undo");
+                    Assert.Equal(original, editor.Text);
+                    editor.Type('(');
+                    Assert.Equal(original + "()", editor.Text);
+                    editor.Type(')');
+                    Assert.Equal(original + "()", editor.Text);
+                }
+                finally { editor.View.Options.SetOptionValue(option, previous); }
             }
         }
 
@@ -133,17 +157,22 @@ namespace VerseAngelScript.VisualStudio.Tests
             using (var editor = Open(WriteFixture("indent.vas", text)))
             {
                 await AssertClassificationAsync(editor, "void", "keyword");
-                editor.View.Options.SetOptionValue(DefaultOptions.ConvertTabsToSpacesOptionId, true);
                 editor.View.Options.SetOptionValue(DefaultOptions.IndentSizeOptionId, 4);
                 editor.End();
                 editor.Command(VSConstants.VSStd2KCmdID.RETURN);
                 // VS can represent automatic indentation as virtual space until typing.
                 var virtualPoint = editor.View.Caret.Position.VirtualBufferPosition;
                 var line = virtualPoint.Position.GetContainingLine();
-                var indent = virtualPoint.Position.Position - line.Start.Position + virtualPoint.VirtualSpaces;
-                Assert.Equal(4, indent);
+                var tabSize = editor.View.Options.GetOptionValue(DefaultOptions.TabSizeOptionId);
+                var prefix = line.GetText().Substring(0, virtualPoint.Position.Position - line.Start.Position);
+                Assert.Equal(4, IndentationColumns(prefix, tabSize) + virtualPoint.VirtualSpaces);
                 editor.Type('x');
-                Assert.Equal(text + "\r\n    x", editor.Text);
+                var snapshot = editor.View.TextBuffer.CurrentSnapshot;
+                Assert.Equal(2, snapshot.LineCount);
+                Assert.Equal(text, snapshot.GetLineFromLineNumber(0).GetText());
+                var typedLine = snapshot.GetLineFromLineNumber(1).GetText();
+                Assert.Equal("x", typedLine.TrimStart(' ', '\t'));
+                Assert.Equal(4, IndentationColumns(typedLine.Substring(0, typedLine.Length - 1), tabSize));
                 editor.Dte.ExecuteCommand("Edit.Undo");
                 // Undo may combine typing with the newline; restore using real undo only.
                 for (var i = 0; i < 3 && editor.Text != text; i++)
@@ -199,6 +228,18 @@ namespace VerseAngelScript.VisualStudio.Tests
             string GetActivityLogBuffer();
         }
 
+        private static int IndentationColumns(string whitespace, int tabSize)
+        {
+            Assert.True(tabSize > 0);
+            var columns = 0;
+            foreach (var character in whitespace)
+            {
+                Assert.True(character == ' ' || character == '\t', "Indentation must contain whitespace only.");
+                columns = character == '\t' ? columns + tabSize - columns % tabSize : columns + 1;
+            }
+            return columns;
+        }
+
         private static string WriteFixture(string name, string text)
         {
             var root = Environment.GetEnvironmentVariable("VAS_TEST_WORKSPACE");
@@ -220,7 +261,7 @@ namespace VerseAngelScript.VisualStudio.Tests
             var components = (IComponentModel)Package.GetGlobalService(typeof(SComponentModel));
             var view = components.GetService<IVsEditorAdaptersFactoryService>().GetWpfTextView(nativeView);
             Assert.NotNull(view);
-            return new Editor(dte, window, nativeView, view, components.GetService<IClassifierAggregatorService>().GetClassifier(view.TextBuffer));
+            return new Editor(dte, window, view, components.GetService<IClassifierAggregatorService>().GetClassifier(view.TextBuffer));
         }
 
         private static async Task AssertClassificationAsync(Editor editor, string token, string classification)
@@ -248,12 +289,14 @@ namespace VerseAngelScript.VisualStudio.Tests
             private readonly IClassifier classifier;
             public string Text => View.TextBuffer.CurrentSnapshot.GetText();
 
-            public Editor(DTE dte, Window window, IVsTextView nativeView, IWpfTextView view, IClassifier classifier)
+            public Editor(DTE dte, Window window, IWpfTextView view, IClassifier classifier)
             {
                 ThreadHelper.ThrowIfNotOnUIThread();
                 Dte = dte;
                 this.window = window;
-                commands = (IOleCommandTarget)nativeView;
+                // Use the full IDE command route, as Microsoft's VS18 harness does.
+                // The native view's terminal command target can bypass editor handlers.
+                commands = (IOleCommandTarget)Package.GetGlobalService(typeof(SUIHostCommandDispatcher));
                 View = view;
                 this.classifier = classifier;
             }
@@ -278,6 +321,7 @@ namespace VerseAngelScript.VisualStudio.Tests
             public void Command(VSConstants.VSStd2KCmdID command)
             {
                 ThreadHelper.ThrowIfNotOnUIThread();
+                window.Activate();
                 var group = VSConstants.VSStd2K;
                 ErrorHandler.ThrowOnFailure(commands.Exec(ref group, (uint)command, 0, IntPtr.Zero, IntPtr.Zero));
             }
@@ -285,6 +329,7 @@ namespace VerseAngelScript.VisualStudio.Tests
             public void Type(char character)
             {
                 ThreadHelper.ThrowIfNotOnUIThread();
+                window.Activate();
                 var input = Marshal.AllocCoTaskMem(32);
                 try
                 {

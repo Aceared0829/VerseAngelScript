@@ -5,7 +5,7 @@ It uses Visual Studio's built-in TextMate and Language Configuration engines for
 
 - Syntax colors, including multiline triple-quoted strings and non-nesting comments
 - Comment/uncomment commands
-- Automatic bracket pairs, indentation and ordinary editor undo
+- Automatic bracket pairs when enabled in Visual Studio, indentation and ordinary editor undo
 
 This is basic editing support. It does not provide semantic completion, navigation,
 compiler diagnostics, building, debugging, SDK generation or Unreal integration.
@@ -31,7 +31,9 @@ experimental root's settings; do not use that root for personal development.
 The native suite covers classifications, Unicode/space paths, close/reopen,
 triple-quoted strings, non-nesting comments, comment/uncomment and undo, bracket
 pairing, newline indentation and `.cpp`/`.as` isolation. Commands go through the
-real editor command chain. Direct buffer changes are not used to simulate command
+real editor command chain. Brace completion is tested with the editor preference
+both disabled and enabled, then restored. Indentation checks visual columns with
+the editor's tab width, honoring either tabs or spaces. Direct buffer changes are not used to simulate command
 success. Missing, skipped, empty or failing host results fail the script.
 
 `TestResults/VS2026.trx`, the selected instance and isolated ActivityLogs are kept as
