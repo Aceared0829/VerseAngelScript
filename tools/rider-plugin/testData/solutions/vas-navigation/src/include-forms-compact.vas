@@ -1,0 +1,2 @@
+#include"include-forms-api.vas"
+void CompactInclude() { /*include-compact-use*/IncludeStable(); }

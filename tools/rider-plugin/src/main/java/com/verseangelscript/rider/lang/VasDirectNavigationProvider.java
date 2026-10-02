@@ -31,6 +31,6 @@ public final class VasDirectNavigationProvider implements DirectNavigationProvid
             return null;
         }
         List<PsiElement> declarations = VasSymbolResolver.findDeclarations(element);
-        return declarations.isEmpty() ? null : declarations.get(0);
+        return declarations.size() == 1 ? declarations.get(0) : null;
     }
 }

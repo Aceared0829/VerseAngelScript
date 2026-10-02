@@ -53,9 +53,6 @@ public final class VasGotoDeclarationHandler implements GotoDeclarationHandler {
         if (targets.isEmpty() && elementType == VasTypes.IDENTIFIER) {
             targets.addAll(VasSymbolResolver.findDeclarations(navigationElement));
         }
-        if (targets.isEmpty()) {
-            targets.addAll(VasSymbolResolver.findImplementations(navigationElement));
-        }
         return targets.isEmpty() ? null : targets.toArray(PsiElement.EMPTY_ARRAY);
     }
 

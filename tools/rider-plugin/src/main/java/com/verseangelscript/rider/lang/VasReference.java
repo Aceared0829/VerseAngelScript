@@ -29,6 +29,14 @@ public final class VasReference extends PsiPolyVariantReferenceBase<PsiElement> 
     }
 
     @Override
+    public boolean isReferenceTo(@NotNull PsiElement element) {
+        // PsiPolyVariantReferenceBase may treat every ambiguous candidate as a usage.
+        // ReferencesSearch feeds Find Usages, Code Vision and rename: require one target.
+        PsiElement resolved = resolve();
+        return resolved != null && resolved.getManager().areElementsEquivalent(resolved, element);
+    }
+
+    @Override
     public @NotNull PsiElement handleElementRename(@NotNull String newElementName) {
         if (myElement instanceof PsiNamedElement namedElement) {
             return namedElement.setName(newElementName);
