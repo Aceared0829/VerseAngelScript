@@ -78,6 +78,23 @@ if(MINGW)
 endif()
 
 if(BUILD_TESTING)
+	# Parse each physical JSONL record independently with CMake's JSON parser.
+	# This keeps conformance tests native on MSVC, MinGW, Linux and macOS.
+	set(VAS_JSONL_CASES arguments diagnostics includes paths io)
+	if(UNIX)
+		list(APPEND VAS_JSONL_CASES invalid_utf8)
+	endif()
+	foreach(case IN LISTS VAS_JSONL_CASES)
+		add_test(
+			NAME vasbuild_jsonl_${case}
+			COMMAND ${CMAKE_COMMAND}
+				"-DVASBUILD=$<TARGET_FILE:vasbuild>"
+				"-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/jsonl-${case}"
+				-P "${CMAKE_CURRENT_SOURCE_DIR}/tests/vasbuild/assert_jsonl_${case}.cmake"
+		)
+		set_tests_properties(vasbuild_jsonl_${case} PROPERTIES TIMEOUT 60)
+	endforeach()
+
 	if(WIN32)
 		add_executable(vas_windows_arguments_test tests/vasbuild/test_windows_arguments.cpp)
 		vas_enable_cxx23(vas_windows_arguments_test)
