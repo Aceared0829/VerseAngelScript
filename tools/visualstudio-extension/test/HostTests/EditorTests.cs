@@ -138,8 +138,21 @@ namespace VerseAngelScript.VisualStudio.Tests
                     editor.Type('{');
                     Assert.Equal(original + "{}", editor.Text);
                     Assert.Equal(editor.Text.Length - 1, editor.View.Caret.Position.BufferPosition.Position);
+                    // Default brace completion commits its closing character in a
+                    // separate transaction after typing (BraceCompletionDefaultSession.Start).
+                    editor.Dte.ExecuteCommand("Edit.Undo");
+                    Assert.Equal(original + "{", editor.Text);
                     editor.Dte.ExecuteCommand("Edit.Undo");
                     Assert.Equal(original, editor.Text);
+                    editor.Dte.ExecuteCommand("Edit.Redo");
+                    Assert.Equal(original + "{", editor.Text);
+                    editor.Dte.ExecuteCommand("Edit.Redo");
+                    Assert.Equal(original + "{}", editor.Text);
+                    editor.Dte.ExecuteCommand("Edit.Undo");
+                    Assert.Equal(original + "{", editor.Text);
+                    editor.Dte.ExecuteCommand("Edit.Undo");
+                    Assert.Equal(original, editor.Text);
+                    editor.End();
                     editor.Type('(');
                     Assert.Equal(original + "()", editor.Text);
                     editor.Type(')');
