@@ -261,6 +261,41 @@ public final class VasSymbolSelectionTest {
             + "void run(B@ &in object) { object./*use*/field; }").container());
     }
 
+    @Test
+    public void constHandleParametersAndLocalsRetainTheirOwner() {
+        String declarations = "class A { int field; } class B { int field; } A object; ";
+        for (String type : List.of("B@const", "const B@const", "B@const &in", "const B@const &in")) {
+            assertEquals(type, "B", only(declarations
+                + "void run(" + type + " object) { object./*use*/field; }").container());
+        }
+        for (String type : List.of("B@const", "const B@const")) {
+            assertEquals(type, "B", only(declarations
+                + "void run() { " + type + " object = B(); object./*use*/field; }").container());
+        }
+        assertEquals("N::B", only("class A { int field; } namespace N { class B { int field; } } A object; "
+            + "void run(N::B@const object) { object./*use*/field; }").container());
+        assertTrue(select(declarations
+            + "void run(array<int>@const object) { object./*use*/field; }").isEmpty());
+    }
+
+    @Test
+    public void lifecycleLocalsAndParametersDoNotLeakIntoOtherMethods() {
+        for (String lifecycle : List.of("C() { int value; }", "~C() { int value; }", "C(int value) {}")) {
+            VasSymbol target = only("int value; class C { " + lifecycle + " void run() { /*use*/value; } }");
+            assertEquals(lifecycle, "", target.container());
+            assertEquals(lifecycle, 4, target.offset());
+        }
+    }
+
+    @Test
+    public void lifecycleLocalsAndParametersStillResolveInsideTheirBodies() {
+        assertEquals(false, only("int value; class C { C(int value) { /*use*/value; } }").isProjectVisible());
+        assertEquals(false, only("int value; class C { C() { int value; /*use*/value; } }").isProjectVisible());
+        assertEquals(false, only("int value; class C { ~C() { int value; /*use*/value; } }").isProjectVisible());
+        assertEquals("B", only("class A { int field; } class B { int field; } A object; "
+            + "class C { C(B@const object) { object./*use*/field; } }").container());
+    }
+
     private static VasSymbol only(String source) {
         List<VasSymbol> targets = select(source);
         assertEquals(targets.toString(), 1, targets.size());

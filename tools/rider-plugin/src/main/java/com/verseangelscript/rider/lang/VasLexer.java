@@ -130,7 +130,8 @@ public final class VasLexer extends LexerBase {
             return;
         }
 
-        if (Character.isDigit(current)) {
+        if (isDigitInRadix(current, 10) || current == '.' && tokenStart + 1 < endOffset
+            && isDigitInRadix(buffer.charAt(tokenStart + 1), 10)) {
             locateNumber();
             return;
         }
@@ -175,41 +176,62 @@ public final class VasLexer extends LexerBase {
 
     private void locateNumber() {
         tokenEnd = tokenStart;
-        if (buffer.charAt(tokenStart) == '0' && tokenStart + 1 < endOffset
-            && (buffer.charAt(tokenStart + 1) == 'x' || buffer.charAt(tokenStart + 1) == 'X')) {
+        int radix = 0;
+        if (buffer.charAt(tokenStart) == '0' && tokenStart + 1 < endOffset) {
+            radix = switch (buffer.charAt(tokenStart + 1)) {
+                case 'b', 'B' -> 2;
+                case 'o', 'O' -> 8;
+                case 'd', 'D' -> 10;
+                case 'x', 'X' -> 16;
+                default -> 0;
+            };
+        }
+        if (radix != 0) {
             tokenEnd += 2;
-            while (tokenEnd < endOffset && (Character.digit(buffer.charAt(tokenEnd), 16) >= 0
-                || buffer.charAt(tokenEnd) == '_')) {
-                tokenEnd++;
-            }
+            consumeDigits(radix);
         } else {
-            consumeDecimalDigits();
+            consumeDigits(10);
+            boolean floatingPoint = false;
             if (tokenEnd < endOffset && buffer.charAt(tokenEnd) == '.') {
+                floatingPoint = true;
                 tokenEnd++;
-                consumeDecimalDigits();
+                consumeDigits(10);
             }
             if (tokenEnd < endOffset && (buffer.charAt(tokenEnd) == 'e' || buffer.charAt(tokenEnd) == 'E')) {
-                int exponent = tokenEnd + 1;
-                if (exponent < endOffset && (buffer.charAt(exponent) == '+' || buffer.charAt(exponent) == '-')) {
-                    exponent++;
+                floatingPoint = true;
+                tokenEnd++;
+                if (tokenEnd < endOffset && (buffer.charAt(tokenEnd) == '+' || buffer.charAt(tokenEnd) == '-')) {
+                    tokenEnd++;
                 }
-                if (exponent < endOffset && Character.isDigit(buffer.charAt(exponent))) {
-                    tokenEnd = exponent;
-                    consumeDecimalDigits();
-                }
+                consumeDigits(10);
             }
-            if (tokenEnd < endOffset && (buffer.charAt(tokenEnd) == 'f' || buffer.charAt(tokenEnd) == 'F')
-                && (tokenEnd + 1 == endOffset || !Character.isJavaIdentifierPart(buffer.charAt(tokenEnd + 1)))) {
+            if (floatingPoint && tokenEnd < endOffset
+                && (buffer.charAt(tokenEnd) == 'f' || buffer.charAt(tokenEnd) == 'F')) {
                 tokenEnd++;
             }
         }
         tokenType = VasTypes.NUMBER;
     }
 
-    private void consumeDecimalDigits() {
-        while (tokenEnd < endOffset && (Character.isDigit(buffer.charAt(tokenEnd)) || buffer.charAt(tokenEnd) == '_')) {
+    private void consumeDigits(int radix) {
+        // Match the compiler's based/decimal literal grammar. An apostrophe is a
+        // separator only between two digits in the same radix, never a string start.
+        while (tokenEnd < endOffset) {
+            char value = buffer.charAt(tokenEnd);
+            if (!isDigitInRadix(value, radix) && !(value == '\'' && tokenEnd > tokenStart
+                && tokenEnd + 1 < endOffset && isDigitInRadix(buffer.charAt(tokenEnd - 1), radix)
+                && isDigitInRadix(buffer.charAt(tokenEnd + 1), radix))) {
+                break;
+            }
             tokenEnd++;
         }
+    }
+
+    private static boolean isDigitInRadix(char value, int radix) {
+        int digit = value >= '0' && value <= '9' ? value - '0'
+            : value >= 'a' && value <= 'f' ? value - 'a' + 10
+            : value >= 'A' && value <= 'F' ? value - 'A' + 10 : -1;
+        return digit >= 0 && digit < radix;
     }
 
     private static boolean isIdentifierStart(char value) {

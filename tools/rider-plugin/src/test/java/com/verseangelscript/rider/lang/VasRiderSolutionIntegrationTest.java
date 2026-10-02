@@ -18,10 +18,12 @@ import com.intellij.psi.PsiNamedElement;
 import com.intellij.psi.PsiReference;
 import com.intellij.psi.PsiReferenceService;
 import com.intellij.psi.search.LocalSearchScope;
+import com.intellij.psi.search.GlobalSearchScope;
 import com.intellij.psi.search.searches.ReferencesSearch;
 import com.intellij.refactoring.rename.RenameProcessor;
 import com.intellij.refactoring.rename.RenameUtil;
 import com.intellij.util.IncorrectOperationException;
+import com.intellij.util.indexing.FileBasedIndex;
 import com.jetbrains.rider.test.annotations.Solution;
 import com.jetbrains.rider.test.annotations.TestSettings;
 import com.jetbrains.rider.test.enums.BuildTool;
@@ -30,6 +32,7 @@ import com.jetbrains.rider.test.enums.sdk.SdkVersion;
 import com.jetbrains.rider.test.junit5.base.PerTestSolutionTestBase;
 import com.verseangelscript.rider.VasFileType;
 import com.verseangelscript.rider.index.VasSymbolResolver;
+import com.verseangelscript.rider.index.VasSymbolIndex;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Tag;
 
@@ -193,6 +196,8 @@ public final class VasRiderSolutionIntegrationTest extends PerTestSolutionTestBa
             DumbService.getInstance(project).completeJustSubmittedTasks();
             PsiFile source = fixture(project, sourceDirectory, "rename-lifecycle.vas");
             PsiFile api = fixture(project, sourceDirectory, "rename-lifecycle-api.vas");
+            assertProjectIndexedFile(project, source, "RenameLifecycle");
+            assertProjectIndexedFile(project, api, "StableRename");
             PsiDocumentManager documents = PsiDocumentManager.getInstance(project);
             assertNotNull(documents.getDocument(source));
             assertNotNull(documents.getDocument(api));
@@ -254,6 +259,65 @@ public final class VasRiderSolutionIntegrationTest extends PerTestSolutionTestBa
             assertActualUsageOffsets(markedIdentifier(api, "rename-function-declaration"), source,
                 "rename-first-use", "rename-second-use");
         });
+    }
+
+    @Test
+    @Tag("season/vas")
+    void nativeLiteralsAndLifecycleScopesCannotBecomeFalseRenameUsages() {
+        Project project = getSolutionApiFacade().getProject();
+        Path sourceDirectory = getSolutionApiFacade().getActiveSolutionDirectory().resolve("src");
+        runOnEdtWithWriteIntent(() -> {
+            DumbService.getInstance(project).completeJustSubmittedTasks();
+            PsiFile source = fixture(project, sourceDirectory, "safety-lexical.vas");
+            assertProjectIndexedFile(project, source, "NativeNumbers");
+            PsiDocumentManager documents = PsiDocumentManager.getInstance(project);
+            assertNotNull(documents.getDocument(source));
+            documents.commitAllDocuments();
+
+            for (String literal : List.of("0b101", "0o123", "0d123", "1'000", "1.2e-1'0")) {
+                PsiElement number = source.findElementAt(source.getText().indexOf(literal) + 1);
+                assertNotNull(number, literal);
+                assertEquals(VasTypes.NUMBER, number.getNode().getElementType(), literal);
+                assertTrue(PsiReferenceService.getService()
+                    .getReferences(number, PsiReferenceService.Hints.NO_HINTS).isEmpty(), literal);
+                assertNull(new VasDirectNavigationProvider().getNavigationElement(number), literal);
+            }
+            assertActualUsageOffsets(markedIdentifier(source, "numeric-local-declaration"), source,
+                "numeric-integer-use", "numeric-fraction-use", "numeric-exponent-use", "numeric-dot-use");
+            assertActualUsageOffsets(markedIdentifier(source, "literal-name-declaration"), source, "literal-name-use");
+            assertActualUsageOffsets(markedIdentifier(source, "octal-name-declaration"), source);
+            assertActualUsageOffsets(markedIdentifier(source, "decimal-name-declaration"), source);
+            assertActualUsageOffsets(markedIdentifier(source, "lifecycle-global-declaration"), source, "lifecycle-global-use");
+            assertActualUsageOffsets(markedIdentifier(source, "constructor-parameter-declaration"), source, "constructor-parameter-use");
+            assertActualUsageOffsets(markedIdentifier(source, "constructor-local-declaration"), source, "constructor-local-use");
+            assertActualUsageOffsets(markedIdentifier(source, "destructor-local-declaration"), source, "destructor-local-use");
+            assertActualUsageOffsets(markedIdentifier(source, "handle-parameter-declaration"), source, "handle-parameter-use");
+            assertActualUsageOffsets(markedIdentifier(source, "handle-local-declaration"), source, "handle-local-use");
+            assertResolvesTo(source, "handle-parameter-field-use", source, "handle-b-field");
+            assertResolvesTo(source, "handle-local-field-use", source, "handle-b-field");
+            assertRenameAllowed(markedIdentifier(source, "lifecycle-global-declaration"), "LifecycleGlobalRenamed");
+            assertRenameAllowed(markedIdentifier(source, "constructor-local-declaration"), "ConstructorLocalRenamed");
+
+            String before = source.getText();
+            renameProcessor(project, markedIdentifier(source, "literal-name-declaration"), "BitsVariableRenamed").run();
+            documents.commitAllDocuments();
+            assertEquals(before.replace("/*literal-name-declaration*/b101", "/*literal-name-declaration*/BitsVariableRenamed")
+                .replace("/*literal-name-use*/b101", "/*literal-name-use*/BitsVariableRenamed"), source.getText(),
+                "rename must leave native based literals and their identifier-like suffixes untouched");
+            UndoManager undo = UndoManager.getInstance(project);
+            assertTrue(undo.isUndoAvailable(null));
+            undo.undo(null);
+            documents.commitAllDocuments();
+            assertEquals(before, source.getText());
+        });
+    }
+
+    private static void assertProjectIndexedFile(Project project, PsiFile file, String symbol) {
+        GlobalSearchScope scope = GlobalSearchScope.projectScope(project);
+        assertTrue(scope.contains(file.getVirtualFile()),
+            "Rider fixture content roots must include " + file.getName() + " in the default rename project scope");
+        assertTrue(FileBasedIndex.getInstance().getContainingFiles(VasSymbolIndex.NAME, symbol, scope)
+            .contains(file.getVirtualFile()), "Rider must index " + file.getName() + " before reference search and mutation");
     }
 
     private static RenameProcessor renameProcessor(Project project, PsiElement target, String newName) {

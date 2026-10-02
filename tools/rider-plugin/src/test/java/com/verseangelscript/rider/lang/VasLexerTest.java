@@ -75,6 +75,36 @@ public final class VasLexerTest {
     }
 
     @Test
+    public void nativeBasedLiteralsAndDigitSeparatorsStayWhole() {
+        for (String literal : List.of("0b101", "0B1'01", "0o123", "0O1'23", "0d123", "0D1'23",
+            "0xA'FF", "0XfF", "1'000", "1'000.2'5", "1.2e-1'0", ".5", ".5F")) {
+            String source = literal + "+value";
+            VasLexer lexer = new VasLexer();
+            lexer.start(source);
+            assertSame(source, VasTypes.NUMBER, lexer.getTokenType());
+            assertEquals(source, literal.length(), lexer.getTokenEnd());
+            lexer.advance();
+            assertSame(source, VasTypes.OPERATOR, lexer.getTokenType());
+            assertEquals(source, literal.length() + 1, lexer.getTokenEnd());
+            lexer.advance();
+            assertSame(source, VasTypes.IDENTIFIER, lexer.getTokenType());
+            assertEquals(source, "value", source.substring(lexer.getTokenStart(), lexer.getTokenEnd()));
+        }
+    }
+
+    @Test
+    public void radixSeparatorsRequireDigitsOnBothSides() {
+        for (String source : List.of("1'text'", "0b1'2'", "0o7'8'", "0xF'G'")) {
+            VasLexer lexer = new VasLexer();
+            lexer.start(source);
+            assertSame(source, VasTypes.NUMBER, lexer.getTokenType());
+            assertEquals(source, source.indexOf('\''), lexer.getTokenEnd());
+            lexer.advance();
+            assertSame(source, VasTypes.STRING, lexer.getTokenType());
+        }
+    }
+
+    @Test
     public void dollarIsNotAnIdentifierButUnicodeSourceRemainsReadable() {
         VasLexer lexer = new VasLexer();
         lexer.start("$renamed");

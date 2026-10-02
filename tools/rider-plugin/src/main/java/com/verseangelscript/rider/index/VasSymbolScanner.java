@@ -35,7 +35,8 @@ public final class VasSymbolScanner {
         List<VasSymbol> symbols = new ArrayList<>();
         Set<Integer> declarationOffsets = new HashSet<>();
         Map<Integer, Integer> matchingBraces = matchingBraces(tokens);
-        Set<Integer> functionBodies = functionBodies(tokens);
+        Set<Integer> lifecycleNames = lifecycleNames(tokens);
+        Set<Integer> functionBodies = functionBodies(tokens, lifecycleNames);
         Map<Integer, String> containerScopes = containerScopes(tokens);
         Deque<Integer> braceStack = new ArrayDeque<>();
 
@@ -117,7 +118,7 @@ public final class VasSymbolScanner {
                         List.of()
                     );
                 } else if (looksLikeVariableDeclaration(tokens, index)) {
-                    Scope parameterScope = parameterScope(tokens, index, matchingBraces);
+                    Scope parameterScope = parameterScope(tokens, index, matchingBraces, lifecycleNames);
                     Scope controlScope = controlVariableScope(tokens, index, matchingBraces);
                     Scope enclosingScope = parameterScope != null ? parameterScope
                         : controlScope != null ? controlScope : enclosingScope(tokens, braceStack, matchingBraces);
@@ -157,22 +158,37 @@ public final class VasSymbolScanner {
             return false;
         }
         List<Token> tokens = tokenize(source);
-        int body = -1;
-        boolean afterName = false;
         for (int index = 0; index < tokens.size(); index++) {
-            Token token = tokens.get(index);
-            if (token.start() == classSymbol.offset()) {
-                afterName = true;
-            } else if (afterName && ";".equals(token.text())) {
-                return false;
-            } else if (afterName && token.type() == VasTypes.LBRACE) {
-                body = index;
-                break;
+            if (tokens.get(index).start() == classSymbol.offset()) {
+                return !lifecycleNames(tokens, index).isEmpty();
             }
         }
-        if (body < 0) {
-            return false;
+        return false;
+    }
+
+    private static Set<Integer> lifecycleNames(List<Token> tokens) {
+        Set<Integer> names = new HashSet<>();
+        for (int index = 0; index < tokens.size(); index++) {
+            if ("class".equals(tokens.get(index).text())) {
+                int nameIndex = nextIdentifier(tokens, index + 1);
+                if (nameIndex >= 0) {
+                    names.addAll(lifecycleNames(tokens, nameIndex));
+                }
+            }
         }
+        return names;
+    }
+
+    private static Set<Integer> lifecycleNames(List<Token> tokens, int classNameIndex) {
+        Set<Integer> names = new HashSet<>();
+        int body = classNameIndex + 1;
+        while (body < tokens.size() && tokens.get(body).type() != VasTypes.LBRACE) {
+            if (";".equals(tokens.get(body).text())) {
+                return names;
+            }
+            body++;
+        }
+        String className = tokens.get(classNameIndex).text();
         int depth = 0;
         for (int index = body + 1; index < tokens.size(); index++) {
             Token token = tokens.get(index);
@@ -184,7 +200,7 @@ public final class VasSymbolScanner {
             } else if (token.type() == VasTypes.LBRACE) {
                 depth++;
             } else if (depth == 0 && token.type() == VasTypes.IDENTIFIER
-                && token.text().equals(classSymbol.name()) && tokenAt(tokens, index + 1) != null
+                && token.text().equals(className) && tokenAt(tokens, index + 1) != null
                 && tokens.get(index + 1).type() == VasTypes.LPAREN) {
                 int prefix = index - 1;
                 if ("~".equals(tokens.get(prefix).text())) {
@@ -197,11 +213,11 @@ public final class VasSymbolScanner {
                 Token previous = tokens.get(prefix);
                 if (previous.type() == VasTypes.LBRACE || previous.type() == VasTypes.RBRACE
                     || ";".equals(previous.text())) {
-                    return true;
+                    names.add(index);
                 }
             }
         }
-        return false;
+        return names;
     }
 
     public static @NotNull VasUsageContext usageContext(
@@ -350,37 +366,23 @@ public final class VasSymbolScanner {
         if (",".equals(previous.text())) {
             return previousDeclarator(tokens, nameIndex) >= 0;
         }
-        if (">".equals(previous.text()) || previous.type() == VasTypes.RBRACKET) {
-            return hasUnsupportedTypeSuffix(tokens, nameIndex);
-        }
+        int typeIndex = nameIndex - 1;
         if (Set.of("in", "out", "inout").contains(previous.text())) {
-            Token reference = tokenAt(tokens, nameIndex - 2);
+            Token reference = tokenAt(tokens, typeIndex - 1);
             if (reference == null || !"&".equals(reference.text())) {
                 return false;
             }
-            int typeIndex = nameIndex - 3;
-            while (typeIndex >= 0 && Set.of("@", "const").contains(tokens.get(typeIndex).text())) {
-                typeIndex--;
-            }
-            Token type = tokenAt(tokens, typeIndex);
-            return type != null && (type.type() == VasTypes.IDENTIFIER
-                || type.type() == VasTypes.KEYWORD && BUILTIN_TYPES.contains(type.text())
-                || hasUnsupportedTypeSuffix(tokens, typeIndex + 1));
+            typeIndex -= 2;
         }
-        if (previous.type() == VasTypes.KEYWORD) {
-            return BUILTIN_TYPES.contains(previous.text());
+        // Handle constness belongs to the type suffix: B@const object and
+        // const B@const &in object must both shadow an outer variable.
+        while (typeIndex >= 0 && Set.of("@", "&", "const").contains(tokens.get(typeIndex).text())) {
+            typeIndex--;
         }
-        if (previous.type() == VasTypes.IDENTIFIER) {
-            return true;
-        }
-        if (previous.type() == VasTypes.OPERATOR
-            && (previous.text().contains("@") || previous.text().contains("&"))) {
-            Token type = tokenAt(tokens, nameIndex - 2);
-            return type != null
-                && (type.type() == VasTypes.IDENTIFIER
-                    || (type.type() == VasTypes.KEYWORD && BUILTIN_TYPES.contains(type.text())));
-        }
-        return false;
+        Token type = tokenAt(tokens, typeIndex);
+        return type != null && (type.type() == VasTypes.IDENTIFIER
+            || type.type() == VasTypes.KEYWORD && BUILTIN_TYPES.contains(type.text())
+            || hasUnsupportedTypeSuffix(tokens, typeIndex + 1));
     }
 
     private static boolean hasUnsupportedTypeSuffix(List<Token> tokens, int nameIndex) {
@@ -460,13 +462,13 @@ public final class VasSymbolScanner {
         return pairs;
     }
 
-    private static Set<Integer> functionBodies(List<Token> tokens) {
+    private static Set<Integer> functionBodies(List<Token> tokens, Set<Integer> lifecycleNames) {
         Set<Integer> bodies = new HashSet<>();
         for (int index = 0; index < tokens.size(); index++) {
             if (tokens.get(index).type() == VasTypes.IDENTIFIER
                 && tokenAt(tokens, index + 1) != null
                 && tokenAt(tokens, index + 1).type() == VasTypes.LPAREN
-                && looksLikeFunctionDeclaration(tokens, index)) {
+                && (looksLikeFunctionDeclaration(tokens, index) || lifecycleNames.contains(index))) {
                 int bodyIndex = functionBodyIndex(tokens, index);
                 if (bodyIndex >= 0) {
                     bodies.add(bodyIndex);
@@ -748,7 +750,8 @@ public final class VasSymbolScanner {
     private static Scope parameterScope(
         List<Token> tokens,
         int variableIndex,
-        Map<Integer, Integer> matchingBraces
+        Map<Integer, Integer> matchingBraces,
+        Set<Integer> lifecycleNames
     ) {
         int parenthesisDepth = 0;
         int leftParen = -1;
@@ -768,7 +771,7 @@ public final class VasSymbolScanner {
             }
         }
         if (leftParen <= 0 || tokens.get(leftParen - 1).type() != VasTypes.IDENTIFIER
-            || !looksLikeFunctionDeclaration(tokens, leftParen - 1)) {
+            || !(looksLikeFunctionDeclaration(tokens, leftParen - 1) || lifecycleNames.contains(leftParen - 1))) {
             return null;
         }
         int bodyIndex = functionBodyIndex(tokens, leftParen - 1);

@@ -1,0 +1,54 @@
+int /*literal-name-declaration*/b101 = 7;
+int /*octal-name-declaration*/o123 = 8;
+int /*decimal-name-declaration*/d123 = 9;
+int /*lifecycle-global-declaration*/lifecycleValue;
+int scopeParameter;
+
+void NativeNumbers()
+{
+    int /*numeric-local-declaration*/value = 2;
+    int binary = 0b101;
+    int octal = 0o123;
+    int decimal = 0d123;
+    int separatedBits = 0B1'01 + 0O1'23 + 0D1'23 + 0XA'FF;
+    double separated = 1'000+/*numeric-integer-use*/value;
+    double fractional = 1'000.2'5+/*numeric-fraction-use*/value;
+    double exponent = 1.2e-1'0+/*numeric-exponent-use*/value;
+    double leadingDot = .5+/*numeric-dot-use*/value;
+    int named = /*literal-name-use*/b101;
+}
+
+class ConstructorScope
+{
+    ConstructorScope(int /*constructor-parameter-declaration*/scopeParameter)
+    {
+        int /*constructor-local-declaration*/lifecycleValue = /*constructor-parameter-use*/scopeParameter;
+        int copy = /*constructor-local-use*/lifecycleValue;
+    }
+
+    ~ConstructorScope()
+    {
+        int /*destructor-local-declaration*/lifecycleValue = 1;
+        int copy = /*destructor-local-use*/lifecycleValue;
+    }
+
+    void Run()
+    {
+        int copy = /*lifecycle-global-use*/lifecycleValue;
+    }
+}
+
+class HandleA { int /*handle-a-field*/field; }
+class HandleB { int /*handle-b-field*/field; }
+HandleA object;
+
+void ConstHandle(HandleB@const /*handle-parameter-declaration*/object)
+{
+    int copy = /*handle-parameter-use*/object./*handle-parameter-field-use*/field;
+}
+
+void ConstHandleLocal()
+{
+    HandleB@const /*handle-local-declaration*/object = HandleB();
+    int copy = /*handle-local-use*/object./*handle-local-field-use*/field;
+}

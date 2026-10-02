@@ -63,6 +63,17 @@ public final class VasSymbolScannerTest {
     }
 
     @Test
+    public void lifecycleScopesExcludeLocalsAndParametersFromTheProjectIndex() {
+        List<VasSymbol> symbols = VasSymbolScanner.scan("class C { "
+            + "C(int input) { int constructed; } ~C() { int destroyed; } int field; }");
+        for (String name : List.of("input", "constructed", "destroyed")) {
+            assertFalse(name, find(symbols, name).isProjectVisible());
+            assertTrue(name, find(symbols, name).scopeEnd() > find(symbols, name).scopeStart());
+        }
+        assertTrue(find(symbols, "field").isProjectVisible());
+    }
+
+    @Test
     public void distinguishesFunctionDeclarationsFromImplementations() {
         String source = """
             interface Runnable { void Run(); }
