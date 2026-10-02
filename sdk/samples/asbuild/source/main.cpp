@@ -8,7 +8,7 @@
 #include "../../common/vas_console.h"
 #include <stdlib.h>
 #include <sstream>
-#include "../../common/vas_paths.h"
+#include "../../common/vas_scriptbuilder.h"
 #if defined(_MSC_VER)
 #include <crtdbg.h>
 #endif
@@ -236,20 +236,12 @@ int CompileScript(asIScriptEngine *engine, const char *scriptFile)
 	if( !IsVasScriptFile(scriptFile) )
 		return ReportInvalidVasScriptExtension(engine, scriptFile, "entry script");
 
-	CScriptBuilder builder;
+	vas::ScriptBuilder builder;
 	r = builder.StartNewModule(engine, "build");
 	if( r < 0 ) return -1;
 	builder.SetIncludeCallback(VasIncludeCallback, engine);
 
-	// CScriptBuilder expects UTF-8, including its absolute section names. Resolve
-	// native paths here so its legacy narrow current-directory API is not used.
-	string absoluteScript;
-	if( !vas::AbsolutePath(scriptFile, absoluteScript) )
-	{
-		engine->WriteMessage(scriptFile, 0, 0, asMSGTYPE_ERROR, "Failed to resolve script path");
-		return -1;
-	}
-	r = builder.AddSectionFromFile(absoluteScript.c_str());
+	r = builder.AddSectionFromFile(scriptFile);
 	if( r < 0 ) return -1;
 
 	r = builder.BuildModule();
@@ -316,13 +308,8 @@ static int VasIncludeCallback(const char *include, const char *from, CScriptBuil
 	if( !IsVasScriptFile(resolvedInclude.c_str()) )
 		return ReportInvalidVasScriptExtension(engine, resolvedInclude.c_str(), "included script");
 
-	string absoluteInclude;
-	if( !vas::AbsolutePath(resolvedInclude.c_str(), absoluteInclude) )
-	{
-		engine->WriteMessage(resolvedInclude.c_str(), 0, 0, asMSGTYPE_ERROR, "Failed to resolve included script path");
-		return -1;
-	}
-	return builder->AddSectionFromFile(absoluteInclude.c_str());
+	// This callback is only installed on the tool's native-file builder.
+	return static_cast<vas::ScriptBuilder *>(builder)->AddSectionFromFile(resolvedInclude.c_str());
 }
 
 class CBytecodeStream : public asIBinaryStream

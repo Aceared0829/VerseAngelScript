@@ -114,6 +114,25 @@ jobs:
           Pop-Location
         }
 
+  Windows_x86-64_MinGW_UCRT64:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: msys2/setup-msys2@v2
+      with:
+        msystem: UCRT64
+        update: true
+        install: >-
+          mingw-w64-ucrt-x86_64-gcc
+          mingw-w64-ucrt-x86_64-cmake
+          mingw-w64-ucrt-x86_64-ninja
+    - name: build and test VAS with native MinGW Unicode paths
+      shell: msys2 {0}
+      run: |
+        cmake -S . -B out/mingw-unicode -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+        cmake --build out/mingw-unicode --parallel 4
+        ctest --test-dir out/mingw-unicode --output-on-failure
+
   Rider_Plugin:
     runs-on: windows-latest
     steps:

@@ -26,7 +26,7 @@ file(WRITE "${workspace}/${runner}" [=[
 #include "include 文😀/shared 函数😀.vas"
 int main() {
   array<string>@ args = getCommandLineArgs();
-  if (args.length() != 1 || args[0] != "argument 文😀 with spaces") return 21;
+  if (args.length() != 2 || args[0] != "argument 文😀 with spaces" || args[1] != "") return 21;
   file marker;
   if (marker.open("cwd-marker.txt", "r") < 0) return 22;
   if (marker.readLine() != "caller cwd preserved") return 23;
@@ -43,6 +43,17 @@ function(expect_success label)
 		message(FATAL_ERROR "${label} failed (${result})\nstdout:\n${out}\nstderr:\n${err}")
 	endif()
 	set(last_stdout "${out}" PARENT_SCOPE)
+endfunction()
+
+# Spell out the final empty argument: expanding a CMake argument list drops
+# empty elements and would silently stop exercising the CRT boundary.
+function(expect_runner_success label filename)
+	execute_process(COMMAND "${VASRUN}" "${filename}" "argument 文😀 with spaces" ""
+		WORKING_DIRECTORY "${workspace}" RESULT_VARIABLE result
+		OUTPUT_VARIABLE out ERROR_VARIABLE err ENCODING UTF-8 TIMEOUT 20)
+	if(NOT "${result}" STREQUAL "0" OR NOT out MATCHES "Unicode path runner succeeded")
+		message(FATAL_ERROR "${label} failed (${result})\nstdout:\n${out}\nstderr:\n${err}")
+	endif()
 endfunction()
 
 function(expect_failure label expected_path expected_message)
@@ -76,11 +87,39 @@ if(MODE STREQUAL "absolute" OR MODE STREQUAL "relative")
 	if(bytecode_size EQUAL 0)
 		message(FATAL_ERROR "Unicode bytecode output is empty")
 	endif()
-	expect_success("${MODE} Unicode run"
-		"${VASRUN}" "${prefix}${runner}" "argument 文😀 with spaces")
-	if(NOT last_stdout MATCHES "Unicode path runner succeeded")
-		message(FATAL_ERROR "Runner did not execute the script: ${last_stdout}")
-	endif()
+	expect_runner_success("${MODE} Unicode run" "${prefix}${runner}")
+elseif(MODE STREQUAL "loader")
+	# Duplicate lexical aliases plus a mutual include cycle must retain the
+	# builder's include-once semantics and exact absolute section identities.
+	string(ASCII 26 control_z)
+	string(REPEAT "// Padding across the binary read buffer\r\n" 150 source_padding)
+	file(WRITE "${workspace}/${include}"
+		"${source_padding}/* ${control_z} binary Ctrl-Z is not EOF */\r\n#include \"../cycle 根😀.vas\"\r\nint answer() { return 42; }\r\n")
+	file(WRITE "${workspace}/source scripts/cycle 根😀.vas"
+		"#include \"include 文😀/./shared 函数😀.vas\"\n")
+	file(WRITE "${workspace}/source scripts/empty 空😀.vas" "")
+	set(extra_includes "#include \"include 文😀/../include 文😀/shared 函数😀.vas\"\n#include \"./empty 空😀.vas\"\n")
+	file(APPEND "${workspace}/${entry}" "${extra_includes}")
+	file(APPEND "${workspace}/${runner}" "${extra_includes}")
+	expect_success("native loader includes, cycle and binary input"
+		"${VASBUILD}" "${config}" "${entry}" "${output}")
+	expect_runner_success("native loader runner" "${runner}")
+
+	# Empty includes above are valid. An empty entry is read successfully, then
+	# rejected by the engine as an empty module, not mistaken for an I/O failure.
+	expect_failure("empty source section" "source scripts/empty 空😀.vas" "Script failed to build"
+		"${VASBUILD}" "${config}" "source scripts/empty 空😀.vas" "${output}")
+	expect_failure("empty runner section" "source scripts/empty 空😀.vas" "Script failed to build"
+		"${VASRUN}" "source scripts/empty 空😀.vas")
+
+	# CRTs differ on whether opening a directory fails or its first read fails.
+	# Either must produce a source I/O diagnostic, never a successful empty build.
+	set(directory_entry "source scripts/directory 目録😀.vas")
+	file(MAKE_DIRECTORY "${workspace}/${directory_entry}")
+	expect_failure("unreadable source" "${workspace}/${directory_entry}" "script file '"
+		"${VASBUILD}" "${config}" "${directory_entry}" "${output}")
+	expect_failure("unreadable runner source" "${workspace}/${directory_entry}" "script file '"
+		"${VASRUN}" "${directory_entry}")
 elseif(MODE STREQUAL "failures")
 	file(WRITE "${workspace}/${config}" "typedef Broken \"unknown type\"\n")
 	expect_failure("invalid Unicode config" "${config}" "Failed to register typedef"

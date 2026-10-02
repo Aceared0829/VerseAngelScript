@@ -20,7 +20,7 @@
 #include "../../../add_on/scriptsocket/scriptsocket.h"
 // Keep add-on declarations ahead of Windows macros from the native helpers.
 #include "../../common/vas_console.h"
-#include "../../common/vas_paths.h"
+#include "../../common/vas_scriptbuilder.h"
 
 #ifdef _WIN32
 #include <Windows.h> // WriteConsoleW
@@ -371,7 +371,7 @@ int CompileScript(asIScriptEngine *engine, const char *scriptFile)
 	// ready to execute, so disable the automatic initialization
 	engine->SetEngineProperty(asEP_INIT_GLOBAL_VARS_AFTER_BUILD, false);
 
-	CScriptBuilder builder;
+	vas::ScriptBuilder builder;
 
 	// Set the pragma callback so we can detect if the script needs debugging
 	builder.SetPragmaCallback(PragmaCallback, 0);
@@ -381,14 +381,7 @@ int CompileScript(asIScriptEngine *engine, const char *scriptFile)
 	r = builder.StartNewModule(engine, "script");
 	if( r < 0 ) return -1;
 
-	// Resolve using native filesystem APIs before passing UTF-8 to the builder.
-	string absoluteScript;
-	if( !vas::AbsolutePath(scriptFile, absoluteScript) )
-	{
-		engine->WriteMessage(scriptFile, 0, 0, asMSGTYPE_ERROR, "Failed to resolve script path");
-		return -1;
-	}
-	r = builder.AddSectionFromFile(absoluteScript.c_str());
+	r = builder.AddSectionFromFile(scriptFile);
 	if( r < 0 ) return -1;
 
 	r = builder.BuildModule();
@@ -451,13 +444,8 @@ static int VasIncludeCallback(const char *include, const char *from, CScriptBuil
 	if( !IsVasScriptFile(resolvedInclude.c_str()) )
 		return ReportInvalidVasScriptExtension(engine, resolvedInclude.c_str(), "included script");
 
-	string absoluteInclude;
-	if( !vas::AbsolutePath(resolvedInclude.c_str(), absoluteInclude) )
-	{
-		engine->WriteMessage(resolvedInclude.c_str(), 0, 0, asMSGTYPE_ERROR, "Failed to resolve included script path");
-		return -1;
-	}
-	return builder->AddSectionFromFile(absoluteInclude.c_str());
+	// This callback is only installed on the tool's native-file builder.
+	return static_cast<vas::ScriptBuilder *>(builder)->AddSectionFromFile(resolvedInclude.c_str());
 }
 
 // Execute the script by calling the main() function

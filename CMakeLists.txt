@@ -60,6 +60,10 @@ add_executable(vasrun
 )
 
 target_link_libraries(vasrun PRIVATE angelscript)
+if(WIN32)
+	# MinGW does not process the socket add-on's MSVC pragma comment(lib).
+	target_link_libraries(vasrun PRIVATE ws2_32)
+endif()
 
 vas_enable_cxx23(vasrun)
 
@@ -74,8 +78,17 @@ if(MINGW)
 endif()
 
 if(BUILD_TESTING)
+	if(WIN32)
+		add_executable(vas_windows_arguments_test tests/vasbuild/test_windows_arguments.cpp)
+		vas_enable_cxx23(vas_windows_arguments_test)
+		if(MSVC)
+			target_compile_options(vas_windows_arguments_test PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/EHsc>")
+		endif()
+		add_test(NAME vas_windows_arguments COMMAND vas_windows_arguments_test)
+	endif()
+
 	# The same tests run in the MSVC job and each native VS Code CI matrix job.
-	foreach(mode absolute relative failures)
+	foreach(mode absolute relative failures loader)
 		add_test(
 			NAME vas_tools_unicode_${mode}
 			COMMAND ${CMAKE_COMMAND}
