@@ -4,6 +4,7 @@
 #include <vector>
 #include <stdlib.h>  // system()
 #include <stdio.h>
+#include "../../common/vas_console.h"
 
 #if defined(_MSC_VER) && !defined(_WIN32_WCE) && !defined(__S3E__)
 #include <direct.h>  // _chdir()
@@ -194,8 +195,7 @@ void MessageCallback(const asSMessageInfo *msg, void *param)
 		type = "INFO";
 
 	FILE *stream = msg->type == asMSGTYPE_INFORMATION ? stdout : stderr;
-	fprintf(stream, "%s (%d, %d) : %s : %s\n", msg->section, msg->row, msg->col, type, msg->message);
-	fflush(stream);
+	vas::WriteDiagnostic(stream, msg->section, msg->row, msg->col, type, msg->message);
 }
 
 // This function will register the application interface
