@@ -63,6 +63,8 @@ VAS 源码 ──实时解析──► 语义模型 ──► 可视化 VAS 二�
 
 ## JetBrains Rider 插件
 
+VS Code 基础扩展源码与安装说明见 [`tools/vscode-extension`](tools/vscode-extension)。三种 IDE 的分阶段目标、真实语义能力边界与验收标准见 [IDE 路线图](docs/ide-roadmap.md)。
+
 仓库内附带专门的 **Rider 插件**：
 
 - 可安装插件：`plugins/rider/VerseAngelScript-Rider-Plugin-0.5.6.zip`

@@ -1,0 +1,204 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "VAS",
+  "scopeName": "source.vas",
+  "fileTypes": ["vas"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#preprocessor" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#declarations" },
+    { "include": "#keywords" },
+    { "include": "#functions" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.vas",
+          "begin": "//",
+          "beginCaptures": { "0": { "name": "punctuation.definition.comment.vas" } },
+          "end": "$"
+        },
+        {
+          "name": "comment.block.vas",
+          "comment": "AngelScript and the VAS compiler end block comments at the first */; comments do not nest.",
+          "begin": "/\\*",
+          "beginCaptures": { "0": { "name": "punctuation.definition.comment.begin.vas" } },
+          "end": "\\*/",
+          "endCaptures": { "0": { "name": "punctuation.definition.comment.end.vas" } }
+        }
+      ]
+    },
+    "preprocessor": {
+      "name": "meta.preprocessor.vas",
+      "begin": "^\\s*(#)\\s*([A-Za-z_][A-Za-z0-9_]*)",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.directive.vas" },
+        "2": { "name": "keyword.control.directive.vas" }
+      },
+      "end": "$",
+      "patterns": [
+        { "include": "#comments" },
+        { "include": "#strings" },
+        { "include": "#numbers" },
+        { "include": "#keywords" },
+        { "include": "#operators" }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.triple.double.vas",
+          "comment": "Heredoc strings span lines and deliberately do not interpret escape sequences.",
+          "begin": "\"\"\"",
+          "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.vas" } },
+          "end": "\"\"\"",
+          "endCaptures": { "0": { "name": "punctuation.definition.string.end.vas" } }
+        },
+        {
+          "name": "string.quoted.double.vas",
+          "begin": "\"",
+          "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.vas" } },
+          "end": "\"|$",
+          "endCaptures": { "0": { "name": "punctuation.definition.string.end.vas" } },
+          "patterns": [ { "include": "#escapes" } ]
+        },
+        {
+          "name": "string.quoted.single.vas",
+          "begin": "'",
+          "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.vas" } },
+          "end": "'|$",
+          "endCaptures": { "0": { "name": "punctuation.definition.string.end.vas" } },
+          "patterns": [ { "include": "#escapes" } ]
+        }
+      ]
+    },
+    "escapes": {
+      "patterns": [
+        {
+          "name": "constant.character.escape.vas",
+          "match": "\\\\(?:[0\\\\'\"nrt]|x[0-9A-Fa-f]{1,4}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8})"
+        },
+        {
+          "name": "invalid.illegal.escape.vas",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.integer.hexadecimal.vas",
+          "match": "(?<![\\w.])0[xX][0-9A-Fa-f](?:'?[0-9A-Fa-f])*(?!\\w)"
+        },
+        {
+          "name": "constant.numeric.integer.binary.vas",
+          "match": "(?<![\\w.])0[bB][01](?:'?[01])*(?!\\w)"
+        },
+        {
+          "name": "constant.numeric.integer.octal.vas",
+          "match": "(?<![\\w.])0[oO][0-7](?:'?[0-7])*(?!\\w)"
+        },
+        {
+          "name": "constant.numeric.integer.decimal.vas",
+          "match": "(?<![\\w.])0[dD][0-9](?:'?[0-9])*(?!\\w)"
+        },
+        {
+          "name": "constant.numeric.float.vas",
+          "match": "(?<![\\w.])(?:[0-9](?:'?[0-9])*\\.(?:[0-9](?:'?[0-9])*)?|\\.[0-9](?:'?[0-9])*)(?:[eE][+-]?[0-9](?:'?[0-9])*)?[fF]?(?!\\w)|(?<![\\w.])[0-9](?:'?[0-9])*[eE][+-]?[0-9](?:'?[0-9])*[fF]?(?!\\w)"
+        },
+        {
+          "name": "constant.numeric.integer.decimal.vas",
+          "match": "(?<![\\w.])[0-9](?:'?[0-9])*(?!\\w)"
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "match": "\\b(class|interface|enum)\\s+([[:alpha:]_][[:alnum:]_]*)",
+          "captures": {
+            "1": { "name": "storage.type.vas" },
+            "2": { "name": "entity.name.type.vas" }
+          }
+        },
+        {
+          "match": "\\b(namespace)\\s+([[:alpha:]_][[:alnum:]_]*(?:::[[:alpha:]_][[:alnum:]_]*)*)",
+          "captures": {
+            "1": { "name": "storage.type.namespace.vas" },
+            "2": { "name": "entity.name.namespace.vas" }
+          }
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "constant.language.vas",
+          "match": "\\b(?:true|false|null)\\b"
+        },
+        {
+          "name": "variable.language.vas",
+          "match": "\\b(?:this|super)\\b"
+        },
+        {
+          "name": "storage.type.vas",
+          "match": "\\b(?:auto|bool|double|float|int(?:8|16|32|64)?|uint(?:8|16|32|64)?|void|class|interface|enum|namespace|funcdef|typedef|mixin)\\b"
+        },
+        {
+          "name": "support.type.vas",
+          "comment": "Common host-registered standard library types, not language-reserved keywords.",
+          "match": "\\b(?:string|array|dictionary|any|ref|weakref)\\b"
+        },
+        {
+          "name": "storage.modifier.vas",
+          "match": "\\b(?:abstract|const|explicit|external|final|in|inout|out|override|private|property|protected|shared|if_handle_then_const)\\b"
+        },
+        {
+          "name": "keyword.control.vas",
+          "match": "\\b(?:break|case|catch|continue|default|delete|do|else|for|foreach|from|function|get|if|import|return|set|switch|try|using|while)\\b"
+        },
+        {
+          "name": "keyword.operator.word.vas",
+          "match": "!is\\b|\\b(?:and|cast|is|not|or|xor)\\b"
+        }
+      ]
+    },
+    "functions": {
+      "name": "entity.name.function.vas",
+      "match": "\\b[[:alpha:]_][[:alnum:]_]*(?=\\s*\\()"
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.handle.vas",
+          "match": "@"
+        },
+        {
+          "name": "punctuation.accessor.vas",
+          "match": "::|\\.\\.\\.|\\."
+        },
+        {
+          "name": "keyword.operator.vas",
+          "match": ">>>=?|<<=?|>>=?|\\*\\*=?|\\+\\+|--|&&|\\|\\||\\^\\^|[+*/%=&|^!<>-]=?|[~?:]"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        { "name": "punctuation.section.block.begin.vas", "match": "\\{" },
+        { "name": "punctuation.section.block.end.vas", "match": "\\}" },
+        { "name": "punctuation.section.parens.begin.vas", "match": "\\(" },
+        { "name": "punctuation.section.parens.end.vas", "match": "\\)" },
+        { "name": "punctuation.section.brackets.begin.vas", "match": "\\[" },
+        { "name": "punctuation.section.brackets.end.vas", "match": "\\]" },
+        { "name": "punctuation.terminator.statement.vas", "match": ";" },
+        { "name": "punctuation.separator.vas", "match": "," }
+      ]
+    }
+  }
+}
