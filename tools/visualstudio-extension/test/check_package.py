@@ -13,7 +13,7 @@ NS = {"v": "http://schemas.microsoft.com/developer/vsx-schema/2011"}
 class PackageContract(unittest.TestCase):
     def test_scoped_registration(self):
         registration = (ROOT / "VAS.pkgdef").read_text(encoding="utf-8")
-        self.assertIn('[\u0024RootKey$\\TextMate\\Repositories]', registration)
+        self.assertIn('[$RootKey$\\TextMate\\Repositories]', registration)
         self.assertIn('"source.vas"="$PackageFolder$\\language-configuration.json"', registration)
         self.assertNotIn("ContentTypeMapping", registration)
         self.assertNotIn("Cpp", registration)

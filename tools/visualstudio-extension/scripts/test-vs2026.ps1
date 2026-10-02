@@ -30,6 +30,8 @@ $env:XUNIT_LOGS = Join-Path $ResultsDirectory 'harness'
 
 Push-Location $extensionRoot
 try {
+    python 'test/test_validation.py'
+    if ($LASTEXITCODE -ne 0) { throw 'Validation gate regression tests failed.' }
     & $msbuild 'VerseAngelScript.VisualStudio.csproj' /restore /t:Build /p:Configuration=Release /p:DeployExtension=false /nologo /verbosity:minimal
     if ($LASTEXITCODE -ne 0) { throw "Production VSIX build failed ($LASTEXITCODE)." }
     $packages = @(Get-ChildItem 'bin/Release' -Filter '*.vsix' -Recurse)
@@ -41,6 +43,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Host test restore/build failed ($LASTEXITCODE)." }
     $testOutput = Join-Path $extensionRoot 'test/HostTests/bin/Release/net472'
     Copy-Item $packages[0].FullName (Join-Path $testOutput 'VerseAngelScript.vsix') -Force
+    $trx = Join-Path $ResultsDirectory 'VS2026.trx'
+    if (Test-Path $trx) { Remove-Item $trx }
     # RequireExtension installs this VSIX into VASIntegration and starts actual devenv.
     dotnet test 'test/HostTests/HostTests.csproj' --no-restore --no-build --configuration Release --logger 'trx;LogFileName=VS2026.trx' --results-directory $ResultsDirectory -- RunConfiguration.TargetPlatform=x64
     $testExit = $LASTEXITCODE
