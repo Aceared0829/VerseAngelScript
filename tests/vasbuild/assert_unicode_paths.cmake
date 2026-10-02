@@ -16,9 +16,11 @@ set(include "source scripts/include 文😀/shared 函数😀.vas")
 set(output "output 字節😀/compiled 文😀.vasbc")
 file(MAKE_DIRECTORY "${workspace}/config 設定😀"
 	"${workspace}/source scripts/include 文😀" "${workspace}/output 字節😀")
-file(WRITE "${workspace}/${config}" "// Empty host interface\n")
+string(REPEAT "// Padding across the native read buffer\r\n" 150 config_padding)
+set(config_contents "${config_padding}// Host interface 文😀\r\ntypedef ConfiguredInt \"int\"\r\n")
+file(WRITE "${workspace}/${config}" "${config_contents}")
 file(WRITE "${workspace}/${include}" "int answer() { return 42; }\n")
-file(WRITE "${workspace}/${entry}" "#include \"include 文😀/shared 函数😀.vas\"\nvoid main() { int value = answer(); }\n")
+file(WRITE "${workspace}/${entry}" "#include \"include 文😀/shared 函数😀.vas\"\nvoid main() { ConfiguredInt value = answer(); }\n")
 file(WRITE "${workspace}/cwd-marker.txt" "caller cwd preserved")
 file(WRITE "${workspace}/${runner}" [=[
 #include "include 文😀/shared 函数😀.vas"
@@ -80,6 +82,11 @@ if(MODE STREQUAL "absolute" OR MODE STREQUAL "relative")
 		message(FATAL_ERROR "Runner did not execute the script: ${last_stdout}")
 	endif()
 elseif(MODE STREQUAL "failures")
+	file(WRITE "${workspace}/${config}" "typedef Broken \"unknown type\"\n")
+	expect_failure("invalid Unicode config" "${config}" "Failed to register typedef"
+		"${VASBUILD}" "${config}" "${entry}" "${output}")
+	file(WRITE "${workspace}/${config}" "${config_contents}")
+
 	set(missing_config "config 設定😀/missing 設定😀.txt")
 	expect_failure("missing config" "${missing_config}" "Failed to open config file"
 		"${VASBUILD}" "${missing_config}" "${entry}" "${output}")
