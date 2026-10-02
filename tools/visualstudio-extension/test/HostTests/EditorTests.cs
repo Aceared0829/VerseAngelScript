@@ -92,18 +92,18 @@ namespace VerseAngelScript.VisualStudio.Tests
             {
                 await AssertClassificationAsync(editor, "int", "keyword");
                 editor.SelectAll();
-                editor.Dte.ExecuteCommand("Edit.CommentSelection");
+                await editor.ExecuteCommandAsync("Edit.CommentSelection");
                 var commented = editor.Text;
                 Assert.StartsWith("//", commented);
                 Assert.Equal(text, commented.Substring(2).TrimStart(' ', '\t'));
-                editor.Dte.ExecuteCommand("Edit.Undo");
+                await editor.ExecuteCommandAsync("Edit.Undo");
                 Assert.Equal(text, editor.Text);
                 editor.SelectAll();
-                editor.Dte.ExecuteCommand("Edit.CommentSelection");
+                await editor.ExecuteCommandAsync("Edit.CommentSelection");
                 editor.SelectAll();
-                editor.Dte.ExecuteCommand("Edit.UncommentSelection");
+                await editor.ExecuteCommandAsync("Edit.UncommentSelection");
                 Assert.Equal(text, editor.Text);
-                editor.Dte.ExecuteCommand("Edit.Undo");
+                await editor.ExecuteCommandAsync("Edit.Undo");
                 Assert.Equal(commented, editor.Text);
             }
         }
@@ -126,7 +126,7 @@ namespace VerseAngelScript.VisualStudio.Tests
                     editor.End();
                     editor.Type('{');
                     Assert.Equal(original + "{", editor.Text);
-                    editor.Dte.ExecuteCommand("Edit.Undo");
+                    await editor.ExecuteCommandAsync("Edit.Undo");
                     Assert.Equal(original, editor.Text);
 
                     editor.View.Options.SetOptionValue(option, true);
@@ -140,17 +140,17 @@ namespace VerseAngelScript.VisualStudio.Tests
                     Assert.Equal(editor.Text.Length - 1, editor.View.Caret.Position.BufferPosition.Position);
                     // Default brace completion commits its closing character in a
                     // separate transaction after typing (BraceCompletionDefaultSession.Start).
-                    editor.Dte.ExecuteCommand("Edit.Undo");
+                    await editor.ExecuteCommandAsync("Edit.Undo");
                     Assert.Equal(original + "{", editor.Text);
-                    editor.Dte.ExecuteCommand("Edit.Undo");
+                    await editor.ExecuteCommandAsync("Edit.Undo");
                     Assert.Equal(original, editor.Text);
-                    editor.Dte.ExecuteCommand("Edit.Redo");
+                    await editor.ExecuteCommandAsync("Edit.Redo");
                     Assert.Equal(original + "{", editor.Text);
-                    editor.Dte.ExecuteCommand("Edit.Redo");
+                    await editor.ExecuteCommandAsync("Edit.Redo");
                     Assert.Equal(original + "{}", editor.Text);
-                    editor.Dte.ExecuteCommand("Edit.Undo");
+                    await editor.ExecuteCommandAsync("Edit.Undo");
                     Assert.Equal(original + "{", editor.Text);
-                    editor.Dte.ExecuteCommand("Edit.Undo");
+                    await editor.ExecuteCommandAsync("Edit.Undo");
                     Assert.Equal(original, editor.Text);
                     editor.End();
                     editor.Type('(');
@@ -187,10 +187,10 @@ namespace VerseAngelScript.VisualStudio.Tests
                 var typedLine = snapshot.GetLineFromLineNumber(1).GetText();
                 Assert.Equal("x", typedLine.TrimStart(' ', '\t'));
                 Assert.Equal(4, IndentationColumns(typedLine.Substring(0, typedLine.Length - 1), tabSize));
-                editor.Dte.ExecuteCommand("Edit.Undo");
+                await editor.ExecuteCommandAsync("Edit.Undo");
                 // Undo may combine typing with the newline; restore using real undo only.
                 for (var i = 0; i < 3 && editor.Text != text; i++)
-                    editor.Dte.ExecuteCommand("Edit.Undo");
+                    await editor.ExecuteCommandAsync("Edit.Undo");
                 Assert.Equal(text, editor.Text);
             }
         }
@@ -331,6 +331,41 @@ namespace VerseAngelScript.VisualStudio.Tests
 
             public void SelectAll() => View.Selection.Select(new SnapshotSpan(View.TextBuffer.CurrentSnapshot, 0, Text.Length), false);
             public void End() { View.Selection.Clear(); View.Caret.MoveTo(new SnapshotPoint(View.TextBuffer.CurrentSnapshot, Text.Length)); }
+
+            public async Task ExecuteCommandAsync(string name)
+            {
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                window.Activate();
+                View.VisualElement.Focus();
+                var command = Dte.Commands.Item(name, 0);
+                var textManager = (IVsTextManager)Package.GetGlobalService(typeof(SVsTextManager));
+                var components = (IComponentModel)Package.GetGlobalService(typeof(SComponentModel));
+                var adapters = components.GetService<IVsEditorAdaptersFactoryService>();
+                var elapsed = Stopwatch.StartNew();
+                string state;
+                do
+                {
+                    await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                    var activeResult = textManager.GetActiveView(1, null, out var activeNativeView);
+                    var active = ErrorHandler.Succeeded(activeResult) && activeNativeView != null
+                        && ReferenceEquals(View, adapters.GetWpfTextView(activeNativeView));
+                    var focused = View.HasAggregateFocus;
+                    var available = command.IsAvailable;
+                    state = $"activeView={active}; focused={focused}; available={available}; activeViewHResult=0x{activeResult:X8}";
+                    if (active && focused && available)
+                    {
+                        // No await or other command between readiness and the single
+                        // mutation. Never retry a command that may have already executed.
+                        Dte.ExecuteCommand(name);
+                        return;
+                    }
+                    // Yield for normal frame activation/command-context notifications;
+                    // this loop observes readiness and never executes a mutation.
+                    await Task.Delay(50);
+                }
+                while (elapsed.Elapsed < TimeSpan.FromSeconds(10));
+                Assert.Fail($"Editor command '{name}' did not become ready: {state}");
+            }
 
             public void Command(VSConstants.VSStd2KCmdID command)
             {
