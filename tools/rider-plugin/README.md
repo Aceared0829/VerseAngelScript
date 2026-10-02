@@ -42,3 +42,5 @@ $env:JAVA_HOME = 'C:\Program Files\JetBrains\JetBrains Rider 261.20362.35\jbr'
 打开或编辑 `.vas` 文件触发的后台编译诊断，仅在 Rider 已信任项目且已配置 builder 路径时运行。项目配置中的可执行文件路径本身不代表信任；未信任或已释放的项目不会启动后台编译器。插件会在收集输入、处理排队请求和启动进程之前重新检查，不会自动更改信任状态或弹出信任提示。
 
 显式 **Build/Run** 动作和起步项目生成器保持原有行为。原生 Rider 信任回归测试使用隔离的测试信任存储与项目级记录启动器，检查未信任文件的打开/编辑、排队请求、恢复信任后的普通高亮及诊断范围；不会执行项目提供的测试二进制文件。
+
+原生信任测试的 JUnit XML 可用 `python scripts/check_trust_results.py <报告文件>` 检查。检查器要求指定原生测试实际通过，缺失、跳过或失败均返回非零状态；成功时只输出 `VAS_RIDER_TRUST_AUDIT_V1` 协议中的信任布尔值、过滤器类名/判定和枚举数量，不转发其他标准输出、错误或环境信息。它不能替代 Gradle 自身的退出状态。解析器回归可用 `python -B -m unittest discover -s scripts -p test_trust_results.py` 单独执行。

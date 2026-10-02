@@ -53,6 +53,8 @@ import static org.junit.jupiter.api.Assertions.*;
 public final class VasRiderTrustIntegrationTest extends PerTestSolutionTestBase {
     private static final String SOURCE = "void main() {\n\t/*漢字😀*/\tmissing();\n}";
     private static final String MESSAGE = "VAS trust fixture diagnostic";
+    private static final String AUDIT_PREFIX = "VAS_RIDER_TRUST_AUDIT_V1 ";
+    private static final String FILTER_CLASS = "(?:[A-Za-z_$][A-Za-z0-9_$]*\\.)+[A-Za-z_$][A-Za-z0-9_$]*";
 
     @Override
     public void modifyOpenSolutionParams(OpenSolutionParams parameters) {
@@ -109,7 +111,7 @@ public final class VasRiderTrustIntegrationTest extends PerTestSolutionTestBase 
                 settings.builderPath = projectRoot.relativize(builder).toString();
                 settings.configPath = projectRoot.relativize(config).toString();
                 setTrust(project, false);
-                reportFilters(annotator, psi, "untrusted");
+                reportFilters(annotator, psi, false);
             });
 
             assertNull(ReadAction.computeBlocking(() -> annotator.collectInformation(psi)));
@@ -164,7 +166,7 @@ public final class VasRiderTrustIntegrationTest extends PerTestSolutionTestBase 
             assertEquals(17, result.diagnostics().getFirst().column());
 
             EdtTestUtil.runInEdtAndWait(() -> {
-                reportFilters(annotator, psi, "trusted");
+                reportFilters(annotator, psi, true);
                 runPasses(project, psi, editor, passes);
                 assertTrue(launches.get() > 1, "the registered ordinary highlighting pass must reach the recording launcher");
                 HighlightInfo diagnostic = DaemonCodeAnalyzerImpl.getHighlights(document, HighlightSeverity.WARNING, project)
@@ -207,14 +209,26 @@ public final class VasRiderTrustIntegrationTest extends PerTestSolutionTestBase 
         TrustedProjects.setProjectTrusted(project, trusted);
         // Unknown projects are implicitly trusted in headless tests. Explicit false
         // must take precedence; a null collect result alone would not prove this.
-        assertEquals(trusted, TrustedProjects.isProjectTrusted(project));
-        System.out.println("VAS background diagnostics: actual platform trusted=" + trusted);
+        boolean actual = TrustedProjects.isProjectTrusted(project);
+        assertEquals(trusted, actual);
+        System.out.println(AUDIT_PREFIX + "TRUST trusted=" + actual);
     }
 
-    private static void reportFilters(VasExternalAnnotator annotator, PsiFile psi, String state) {
-        List<String> filters = ReadAction.computeBlocking(() -> ExternalAnnotatorsFilter.EXTENSION_POINT_NAME.getExtensionList()
-            .stream().map(filter -> filter.getClass().getName() + "=" + filter.isProhibited(annotator, psi)).toList());
-        System.out.println("VAS ExternalAnnotatorsFilter (" + state + "): " + filters);
+    private static void reportFilters(VasExternalAnnotator annotator, PsiFile psi, boolean trusted) {
+        assertEquals(trusted, TrustedProjects.isProjectTrusted(psi.getProject()));
+        List<FilterDecision> filters = ReadAction.computeBlocking(() -> ExternalAnnotatorsFilter.EXTENSION_POINT_NAME.getExtensionList()
+            .stream().map(filter -> new FilterDecision(filter.getClass().getName(), filter.isProhibited(annotator, psi))).toList());
+        System.out.println(AUDIT_PREFIX + "FILTERS trusted=" + trusted + " count=" + filters.size());
+        for (FilterDecision filter : filters) {
+            // Audit output is deliberately limited to class names and booleans;
+            // never include toString(), exceptions, paths, or process output.
+            assertTrue(filter.className().matches(FILTER_CLASS), "Unexpected filter class name format");
+            System.out.println(AUDIT_PREFIX + "FILTER trusted=" + trusted
+                + " class=" + filter.className() + " prohibited=" + filter.prohibited());
+        }
+    }
+
+    private record FilterDecision(String className, boolean prohibited) {
     }
 
     private static void replaceText(Project project, Document document, String text) {
