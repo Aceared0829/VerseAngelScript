@@ -27,11 +27,20 @@ inline void WriteUtf8(FILE *stream, const std::string &text)
 	DWORD mode;
 	if( handle != INVALID_HANDLE_VALUE && GetConsoleMode(handle, &mode) )
 	{
-		int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.c_str(), -1, 0, 0);
+		// WriteConsoleW bypasses CRT newline translation. Emit CRLF explicitly,
+		// including when the terminal enables DISABLE_NEWLINE_AUTO_RETURN.
+		std::string consoleText;
+		for( size_t i = 0; i < text.size(); ++i )
+		{
+			if( text[i] == '\n' && (i == 0 || text[i - 1] != '\r') ) consoleText += '\r';
+			consoleText += text[i];
+		}
+		std::fflush(stream);
+		int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, consoleText.c_str(), -1, 0, 0);
 		if( size > 0 )
 		{
 			std::vector<wchar_t> buffer(size);
-			if( MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.c_str(), -1, buffer.data(), size) > 0 )
+			if( MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, consoleText.c_str(), -1, buffer.data(), size) > 0 )
 			{
 				size_t offset = 0;
 				const size_t length = size - 1;

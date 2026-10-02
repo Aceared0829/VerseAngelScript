@@ -4,7 +4,6 @@
 #include <vector>
 #include <stdlib.h>  // system()
 #include <stdio.h>
-#include "../../common/vas_console.h"
 
 #if defined(_MSC_VER) && !defined(_WIN32_WCE) && !defined(__S3E__)
 #include <direct.h>  // _chdir()
@@ -27,6 +26,7 @@
 #include "../../../add_on/contextmgr/contextmgr.h"
 #include "../../../add_on/datetime/datetime.h"
 #include "../../../add_on/scriptsocket/scriptsocket.h"
+#include "../../common/vas_console.h"
 
 #ifdef _WIN32
 #include <Windows.h> // WriteConsoleW
@@ -859,5 +859,4 @@ int PragmaCallback(const string &pragmaText, CScriptBuilder &builder, void * /*u
 	// The #pragma directive was not accepted
 	return -1;
 }
-
 
