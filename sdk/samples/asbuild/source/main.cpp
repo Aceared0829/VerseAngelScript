@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <sstream>
 #include "../../common/vas_scriptbuilder.h"
+#include "../../common/vas_build_report.h"
 #if defined(_MSC_VER)
 #include <crtdbg.h>
 #endif
@@ -17,7 +18,7 @@ using namespace std;
 
 // Function prototypes
 int ConfigureEngine(asIScriptEngine *engine, const char *configFile);
-int CompileScript(asIScriptEngine *engine, const char *scriptFile);
+int CompileScript(asIScriptEngine *engine, const char *scriptFile, vas::BuildReport *report);
 int SaveBytecode(asIScriptEngine *engine, const char *outputFile);
 static bool IsVasScriptFile(const char *filename);
 static int ReportInvalidVasScriptExtension(asIScriptEngine *engine, const char *filename, const char *role);
@@ -26,6 +27,14 @@ static int VasIncludeCallback(const char *include, const char *from, CScriptBuil
 
 void MessageCallback(const asSMessageInfo *msg, void *param)
 {
+	vas::BuildReport *report = static_cast<vas::BuildReport *>(param);
+	if( report )
+	{
+		const char *severity = msg->type == asMSGTYPE_WARNING ? "warning" :
+			msg->type == asMSGTYPE_INFORMATION ? "information" : "error";
+		report->Diagnostic(severity, msg->section, msg->row, msg->col, msg->message);
+		return;
+	}
 	const char *type = "ERR ";
 	if( msg->type == asMSGTYPE_WARNING ) 
 		type = "WARN";
@@ -61,7 +70,41 @@ static int Run(int argc, char **argv)
 	//_CrtSetBreakAlloc(6150);
 #endif
 
-	int r;
+	const bool reportMode = argc > 1 && string(argv[1]) == "--report=jsonl";
+	vas::BuildReport reportStorage;
+	vas::BuildReport *report = reportMode ? &reportStorage : 0;
+	if( report )
+	{
+		if( !report->Open() ) return -1;
+		vas::BuildReportRecord start = report->Record("start");
+		start.Text("compiler", "vasbuild");
+		start.Text("compilerVersion", asGetLibraryVersion());
+		start.Text("positionEncoding", "utf-8-bytes");
+		start.Number("positionBase", 1);
+		string cwd;
+		if( vas::ReadCurrentDirectory(cwd) ) start.Text("cwd", cwd);
+		else start.Null("cwd");
+		const char *names[] = {"config", "entry", "output"};
+		for( int i = 0; i < 3; ++i )
+		{
+			string path;
+			const char *argument = argc > i + 2 ? argv[i + 2] : "";
+			bool resolved = i == 1 ? vas::ScriptSectionPath(argument, path) : vas::AbsolutePath(argument, path);
+			if( resolved ) start.Text(names[i], path);
+			else start.Null(names[i]);
+		}
+		if( !report->Write(start) ) return -1;
+		if( argc != 5 )
+		{
+			report->Diagnostic("error", "", 0, 0,
+				"Usage: vasbuild --report=jsonl <config file> <script.vas> <output>");
+			report->Result(false);
+			return -1;
+		}
+		// Retain the legacy tuple's indices for the common compilation path.
+		--argc;
+		++argv;
+	}
 
 	if( argc < 4 )
 	{
@@ -73,43 +116,49 @@ static int Run(int argc, char **argv)
 		return -1;
 	}
 
-	// Create the script engine
+	if( report ) report->phase = "engine";
 	asIScriptEngine *engine = asCreateScriptEngine();
 	if( engine == 0 )
 	{
-		cout << "Failed to create script engine." << endl;
+		if( report )
+		{
+			report->Diagnostic("error", "", 0, 0, "Failed to create script engine.");
+			report->Result(false);
+		}
+		else cout << "Failed to create script engine." << endl;
 		return -1;
 	}
+	engine->SetMessageCallback(asFUNCTION(MessageCallback), report, asCALL_CDECL);
 
-	// The script compiler will send any compiler messages to the callback
-	engine->SetMessageCallback(asFUNCTION(MessageCallback), 0, asCALL_CDECL);
-
-	// Reject a legacy extension before attempting to parse the configuration
-	// file, so callers always receive the VAS migration diagnostic first.
-	if( !IsVasScriptFile(argv[2]) )
+	bool success = false;
+	do
 	{
-		ReportInvalidVasScriptExtension(engine, argv[2], "entry script");
-		engine->ShutDownAndRelease();
-		return -1;
-	}
+		// Preserve the legacy extension diagnostic before reading config.
+		if( report ) report->phase = "arguments";
+		if( !IsVasScriptFile(argv[2]) )
+		{
+			ReportInvalidVasScriptExtension(engine, argv[2], "entry script");
+			break;
+		}
+		if( report ) report->phase = "config";
+		if( ConfigureEngine(engine, argv[1]) < 0 ) break;
+		if( report && report->Failed() ) break;
+		if( CompileScript(engine, argv[2], report) < 0 ) break;
+		if( report && report->Failed() ) break;
+		if( report ) report->phase = "output";
+		if( report && vas::IsReportOutput(argv[3]) )
+		{
+			engine->WriteMessage(argv[3], 0, 0, asMSGTYPE_ERROR, "Bytecode output must not refer to report stdout");
+			break;
+		}
+		if( SaveBytecode(engine, argv[3]) < 0 ) break;
+		success = true;
+	} while( false );
 
-	// Configure the script engine with all the functions, 
-	// and variables that the script should be able to use.
-	r = ConfigureEngine(engine, argv[1]);
-	if( r < 0 ) return -1;
-	
-	// Compile the script code
-	r = CompileScript(engine, argv[2]);
-	if( r < 0 ) return -1;
-
-	// Save the bytecode
-	r = SaveBytecode(engine, argv[3]);
-	if( r < 0 ) return -1;
-
-	// Shut down the engine
+	// Release on all ordinary paths, before the terminal record.
 	engine->ShutDownAndRelease();
-
-	return 0;
+	if( report && !report->Result(success) ) return -1;
+	return success ? 0 : -1;
 }
 
 #ifdef AS_CAN_USE_CPP11
@@ -230,20 +279,43 @@ int ConfigureEngine(asIScriptEngine *engine, const char *configFile)
 	return 0;
 }
 
-int CompileScript(asIScriptEngine *engine, const char *scriptFile)
+struct IncludeContext
+{
+	asIScriptEngine *engine;
+	vas::BuildReport *report;
+};
+
+static void SectionLoaded(const string &section, const string &code, void *param)
+{
+	vas::BuildReport *report = static_cast<vas::BuildReport *>(param);
+	vas::BuildReportRecord record = report->Record("section_loaded");
+	record.Text("section", section);
+	record.Boolean("utf8Valid", vas::IsValidUtf8(code));
+	report->Write(record);
+}
+
+int CompileScript(asIScriptEngine *engine, const char *scriptFile, vas::BuildReport *report)
 {
 	int r;
 	if( !IsVasScriptFile(scriptFile) )
 		return ReportInvalidVasScriptExtension(engine, scriptFile, "entry script");
 
+	if( report ) report->phase = "load";
 	vas::ScriptBuilder builder;
+	IncludeContext context = {engine, report};
+	if( report ) builder.SetSectionLoadedCallback(SectionLoaded, report);
 	r = builder.StartNewModule(engine, "build");
 	if( r < 0 ) return -1;
-	builder.SetIncludeCallback(VasIncludeCallback, engine);
+	builder.SetIncludeCallback(VasIncludeCallback, &context);
 
 	r = builder.AddSectionFromFile(scriptFile);
 	if( r < 0 ) return -1;
 
+	if( report )
+	{
+		report->dependenciesComplete = true;
+		report->phase = "compile";
+	}
 	r = builder.BuildModule();
 	if( r < 0 )
 	{
@@ -303,13 +375,34 @@ static string ResolveIncludePath(const char *include, const char *from)
 
 static int VasIncludeCallback(const char *include, const char *from, CScriptBuilder *builder, void *userParam)
 {
-	asIScriptEngine *engine = reinterpret_cast<asIScriptEngine *>(userParam);
+	IncludeContext *context = static_cast<IncludeContext *>(userParam);
+	vas::BuildReport *report = context->report;
 	string resolvedInclude = ResolveIncludePath(include, from);
-	if( !IsVasScriptFile(resolvedInclude.c_str()) )
-		return ReportInvalidVasScriptExtension(engine, resolvedInclude.c_str(), "included script");
+	std::uint64_t attempt = 0;
+	if( report )
+	{
+		vas::BuildReportRecord record = report->Record("include_attempt");
+		attempt = report->Sequence();
+		record.Text("from", from ? from : "");
+		record.Text("requested", include ? include : "");
+		string section;
+		if( vas::ScriptSectionPath(resolvedInclude.c_str(), section) ) record.Text("resolved", section);
+		else record.Null("resolved");
+		report->Write(record);
+	}
 
-	// This callback is only installed on the tool's native-file builder.
-	return static_cast<vas::ScriptBuilder *>(builder)->AddSectionFromFile(resolvedInclude.c_str());
+	bool validExtension = IsVasScriptFile(resolvedInclude.c_str());
+	int result = validExtension ?
+		static_cast<vas::ScriptBuilder *>(builder)->AddSectionFromFile(resolvedInclude.c_str()) :
+		ReportInvalidVasScriptExtension(context->engine, resolvedInclude.c_str(), "included script");
+	if( report )
+	{
+		vas::BuildReportRecord record = report->Record("include_result");
+		record.Number("attemptSeq", attempt);
+		record.Text("status", !validExtension ? "rejected" : result < 0 ? "failed" : result == 0 ? "skipped" : "loaded");
+		report->Write(record);
+	}
+	return result;
 }
 
 class CBytecodeStream : public asIBinaryStream
