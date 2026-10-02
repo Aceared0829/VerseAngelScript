@@ -20,7 +20,7 @@ async function main() {
     const executable = await downloadAndUnzipVSCode(process.env.VSCODE_TEST_VERSION || '1.96.4');
     // Exercise native UTF-16 argv/filesystem boundaries on Windows, including
     // surrogate pairs as well as spaces in every configurable path.
-    const workspace = path.join(root, 'VAS project 文😀 with spaces');
+    const workspace = path.join(root, 'VAS project 工程 文😀 with spaces');
     await fs.mkdir(path.join(workspace, 'src'), { recursive: true });
     await fs.writeFile(path.join(workspace, 'src', 'main 文😀.vas'), 'void main() { int answer = 42; }\n');
     await fs.writeFile(path.join(workspace, 'src', 'warning.vas'), 'void main() { int a; int b = a; }\n');
