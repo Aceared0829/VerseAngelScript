@@ -27,6 +27,7 @@ import com.intellij.refactoring.rename.RenameUtil;
 import com.intellij.util.IncorrectOperationException;
 import com.intellij.util.indexing.FileBasedIndex;
 import com.jetbrains.rider.test.annotations.Solution;
+import com.jetbrains.rider.test.OpenSolutionParams;
 import com.jetbrains.rider.test.annotations.TestSettings;
 import com.jetbrains.rider.test.enums.BuildTool;
 import com.jetbrains.rider.test.enums.Mono;
@@ -56,8 +57,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * solution has been opened and its project services are available.
  */
 @Solution(name = "vas-navigation", slnName = "VasNavigation.sln")
-@TestSettings(buildTool = BuildTool.NONE, mono = Mono.NONE, sdkVersion = SdkVersion.NONE)
+@TestSettings(buildTool = BuildTool.AUTODETECT, mono = Mono.NONE, sdkVersion = SdkVersion.NONE)
 public final class VasRiderSolutionIntegrationTest extends PerTestSolutionTestBase {
+    @Override
+    public void modifyOpenSolutionParams(OpenSolutionParams params) {
+        super.modifyOpenSolutionParams(params);
+        // The NMake project must finish creating its real project/content model
+        // before default-scope ReferencesSearch and rename preflight are exercised.
+        params.setWaitForCaches(true);
+        params.setWaitForSolutionBuilder(true);
+        params.setRestoreNuGetPackages(false);
+    }
+
     @Test
     @Tag("season/vas")
     void resolvesNestedIncludeAndDeclarationInOpenedRiderSolution() {
@@ -184,7 +195,9 @@ public final class VasRiderSolutionIntegrationTest extends PerTestSolutionTestBa
 
     private static void assertRenameAllowed(PsiElement target, String newName) {
         assertTrue(target instanceof PsiCheckedRenameElement, "VAS declarations must expose the platform preflight hook");
-        assertDoesNotThrow(() -> RenameUtil.checkRename(target, newName));
+        assertDoesNotThrow(() -> RenameUtil.checkRename(target, newName),
+            "Expected safe rename of " + target.getContainingFile().getName() + ":" + target.getTextOffset()
+                + " " + target.getText() + " -> " + newName);
     }
 
     @Test

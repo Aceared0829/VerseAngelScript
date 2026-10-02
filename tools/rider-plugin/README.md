@@ -29,6 +29,8 @@ $env:JAVA_HOME = 'C:\Program Files\JetBrains\JetBrains Rider 261.20362.35\jbr'
 
 `test` 会同时执行普通语言单元测试和 Rider Solution Host 集成测试。后者会启动 Rider 前后端、打开 `testData/solutions/vas-navigation/VasNavigation.sln`，验证 `#include` 文件跳转与跨嵌套 include 的函数声明跳转。
 
+宿主 fixture 使用与 VAS starter 一致的 NMake `.vcxproj`，显式列出所有 `.vas` 文件，使默认项目作用域来自 Rider 的真实项目模型。宿主测试需要 Windows 上已安装的 Visual Studio 2026 C++ 工具（v145；CI 的 `windows-latest` 已提供），通过 `BuildTool.AUTODETECT` 检测；不固定 Windows SDK 版本，不请求 .NET SDK、NuGet restore 或项目构建。打开解决方案后等待项目缓存和 solution builder 初始化，再保留原有项目作用域/索引断言及重命名/撤销检查。Gradle 会输出失败异常、cause 和完整堆栈。
+
 ## 安装
 
 构建后的 ZIP 位于 `build/distributions`。在 Rider 中打开：
