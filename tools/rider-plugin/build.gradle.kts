@@ -97,11 +97,12 @@ tasks {
     test {
         useJUnitPlatform()
         testLogging {
-            events("failed")
+            events("passed", "skipped", "failed")
             exceptionFormat = TestExceptionFormat.FULL
             showExceptions = true
             showCauses = true
             showStackTraces = true
+            showStandardStreams = false
         }
     }
 
