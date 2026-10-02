@@ -60,22 +60,39 @@ public final class VasSymbolScanner {
                         case "namespace" -> VasSymbolKind.NAMESPACE;
                         default -> VasSymbolKind.TYPE_ALIAS;
                     };
-                    add(
-                        symbols,
-                        declarationOffsets,
-                        name,
-                        kind,
-                        braceDepth,
-                        -1,
-                        -1,
-                        true,
-                        true,
-                        containerName(braceStack, containerScopes),
-                        token.text(),
-                        -1,
-                        -1,
-                        baseTypes(tokens, nameIndex)
-                    );
+                    if (kind == VasSymbolKind.NAMESPACE) {
+                        String container = containerName(braceStack, containerScopes);
+                        int component = nameIndex;
+                        while (true) {
+                            Token part = tokens.get(component);
+                            add(symbols, declarationOffsets, part, kind, braceDepth, -1, -1,
+                                true, true, container, "namespace", -1, -1, List.of());
+                            container = container.isEmpty() ? part.text() : container + "::" + part.text();
+                            if (tokenAt(tokens, component + 2) == null
+                                || !"::".equals(tokens.get(component + 1).text())
+                                || tokens.get(component + 2).type() != VasTypes.IDENTIFIER) {
+                                break;
+                            }
+                            component += 2;
+                        }
+                    } else {
+                        add(
+                            symbols,
+                            declarationOffsets,
+                            name,
+                            kind,
+                            braceDepth,
+                            -1,
+                            -1,
+                            true,
+                            true,
+                            containerName(braceStack, containerScopes),
+                            token.text(),
+                            -1,
+                            -1,
+                            baseTypes(tokens, nameIndex)
+                        );
+                    }
                 }
             } else if (token.type() == VasTypes.IDENTIFIER) {
                 Token next = tokenAt(tokens, index + 1);
@@ -130,6 +147,61 @@ public final class VasSymbolScanner {
             }
         }
         return List.copyOf(symbols);
+    }
+
+    /** Explicit lifecycle names form a rename family that the reference scanner cannot rewrite safely. */
+    public static boolean hasExplicitLifecycleDeclaration(
+        @NotNull CharSequence source, @NotNull VasSymbol classSymbol
+    ) {
+        if (classSymbol.kind() != VasSymbolKind.CLASS) {
+            return false;
+        }
+        List<Token> tokens = tokenize(source);
+        int body = -1;
+        boolean afterName = false;
+        for (int index = 0; index < tokens.size(); index++) {
+            Token token = tokens.get(index);
+            if (token.start() == classSymbol.offset()) {
+                afterName = true;
+            } else if (afterName && ";".equals(token.text())) {
+                return false;
+            } else if (afterName && token.type() == VasTypes.LBRACE) {
+                body = index;
+                break;
+            }
+        }
+        if (body < 0) {
+            return false;
+        }
+        int depth = 0;
+        for (int index = body + 1; index < tokens.size(); index++) {
+            Token token = tokens.get(index);
+            if (token.type() == VasTypes.RBRACE) {
+                if (depth == 0) {
+                    break;
+                }
+                depth--;
+            } else if (token.type() == VasTypes.LBRACE) {
+                depth++;
+            } else if (depth == 0 && token.type() == VasTypes.IDENTIFIER
+                && token.text().equals(classSymbol.name()) && tokenAt(tokens, index + 1) != null
+                && tokens.get(index + 1).type() == VasTypes.LPAREN) {
+                int prefix = index - 1;
+                if ("~".equals(tokens.get(prefix).text())) {
+                    prefix--;
+                }
+                while (prefix > body && Set.of("private", "protected", "public", "explicit")
+                    .contains(tokens.get(prefix).text())) {
+                    prefix--;
+                }
+                Token previous = tokens.get(prefix);
+                if (previous.type() == VasTypes.LBRACE || previous.type() == VasTypes.RBRACE
+                    || ";".equals(previous.text())) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     public static @NotNull VasUsageContext usageContext(
@@ -281,6 +353,20 @@ public final class VasSymbolScanner {
         if (">".equals(previous.text()) || previous.type() == VasTypes.RBRACKET) {
             return hasUnsupportedTypeSuffix(tokens, nameIndex);
         }
+        if (Set.of("in", "out", "inout").contains(previous.text())) {
+            Token reference = tokenAt(tokens, nameIndex - 2);
+            if (reference == null || !"&".equals(reference.text())) {
+                return false;
+            }
+            int typeIndex = nameIndex - 3;
+            while (typeIndex >= 0 && Set.of("@", "const").contains(tokens.get(typeIndex).text())) {
+                typeIndex--;
+            }
+            Token type = tokenAt(tokens, typeIndex);
+            return type != null && (type.type() == VasTypes.IDENTIFIER
+                || type.type() == VasTypes.KEYWORD && BUILTIN_TYPES.contains(type.text())
+                || hasUnsupportedTypeSuffix(tokens, typeIndex + 1));
+        }
         if (previous.type() == VasTypes.KEYWORD) {
             return BUILTIN_TYPES.contains(previous.text());
         }
@@ -404,7 +490,15 @@ public final class VasSymbolScanner {
             for (int cursor = nameIndex + 1; cursor < tokens.size(); cursor++) {
                 Token candidate = tokens.get(cursor);
                 if (candidate.type() == VasTypes.LBRACE) {
-                    scopes.put(cursor, tokens.get(nameIndex).text());
+                    String scope = tokens.get(nameIndex).text();
+                    if ("namespace".equals(token.text())) {
+                        for (int component = nameIndex + 1; component + 1 < cursor
+                            && "::".equals(tokens.get(component).text())
+                            && tokens.get(component + 1).type() == VasTypes.IDENTIFIER; component += 2) {
+                            scope += "::" + tokens.get(component + 1).text();
+                        }
+                    }
+                    scopes.put(cursor, scope);
                     break;
                 }
                 if (";".equals(candidate.text())) {

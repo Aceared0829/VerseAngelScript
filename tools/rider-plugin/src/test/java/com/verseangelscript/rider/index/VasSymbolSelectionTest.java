@@ -213,6 +213,54 @@ public final class VasSymbolSelectionTest {
             + "void run() { A object; object./*use*/act(1); }").size());
     }
 
+    @Test
+    public void classConstructionBindsTheTypeRatherThanAConstructorOverload() {
+        assertEquals(VasSymbolKind.CLASS, only("class Foo {} void run() { Foo@ value = /*use*/Foo(); }").kind());
+        assertEquals(VasSymbolKind.CLASS, only("class Foo { Foo(int x) {} } void run() { Foo@ value = /*use*/Foo(1); }").kind());
+        assertEquals("N", only("namespace N { class Foo {} } void run() { N::Foo@ value = N::/*use*/Foo(); }").container());
+    }
+
+    @Test
+    public void interfaceInstantiationDoesNotMasqueradeAsConstruction() {
+        assertTrue(select("interface Task {} void run() { Task@ value = /*use*/Task(); }").isEmpty());
+    }
+
+    @Test
+    public void classConstructionStillRespectsLexicalShadowing() {
+        assertTrue(select("class Foo {} void run() { int Foo; /*use*/Foo(); }").isEmpty());
+    }
+
+    @Test
+    public void referenceDirectionParametersShadowGlobals() {
+        for (String direction : List.of("in", "out", "inout")) {
+            VasSymbol value = only("int value; void run(int &" + direction + " value) { /*use*/value; }");
+            assertEquals(false, value.isProjectVisible());
+            assertEquals("int", value.declaredType());
+            VasSymbol member = only("class A { int field; } class B { int field; } A object; "
+                + "void run(B &" + direction + " object) { object./*use*/field; }");
+            assertEquals("B", member.container());
+        }
+    }
+
+    @Test
+    public void qualifiedReferenceParameterTypesRemainExact() {
+        assertEquals("N::B", only("class B { int field; } namespace N { class B { int field; } } "
+            + "void run(const N::B &in object) { object./*use*/field; }").container());
+    }
+
+    @Test
+    public void qualifiedNamespaceDeclarationsDoNotLeakMembersIntoParents() {
+        assertEquals("", only("int value; namespace N::Inner { int value; } namespace N { void run() { /*use*/value; } }").container());
+        assertEquals("N::Inner", only("int value; namespace N::Inner { int value; void run() { /*use*/value; } }").container());
+        assertEquals("N::Inner", only("namespace N::Inner { void act() {} } void run() { N::Inner::/*use*/act(); }").container());
+    }
+
+    @Test
+    public void handleReferenceParameterStillShadowsOuterObject() {
+        assertEquals("B", only("class A { int field; } class B { int field; } A object; "
+            + "void run(B@ &in object) { object./*use*/field; }").container());
+    }
+
     private static VasSymbol only(String source) {
         List<VasSymbol> targets = select(source);
         assertEquals(targets.toString(), 1, targets.size());

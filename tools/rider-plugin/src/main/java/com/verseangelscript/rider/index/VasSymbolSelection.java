@@ -55,7 +55,10 @@ public final class VasSymbolSelection {
     }
 
     private static boolean acceptsArguments(VasSymbol symbol, int arguments) {
+        // A class call identifies the type, not a selected constructor overload.
+        // Interfaces cannot be instantiated in VAS and remain unsupported here.
         return arguments == VasUsageContext.NOT_A_CALL
+            || symbol.kind() == VasSymbolKind.CLASS
             || symbol.kind() == VasSymbolKind.FUNCTION
                 && symbol.requiredParameterCount() >= 0
                 && arguments >= symbol.requiredParameterCount()

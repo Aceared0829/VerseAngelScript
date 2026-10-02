@@ -116,11 +116,11 @@ public final class VasLexer extends LexerBase {
             return;
         }
 
-        if (Character.isJavaIdentifierStart(current) || current == '_') {
+        if (isIdentifierStart(current)) {
             tokenEnd = tokenStart + 1;
             while (tokenEnd < endOffset) {
                 char value = buffer.charAt(tokenEnd);
-                if (!Character.isJavaIdentifierPart(value) && value != '_') {
+                if (!isIdentifierPart(value)) {
                     break;
                 }
                 tokenEnd++;
@@ -174,19 +174,52 @@ public final class VasLexer extends LexerBase {
     }
 
     private void locateNumber() {
-        tokenEnd = tokenStart + 1;
-        while (tokenEnd < endOffset) {
-            char value = buffer.charAt(tokenEnd);
-            if (!(Character.isLetterOrDigit(value)
-                || value == '.'
-                || value == '_'
-                || value == '+'
-                || value == '-')) {
-                break;
+        tokenEnd = tokenStart;
+        if (buffer.charAt(tokenStart) == '0' && tokenStart + 1 < endOffset
+            && (buffer.charAt(tokenStart + 1) == 'x' || buffer.charAt(tokenStart + 1) == 'X')) {
+            tokenEnd += 2;
+            while (tokenEnd < endOffset && (Character.digit(buffer.charAt(tokenEnd), 16) >= 0
+                || buffer.charAt(tokenEnd) == '_')) {
+                tokenEnd++;
             }
-            tokenEnd++;
+        } else {
+            consumeDecimalDigits();
+            if (tokenEnd < endOffset && buffer.charAt(tokenEnd) == '.') {
+                tokenEnd++;
+                consumeDecimalDigits();
+            }
+            if (tokenEnd < endOffset && (buffer.charAt(tokenEnd) == 'e' || buffer.charAt(tokenEnd) == 'E')) {
+                int exponent = tokenEnd + 1;
+                if (exponent < endOffset && (buffer.charAt(exponent) == '+' || buffer.charAt(exponent) == '-')) {
+                    exponent++;
+                }
+                if (exponent < endOffset && Character.isDigit(buffer.charAt(exponent))) {
+                    tokenEnd = exponent;
+                    consumeDecimalDigits();
+                }
+            }
+            if (tokenEnd < endOffset && (buffer.charAt(tokenEnd) == 'f' || buffer.charAt(tokenEnd) == 'F')
+                && (tokenEnd + 1 == endOffset || !Character.isJavaIdentifierPart(buffer.charAt(tokenEnd + 1)))) {
+                tokenEnd++;
+            }
         }
         tokenType = VasTypes.NUMBER;
+    }
+
+    private void consumeDecimalDigits() {
+        while (tokenEnd < endOffset && (Character.isDigit(buffer.charAt(tokenEnd)) || buffer.charAt(tokenEnd) == '_')) {
+            tokenEnd++;
+        }
+    }
+
+    private static boolean isIdentifierStart(char value) {
+        return value == '_' || value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z'
+            || value >= 128 && Character.isJavaIdentifierStart(value);
+    }
+
+    private static boolean isIdentifierPart(char value) {
+        return isIdentifierStart(value) || value >= '0' && value <= '9'
+            || value >= 128 && Character.isJavaIdentifierPart(value);
     }
 
     private static boolean isLineBreak(char value) {

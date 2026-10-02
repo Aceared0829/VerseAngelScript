@@ -1,0 +1,41 @@
+class /*lifecycle-type-declaration*/LifecycleType
+{
+    LifecycleType() {}
+    LifecycleType(int value) {}
+    ~LifecycleType() {}
+}
+
+interface FamilyContract
+{
+    void /*interface-family-declaration*/Perform();
+}
+
+class FamilyImplementation : FamilyContract
+{
+    void /*interface-implementation-declaration*/Perform() {}
+}
+
+class FamilyBase
+{
+    void /*base-family-declaration*/Run() {}
+}
+
+class FamilyIntermediate : FamilyBase {}
+
+class FamilyDerived : FamilyIntermediate
+{
+    void /*base-implementation-declaration*/Run() override {}
+}
+
+class UnrelatedPerformer
+{
+    void /*unrelated-method-declaration*/Perform() {}
+    int /*standalone-field-declaration*/Value;
+}
+
+class /*implicit-lifecycle-type-declaration*/ImplicitLifecycle {}
+
+class ConstructionHolder
+{
+    ImplicitLifecycle item = ImplicitLifecycle();
+}

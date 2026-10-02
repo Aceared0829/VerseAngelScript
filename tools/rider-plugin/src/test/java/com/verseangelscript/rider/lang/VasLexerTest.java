@@ -57,6 +57,33 @@ public final class VasLexerTest {
         assertSame(VasTypes.IDENTIFIER, lexer.getTokenType());
     }
 
+    @Test
+    public void arithmeticAfterNumbersDoesNotHideIdentifierUsages() {
+        for (String source : List.of("1+value", "1-value", "1e-3+value", "2E+4-value", "0xFF+value", "1.5f+value")) {
+            VasLexer lexer = new VasLexer();
+            lexer.start(source);
+            List<Token> tokens = new ArrayList<>();
+            while (lexer.getTokenType() != null) {
+                tokens.add(new Token(lexer.getTokenType(), source.substring(lexer.getTokenStart(), lexer.getTokenEnd())));
+                lexer.advance();
+            }
+            assertEquals(source, 3, tokens.size());
+            assertToken(tokens, VasTypes.IDENTIFIER, "value");
+            assertSame(VasTypes.NUMBER, tokens.get(0).type());
+            assertSame(VasTypes.OPERATOR, tokens.get(1).type());
+        }
+    }
+
+    @Test
+    public void dollarIsNotAnIdentifierButUnicodeSourceRemainsReadable() {
+        VasLexer lexer = new VasLexer();
+        lexer.start("$renamed");
+        assertSame(com.intellij.psi.TokenType.BAD_CHARACTER, lexer.getTokenType());
+        lexer.start("café");
+        assertSame(VasTypes.IDENTIFIER, lexer.getTokenType());
+        assertEquals(4, lexer.getTokenEnd());
+    }
+
     private static void assertToken(List<Token> tokens, IElementType expectedType, String expectedText) {
         Token token = tokens.stream()
             .filter(candidate -> candidate.text().equals(expectedText))

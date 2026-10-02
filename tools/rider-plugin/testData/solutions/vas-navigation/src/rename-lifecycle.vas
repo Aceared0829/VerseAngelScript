@@ -1,0 +1,13 @@
+#include "rename-lifecycle-api.vas"
+
+void RenameLifecycle()
+{
+    int /*rename-local-declaration*/localCount = 2;
+    /*rename-first-use*/StableRename(1);
+    /*rename-second-use*/StableRename(1+/*rename-local-use*/localCount);
+    OtherRenameOwner other;
+    other.StableRename(3);
+    /*rename-ambiguous-use*/AmbiguousRename(1);
+    string label = "StableRename";
+    // StableRename is also mentioned in documentation.
+}

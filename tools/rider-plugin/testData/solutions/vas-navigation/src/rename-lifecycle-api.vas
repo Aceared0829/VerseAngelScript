@@ -1,0 +1,12 @@
+void /*rename-function-declaration*/StableRename(const int &in /*rename-parameter-declaration*/value)
+{
+    int copy = /*rename-parameter-use*/value;
+}
+
+class OtherRenameOwner
+{
+    void StableRename(int value) {}
+}
+
+void /*rename-ambiguous-declaration*/AmbiguousRename(int value) {}
+void AmbiguousRename(float value) {}

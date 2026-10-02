@@ -15,6 +15,8 @@ public final class VasAstFactoryTest {
         LeafElement identifier = factory.createLeaf(VasTypes.IDENTIFIER, "Player");
 
         assertTrue(identifier instanceof VasIdentifierPsiElement);
+        assertTrue(identifier instanceof com.intellij.psi.ContributedReferenceHost);
+        assertEquals("Player", ((VasIdentifierPsiElement) identifier).getName());
         assertNull(factory.createLeaf(VasTypes.KEYWORD, "class"));
         assertNull(factory.createLeaf(VasTypes.OPERATOR, "+"));
     }

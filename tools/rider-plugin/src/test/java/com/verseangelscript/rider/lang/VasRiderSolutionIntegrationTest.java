@@ -1,12 +1,25 @@
 package com.verseangelscript.rider.lang;
 
+import com.intellij.openapi.application.Application;
+import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.application.WriteIntentReadAction;
+import com.intellij.openapi.command.UndoConfirmationPolicy;
+import com.intellij.openapi.command.undo.UndoManager;
+import com.intellij.openapi.project.DumbService;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiCheckedRenameElement;
+import com.intellij.psi.PsiDocumentManager;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiManager;
+import com.intellij.psi.PsiNamedElement;
+import com.intellij.psi.PsiReference;
+import com.intellij.psi.PsiReferenceService;
+import com.intellij.psi.search.LocalSearchScope;
+import com.intellij.psi.search.searches.ReferencesSearch;
+import com.intellij.refactoring.rename.RenameProcessor;
 import com.intellij.refactoring.rename.RenameUtil;
 import com.intellij.util.IncorrectOperationException;
 import com.jetbrains.rider.test.annotations.Solution;
@@ -21,6 +34,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Tag;
 
 import java.nio.file.Path;
+import java.util.Collection;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -154,6 +168,7 @@ public final class VasRiderSolutionIntegrationTest extends PerTestSolutionTestBa
         assertRenameRejected(markedIdentifier(source, "same-arity-call"), "UnknownTargetRenamed");
         assertRenameRejected(markedIdentifier(source, "local-order-declaration"), "if");
         assertRenameRejected(markedIdentifier(source, "local-order-declaration"), "two names");
+        assertRenameRejected(markedIdentifier(source, "local-order-declaration"), "$renamed");
         assertRenameRejected(markedIdentifier(source, "local-order-declaration"), "after");
         assertRenameRejected(markedIdentifier(source, "parameter-declaration"), "CycleLeaf");
         assertRenameRejected(markedIdentifier(source, "global-order-declaration"), "print");
@@ -165,6 +180,136 @@ public final class VasRiderSolutionIntegrationTest extends PerTestSolutionTestBa
     private static void assertRenameAllowed(PsiElement target, String newName) {
         assertTrue(target instanceof PsiCheckedRenameElement, "VAS declarations must expose the platform preflight hook");
         assertDoesNotThrow(() -> RenameUtil.checkRename(target, newName));
+    }
+
+    @Test
+    @Tag("season/vas")
+    void registersReferencesAndPerformsAtomicRenameAndUndoInTheRiderHost() {
+        Project project = getSolutionApiFacade().getProject();
+        Path sourceDirectory = getSolutionApiFacade().getActiveSolutionDirectory().resolve("src");
+        runOnEdtWithWriteIntent(() -> {
+            assertTrue(ApplicationManager.getApplication().isUnitTestMode(),
+                "rejected refactorings must use the platform's noninteractive test-mode error path");
+            DumbService.getInstance(project).completeJustSubmittedTasks();
+            PsiFile source = fixture(project, sourceDirectory, "rename-lifecycle.vas");
+            PsiFile api = fixture(project, sourceDirectory, "rename-lifecycle-api.vas");
+            PsiDocumentManager documents = PsiDocumentManager.getInstance(project);
+            assertNotNull(documents.getDocument(source));
+            assertNotNull(documents.getDocument(api));
+            documents.commitAllDocuments();
+
+            PsiElement target = markedIdentifier(api, "rename-function-declaration");
+            assertEquals("StableRename", ((PsiNamedElement)target).getName());
+            PsiElement firstUse = markedIdentifier(source, "rename-first-use");
+            assertNotNull(firstUse.getReference());
+            assertTrue(firstUse.getReference().isReferenceTo(target));
+            assertTrue(PsiReferenceService.getService()
+                .getReferences(firstUse, PsiReferenceService.Hints.NO_HINTS).stream()
+                .anyMatch(reference -> reference.isReferenceTo(target)),
+                "the platform service must discover contributed references without constructing VasReference directly");
+            assertActualUsageOffsets(target, source, "rename-first-use", "rename-second-use");
+            assertActualUsageOffsets(markedIdentifier(source, "rename-local-declaration"), source, "rename-local-use");
+            assertActualUsageOffsets(markedIdentifier(api, "rename-parameter-declaration"), api, "rename-parameter-use");
+
+            PsiElement ambiguous = markedIdentifier(api, "rename-ambiguous-declaration");
+            assertTrue(ReferencesSearch.search(ambiguous).findAll().isEmpty(),
+                "an ambiguous call must not be claimed as a usage of either overload");
+            String sourceBefore = source.getText();
+            String apiBefore = api.getText();
+            RuntimeException rejection = assertThrows(RuntimeException.class,
+                () -> renameProcessor(project, ambiguous, "AmbiguousRejected").run());
+            assertTrue(rejection.getMessage().contains("Multiple declarations may identify"),
+                "the actual refactoring must stop at the VAS ambiguity preflight: " + rejection);
+            assertEquals(sourceBefore, source.getText(), "rejected rename must not change any use");
+            assertEquals(apiBefore, api.getText(), "rejected rename must not change its declaration");
+
+            RenameProcessor narrowed = new RenameProcessor(project, target, "ScopeRejected",
+                new LocalSearchScope(api), false, false);
+            narrowed.setPreviewUsages(false);
+            RuntimeException scopeRejection = assertThrows(RuntimeException.class, narrowed::run);
+            assertTrue(scopeRejection.getMessage().contains("does not cover every known usage"),
+                "a narrowed mutation scope must be rejected before changing the declaration: " + scopeRejection);
+            assertEquals(sourceBefore, source.getText(), "scope rejection must not change any use");
+            assertEquals(apiBefore, api.getText(), "scope rejection must not change its declaration");
+
+            // RenameProcessor creates its own command and write action. Starting it
+            // inside an outer write action can deadlock its background usage search.
+            renameProcessor(project, target, "StableRenamed").run();
+            documents.commitAllDocuments();
+            assertEquals(apiBefore.replace("/*rename-function-declaration*/StableRename",
+                "/*rename-function-declaration*/StableRenamed"), api.getText());
+            assertEquals(sourceBefore
+                .replace("/*rename-first-use*/StableRename", "/*rename-first-use*/StableRenamed")
+                .replace("/*rename-second-use*/StableRename", "/*rename-second-use*/StableRenamed"),
+                source.getText(), "rename must preserve unrelated members, comments, strings and overloads");
+            assertActualUsageOffsets(markedIdentifier(api, "rename-function-declaration"), source,
+                "rename-first-use", "rename-second-use");
+
+            UndoManager undo = UndoManager.getInstance(project);
+            assertTrue(undo.isUndoAvailable(null), "the cross-file rename must create one undoable command");
+            undo.undo(null);
+            documents.commitAllDocuments();
+            assertEquals(sourceBefore, source.getText(), "one undo must restore every changed usage");
+            assertEquals(apiBefore, api.getText(), "one undo must restore the declaration");
+            assertActualUsageOffsets(markedIdentifier(api, "rename-function-declaration"), source,
+                "rename-first-use", "rename-second-use");
+        });
+    }
+
+    private static RenameProcessor renameProcessor(Project project, PsiElement target, String newName) {
+        RenameProcessor processor = new RenameProcessor(project, target, newName, false, false) {
+            @Override
+            protected boolean isGlobalUndoAction() {
+                return true;
+            }
+
+            @Override
+            protected UndoConfirmationPolicy getUndoConfirmationPolicy() {
+                return UndoConfirmationPolicy.DO_NOT_REQUEST_CONFIRMATION;
+            }
+        };
+        processor.setPreviewUsages(false);
+        return processor;
+    }
+
+    private static void assertActualUsageOffsets(PsiElement target, PsiFile expectedFile, String... markers) {
+        Collection<PsiReference> references = ReferencesSearch.search(target).findAll();
+        assertEquals(markers.length, references.size(), "actual ReferencesSearch must return only bound code usages");
+        for (String marker : markers) {
+            PsiElement expected = markedIdentifier(expectedFile, marker);
+            assertTrue(references.stream().anyMatch(reference -> reference.getElement().isEquivalentTo(expected)), marker);
+        }
+    }
+
+    private static void runOnEdtWithWriteIntent(Runnable action) {
+        Application application = ApplicationManager.getApplication();
+        Runnable guarded = () -> WriteIntentReadAction.run(action);
+        if (application.isDispatchThread()) {
+            guarded.run();
+        } else {
+            application.invokeAndWait(guarded);
+        }
+    }
+
+    @Test
+    @Tag("season/vas")
+    void refusesPartialDeclarationFamilyRenamesWithoutDisablingStandaloneMembers() {
+        Project project = getSolutionApiFacade().getProject();
+        Path sourceDirectory = getSolutionApiFacade().getActiveSolutionDirectory().resolve("src");
+        PsiFile families = fixture(project, sourceDirectory, "safety-families.vas");
+        String before = families.getText();
+
+        // No call sites are needed: linked declarations themselves make these
+        // operations unsafe until the refactoring can update the whole family.
+        assertRenameRejected(markedIdentifier(families, "lifecycle-type-declaration"), "LifecycleRenamed");
+        assertRenameRejected(markedIdentifier(families, "interface-family-declaration"), "PerformRenamed");
+        assertRenameRejected(markedIdentifier(families, "interface-implementation-declaration"), "PerformRenamed");
+        assertRenameRejected(markedIdentifier(families, "base-family-declaration"), "RunRenamed");
+        assertRenameRejected(markedIdentifier(families, "base-implementation-declaration"), "RunRenamed");
+        assertRenameAllowed(markedIdentifier(families, "unrelated-method-declaration"), "UnrelatedPerformRenamed");
+        assertRenameAllowed(markedIdentifier(families, "standalone-field-declaration"), "StandaloneValueRenamed");
+        assertRenameAllowed(markedIdentifier(families, "implicit-lifecycle-type-declaration"), "ImplicitLifecycleRenamed");
+        assertEquals(before, families.getText(), "declaration-family preflight must not change any declaration");
     }
 
     private static void assertRenameRejected(PsiElement target, String newName) {

@@ -169,6 +169,28 @@ public final class VasSymbolScannerTest {
         assertTrue(count.isVisibleAt(source.lastIndexOf("count")));
     }
 
+    @Test
+    public void findsExplicitLifecycleFamiliesWithoutConfusingConstructorUses() {
+        for (String body : List.of("Foo() {}", "Foo(int value) {}", "~Foo() {}", "private Foo() {}", "void run() {} ~Foo() {}")) {
+            String source = "namespace N { class Foo { " + body + " } }";
+            assertTrue(body, VasSymbolScanner.hasExplicitLifecycleDeclaration(source, find(VasSymbolScanner.scan(source), "Foo")));
+        }
+        for (String body : List.of("", "Foo@ field = Foo();", "void run() { Foo@ value = Foo(); }", "void run() { Foo(); }")) {
+            String source = "class Foo { " + body + " }";
+            assertFalse(body, VasSymbolScanner.hasExplicitLifecycleDeclaration(source, find(VasSymbolScanner.scan(source), "Foo")));
+        }
+    }
+
+    @Test
+    public void qualifiedNamespaceComponentsAreDeclarationsNotBaseTypes() {
+        List<VasSymbol> symbols = VasSymbolScanner.scan("namespace N::Inner { int value; }");
+        assertEquals("N", find(symbols, "N").qualifiedName());
+        assertEquals("N::Inner", find(symbols, "Inner").qualifiedName());
+        assertEquals("N::Inner", find(symbols, "value").container());
+        assertTrue(find(symbols, "N").baseTypes().isEmpty());
+        assertTrue(find(symbols, "Inner").baseTypes().isEmpty());
+    }
+
     private static VasSymbol find(List<VasSymbol> symbols, String name) {
         return symbols.stream()
             .filter(symbol -> symbol.name().equals(name))

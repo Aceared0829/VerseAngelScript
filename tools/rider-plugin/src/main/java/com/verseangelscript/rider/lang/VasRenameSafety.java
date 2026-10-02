@@ -8,6 +8,10 @@ import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiManager;
 import com.intellij.psi.search.FileTypeIndex;
 import com.intellij.psi.search.GlobalSearchScope;
+import com.intellij.psi.search.LocalSearchScope;
+import com.intellij.psi.search.PsiSearchHelper;
+import com.intellij.psi.search.PsiSearchScopeUtil;
+import com.intellij.psi.search.SearchScope;
 import com.intellij.util.IncorrectOperationException;
 import com.verseangelscript.rider.VasFileType;
 import com.verseangelscript.rider.index.VasSymbol;
@@ -22,6 +26,7 @@ import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Predicate;
 
 /**
  * Operation-wide, nonmutating rename preflight for PsiCheckedRenameElement.
@@ -35,6 +40,18 @@ public final class VasRenameSafety {
     }
 
     public static void checkRename(@NotNull PsiElement target, @NotNull String newName) {
+        SearchScope useScope = PsiSearchHelper.getInstance(target.getProject()).getUseScope(target);
+        // Pinned Build 262 RenameUtil intersects nonlocal use scopes with the
+        // default RenameProcessor project scope. allScope resolution alone cannot
+        // make an out-of-project occurrence part of that mutation.
+        SearchScope mutationScope = useScope instanceof LocalSearchScope ? useScope
+            : GlobalSearchScope.projectScope(target.getProject()).intersectWith(useScope);
+        checkRename(target, newName, occurrence -> PsiSearchScopeUtil.isInScope(mutationScope, occurrence));
+    }
+
+    public static void checkRename(
+        @NotNull PsiElement target, @NotNull String newName, @NotNull Predicate<PsiElement> usageCovered
+    ) {
         VasSymbol symbol = VasSymbolResolver.findSymbol(target).orElse(null);
         PsiFile targetFile = target.getContainingFile();
         if (symbol == null || targetFile == null) {
@@ -43,10 +60,15 @@ public final class VasRenameSafety {
         if (DumbService.isDumb(target.getProject())) {
             refuse("Wait for indexing to finish before renaming VAS symbols.");
         }
-        VasLexer nameLexer = new VasLexer();
-        nameLexer.start(newName);
-        if (nameLexer.getTokenType() != VasTypes.IDENTIFIER || nameLexer.getTokenEnd() != newName.length()) {
-            refuse("The new VAS name must be a single non-keyword identifier.");
+        if (!isValidNewName(newName)) {
+            refuse("The new VAS name must use ASCII letters, digits and underscores, "
+                + "start with a letter or underscore, and not be a keyword. "
+                + "Unicode identifier support depends on the compiler configuration.");
+        }
+        if (symbol.kind() == VasSymbolKind.CLASS
+            && VasSymbolScanner.hasExplicitLifecycleDeclaration(targetFile.getText(), symbol)) {
+            refuse("This VAS class has explicit constructor or destructor declarations; "
+                + "rename cannot safely update that declaration family yet.");
         }
         if (!symbol.isProjectVisible() && (symbol.scopeStart() < 0
             || symbol.scopeEnd() > targetFile.getTextLength() || symbol.scopeEnd() <= symbol.scopeStart())) {
@@ -132,6 +154,10 @@ public final class VasRenameSafety {
                                 + "' is unresolved or ambiguous; rename was cancelled before changing files.");
                         }
                         if (candidates.size() == 1 && target.isEquivalentTo(candidates.get(0))) {
+                            if (!usageCovered.test(occurrence)) {
+                                refuse("The requested VAS rename does not cover every known usage; "
+                                    + "rename was cancelled before changing files.");
+                            }
                             VasUsageContext context = VasSymbolScanner.usageContext(text, offset);
                             if (context.access() == VasUsageContext.Access.UNQUALIFIED
                                 && newNameDeclarations.stream().anyMatch(candidate ->
@@ -148,6 +174,12 @@ public final class VasRenameSafety {
         }
     }
 
+    static boolean isValidNewName(String name) {
+        // VAS rejects '$'; Unicode identifiers additionally require engine property 25.
+        // Until that per-project property is verified, propose only this valid subset.
+        return name.matches("[A-Za-z_][A-Za-z0-9_]*") && !VasKeywords.SET.contains(name);
+    }
+
     private static void checkDeclarationCollisions(PsiFile file, PsiElement target, VasSymbol symbol) {
         for (PsiElement candidate : VasSymbolResolver.findModuleDeclarations(file, symbol.name())) {
             if (target.isEquivalentTo(candidate)) {
@@ -162,7 +194,74 @@ public final class VasRenameSafety {
                 refuse("Multiple declarations may identify '" + symbol.qualifiedName()
                     + "'; rename was cancelled before changing files.");
             }
+            if (symbol.kind() == VasSymbolKind.FUNCTION && other.kind() == VasSymbolKind.FUNCTION
+                && !haveDisjointFunctionArities(symbol, other)
+                && haveRelatedOwners(file, symbol.container(), other.container())) {
+                refuse("The VAS method '" + symbol.qualifiedName()
+                    + "' may belong to an interface or inheritance declaration family; "
+                    + "rename cannot safely update that family yet.");
+            }
         }
+    }
+
+    private static boolean haveRelatedOwners(PsiFile file, String left, String right) {
+        if (left.isEmpty() || right.isEmpty() || left.equals(right)) {
+            return false;
+        }
+        List<VasSymbol> leftTypes = typesNamed(file, simpleName(left)).stream()
+            .filter(type -> type.qualifiedName().equals(left)).toList();
+        List<VasSymbol> rightTypes = typesNamed(file, simpleName(right)).stream()
+            .filter(type -> type.qualifiedName().equals(right)).toList();
+        for (VasSymbol leftType : leftTypes) {
+            for (VasSymbol rightType : rightTypes) {
+                if (possiblyInherits(file, leftType, rightType.qualifiedName(), new LinkedHashSet<>())
+                    || possiblyInherits(file, rightType, leftType.qualifiedName(), new LinkedHashSet<>())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean possiblyInherits(
+        PsiFile file, VasSymbol derived, String baseIdentity, Set<String> visited
+    ) {
+        ProgressManager.checkCanceled();
+        if (derived.qualifiedName().equals(baseIdentity)) {
+            return true;
+        }
+        if (!visited.add(derived.qualifiedName())) {
+            return false;
+        }
+        for (String baseName : derived.baseTypes()) {
+            // The scanner does not fully bind base-type syntax. If multiple visible
+            // types share its spelling, each remains a possible family relationship.
+            for (VasSymbol candidate : typesNamed(file, simpleName(baseName))) {
+                if (possiblyInherits(file, candidate, baseIdentity, visited)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static List<VasSymbol> typesNamed(PsiFile file, String name) {
+        List<VasSymbol> types = new ArrayList<>();
+        for (PsiElement declaration : VasSymbolResolver.findModuleDeclarations(file, name)) {
+            VasSymbol type = VasSymbolResolver.findSymbol(declaration).orElse(null);
+            if (type == null) {
+                refuse("A possible VAS declaration family could not be inspected; rename was cancelled.");
+            }
+            if (type.kind() == VasSymbolKind.CLASS || type.kind() == VasSymbolKind.INTERFACE) {
+                types.add(type);
+            }
+        }
+        return types;
+    }
+
+    private static String simpleName(String name) {
+        int separator = name.lastIndexOf("::");
+        return separator < 0 ? name : name.substring(separator + 2);
     }
 
     private static boolean haveDisjointFunctionArities(VasSymbol left, VasSymbol right) {
