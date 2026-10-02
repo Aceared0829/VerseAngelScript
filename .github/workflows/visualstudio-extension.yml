@@ -48,6 +48,7 @@ jobs:
           path: |
             tools/visualstudio-extension/TestResults/VS2026.trx
             tools/visualstudio-extension/TestResults/host-instance.json
+            tools/visualstudio-extension/TestResults/host-runtime-dependencies.json
             tools/visualstudio-extension/TestResults/*ActivityLog*
             tools/visualstudio-extension/TestResults/harness/Screenshots/*Activity*.xml
             tools/visualstudio-extension/TestResults/harness/Screenshots/*VSExtensionTestingInstallerLog*.log

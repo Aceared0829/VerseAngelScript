@@ -42,6 +42,25 @@ try {
     & $msbuild 'test/HostTests/HostTests.csproj' /restore /t:Build /p:Configuration=Release /nologo /verbosity:minimal
     if ($LASTEXITCODE -ne 0) { throw "Host test restore/build failed ($LASTEXITCODE)." }
     $testOutput = Join-Path $extensionRoot 'test/HostTests/bin/Release/net472'
+    # The published IDE harness has runtime AssemblyRefs omitted from its nuspec.
+    # Verify the actual output identities before launching, not just restore success.
+    $runtimeDependencies = [ordered]@{
+        'Microsoft.VisualStudio.Interop' = '18.0.0.0'
+        'System.Memory' = '4.0.5.0'
+        'System.Threading.Tasks.Extensions' = '4.2.4.0'
+        'System.Collections.Immutable' = '10.0.0.10'
+        'System.Runtime.CompilerServices.Unsafe' = '6.0.3.0'
+    }
+    $runtimeEvidence = foreach ($name in $runtimeDependencies.Keys) {
+        $assembly = Join-Path $testOutput "$name.dll"
+        if (!(Test-Path $assembly)) { throw "Missing harness runtime dependency: $name" }
+        $version = [Reflection.AssemblyName]::GetAssemblyName($assembly).Version.ToString()
+        if ($version -ne $runtimeDependencies[$name]) {
+            throw "Harness runtime $name has version $version; expected $($runtimeDependencies[$name])."
+        }
+        [pscustomobject]@{ name = $name; version = $version }
+    }
+    $runtimeEvidence | ConvertTo-Json | Tee-Object (Join-Path $ResultsDirectory 'host-runtime-dependencies.json')
     Copy-Item $packages[0].FullName (Join-Path $testOutput 'VerseAngelScript.vsix') -Force
     $trx = Join-Path $ResultsDirectory 'VS2026.trx'
     if (Test-Path $trx) { Remove-Item $trx }

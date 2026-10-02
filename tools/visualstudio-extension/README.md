@@ -69,3 +69,10 @@ The test harness is pinned to `5.13.0-1.26502.3`, a published package whose
 production package uses `Microsoft.VSSDK.BuildTools` 18.5.40034; the 17.14.40265
 Visual Studio SDK references are confined to the test project. Native execution
 remains a required CI gate, rather than an assumption about package compatibility.
+
+The harness's published NuGet metadata omits several runtime assembly dependencies.
+The test project therefore pins VS18 Interop (from the same public Microsoft feed),
+System.Memory, Tasks.Extensions, Immutable and Unsafe explicitly. Before launching
+VS, the script checks their actual copied assembly identities and records them in
+`host-runtime-dependencies.json`. These references belong only to the test runner;
+no DLL is included in the production VSIX.
