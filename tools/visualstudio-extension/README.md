@@ -1,80 +1,131 @@
 # VerseAngelScript for Visual Studio 2026
 
-A small, content-only VSIX for `.vas` files in Visual Studio 2026 (18.x, x64).
-It uses Visual Studio's built-in TextMate and Language Configuration engines for:
+A VSIX for `.vas` editing and explicit native project builds in Visual Studio 2026
+(18.x, x64). Canonical TextMate assets provide syntax colors, comments, bracket
+pairs, indentation and ordinary editor undo. The extension does not claim `.as`,
+`.cpp`, or the C++ language/content type.
 
-- Syntax colors, including multiline triple-quoted strings and non-nesting comments
-- Comment/uncomment commands
-- Automatic bracket pairs when enabled in Visual Studio, indentation and ordinary editor undo
+## Build a project
 
-This is basic editing support. It does not provide semantic completion, navigation,
-compiler diagnostics, building, debugging, SDK generation or Unreal integration.
-It does not register `.as`, `.cpp`, or the C++ language/content type.
+1. Set **Tools → Options → VerseAngelScript → Toolchain → Compiler executable** to
+   an absolute `vasbuild.exe` path. This is a user setting, independent of the
+   project. Manifest `builder` and `runner` metadata never select a program.
+2. Open a solution or use **Open Folder**. Place `vas-project.json` directly in
+   the solution directory or open folder. The active editor does not select the
+   entry, host API, or compilation unit.
+3. Invoke **Tools → Build VAS Project**. The native dialog shows the actual root,
+   manifest and configured executable. **Read Project Units** explicitly runs one
+   compiler descriptor command. Cancelling before this action executes no tool.
+4. Select a unit from the returned native descriptor. No unit is selected by
+   default, even for a one-unit project. Review its entry, host API and output,
+   then choose **Build Selected Unit** to run one build. Cancelling this stage
+   executes no build. **Tools → Cancel VAS Build** stops an active operation.
 
-## Build and test
+The compiler owns the shared [project](../../docs/vas-project.md) and
+[JSONL report](../../docs/vas-build-report.md) contracts. Enumeration and selection
+create no output directories. Only a successful native compilation may create
+its configured output. Opening, indexing, editing and saving settings never
+execute the compiler. A repeated Build command while an operation is active is
+ignored; cancel it before starting another.
 
-Windows with Visual Studio 2026 and the **Visual Studio extension development**
-workload is required. From the repository root in PowerShell:
+Compiler errors, warnings and information appear in the native Error List and
+build status in the **VAS Project Build** Output pane. A diagnostic navigates only
+when a supported compiler-provided loaded-source SHA-256 proof matches a stable
+saved file observation and the native editor's text matches those bytes. Native
+UTF-8 byte columns are converted to UTF-16 caret columns, including supplementary
+characters and an initial UTF-8 BOM. Unknown positions, invalid UTF-8/NUL/lone-CR
+source, missing or unsupported proofs remain non-navigable messages. No range or
+source position is guessed from line numbers alone.
+
+Saved manifest, compiler, selected entry/config and compiler-observed include
+inputs are guarded against changes and dirty physical aliases, including hardlinks
+and junctions. Missing include candidates retain watch-only canonical aliases
+through their nearest existing ancestors. Partial discovery preserves prior
+per-unit dependencies. Cancellation, root close/reopen, compiler setting changes,
+input changes and disposal prevent late diagnostics from replacing current work.
+
+The checks are observations, not an adversarial filesystem sandbox or an atomic
+snapshot of a concurrently changing tree. The source digest proves the exact
+native loaded bytes, not the original native file ID. A same-byte replacement
+before the first matching client observation is indistinguishable. The client
+uses 16 MiB per saved file, 64 MiB total tracked bytes, 4,096 tracked paths, 256
+watch directories, 16 MiB descriptors, 64 MiB reports, 1 MiB report lines and
+100,000 records. Descriptor/build deadlines are 30/120 seconds. Cancellation
+terminates the direct owned compiler process; process-tree termination is not
+claimed. The compiler's JSONL flushing behavior is unchanged.
+
+## Native trust boundary
+
+The two explicit dialog actions authorize only their current descriptor/build
+operation. They do not establish stored workspace trust or automatically approve
+future execution. No supported public native trust-state query was found in the
+pinned VS18-compatible SDK packages. Synchronization with Visual Studio's native
+workspace trust state remains unverified. Opening a solution or folder is not
+proof of native trust. The extension uses no reconstructed private COM interface,
+registry trust heuristic or `Microsoft.Internal` API.
+
+This module does not provide Run Project, semantic analysis, LSP, debugger/DAP,
+SDK generation, Unreal integration, or C++ feature parity.
+
+## Build and verify
+
+Windows with Visual Studio 2026, C++ tools and the **Visual Studio extension
+development** workload is required:
 
 ```powershell
 ./tools/visualstudio-extension/scripts/test-vs2026.ps1
 ```
 
-The script strictly discovers an 18.x/VSSDK installation, restores pinned packages,
-builds the production VSIX, checks its contents against the canonical assets, and
-runs seven IDE tests in an actual `devenv.exe` process. Microsoft's xUnit IDE harness
-installs the VSIX in a separate `VASIntegration` experimental root. The tests assert
-that both the process version/path and root suffix match the discovered instance.
-They never install into your normal Visual Studio profile. The harness resets the
-experimental root's settings; do not use that root for personal development.
+The script discovers an actual 18.x/VSSDK installation, builds `vasbuild` and the
+native wide-argument fixture, runs compiler contract tests, builds the production
+VSIX and validates its exact payload. Microsoft's pinned xUnit IDE harness installs
+that VSIX through `RequireExtension` into the separate `VASIntegration` root and
+runs real `devenv.exe` tests. A separate `VASProjectDisposal` root isolates the
+package-close lifecycle case. Both the host executable and root suffix are asserted.
+The harness resets experimental-root settings; do not use it for personal work.
 
-The native suite covers classifications, Unicode/space paths, close/reopen,
-triple-quoted strings, non-nesting comments, comment/uncomment and undo, bracket
-pairing, newline indentation and `.cpp`/`.as` isolation. Commands go through the
-real editor command chain. Brace completion is tested with the editor preference
-both disabled and enabled, then restored. Indentation checks visual columns with
-the editor's tab width, honoring either tabs or spaces. Direct buffer changes are not used to simulate command
-success. Missing, skipped, empty or failing host results fail the script.
+The original seven native editor cases remain mandatory alongside eighteen
+project cases (25 required native cases). Project cases exercise
+solution/Open Folder discovery, actual registered commands and dialogs, explicit
+nondefault selection, real compiler output/Error List/navigation, dirty aliases,
+proof failures, cancellation, repeated operations and stale-result guards. XML
+and per-case evidence gates reject missing, skipped, duplicate or failed cases.
+`TestResults/VS2026.trx`, compiler/host identities, project evidence and focused
+ActivityLogs are retained by the `windows-2025-vs2026` workflow. A successful Linux
+compile or protocol test is never evidence of native Visual Studio execution.
 
-`TestResults/VS2026.trx`, the selected instance and isolated ActivityLogs are kept as
-focused evidence. The dedicated CI workflow uses `windows-2025-vs2026`, with the
-same strict runtime probe. A package build or Linux contract check is not evidence
-that the native editor tests passed.
-
-For a quick platform-independent registration check:
+For platform-independent packaging/evidence checks:
 
 ```sh
 python tools/visualstudio-extension/test/check_package.py
+python tools/visualstudio-extension/test/test_validation.py
 ```
 
-The production VSIX is written beneath `bin/Release`. It contains no assemblies,
-server process or test code. It is a development artifact, not a Marketplace or
-GitHub release. Close Visual Studio before manually installing it with VSIXInstaller.
+The development VSIX is produced under `bin/Release`. Its executable payload is
+limited to `VerseAngelScript.dll` and Newtonsoft.Json 13.0.3, alongside generated
+package registration and canonical editor assets. SDK, harness and other runtime
+DLLs, test code, PDBs, compiler executables and release ZIPs must not ship.
+There is no version bump, Marketplace publication or release in this module.
 
-## Shared language assets
+## Shared assets and supported APIs
 
 `../vscode-extension/syntaxes/vas.tmLanguage.json` and
-`../vscode-extension/language-configuration.json` are linked as build content.
-Do not copy or fork them here. CI verifies byte-for-byte parity in the built VSIX.
-`VAS.pkgdef` registers `source.vas` with the built-in Language Configuration engine.
-No custom MEF component or language-client assembly is necessary for this scope.
+`../vscode-extension/language-configuration.json` are linked, not copied/forked.
+Package validation checks byte-for-byte parity. `VAS.pkgdef` registers the built-in
+Language Configuration engine; the executable package adds only explicit build
+commands, options, dialogs and Error List integration. No `ILanguageClient` is
+registered without a server.
 
-## References
+Pinned dependencies include VSSDK BuildTools 18.5.40034, SDK 17.14.40265,
+Interop 18.0.42421 and Workspace/Workspace.VSIntegration 17.12.19. The public
+`IVsFolderWorkspaceService.CurrentWorkspace` supplies Open Folder location;
+`IVsSolution.GetSolutionInfo` supplies a solution location. Native dialogs use
+`DialogWindow.ShowModal`, and diagnostics use `ErrorListProvider`/`ErrorTask`.
+The test harness remains 5.13.0-1.26502.3. Its omitted runtime dependencies are
+explicitly pinned and checked before host launch; they are test-only.
 
-- [Microsoft Language Configuration documentation](https://learn.microsoft.com/en-us/visualstudio/extensibility/language-configuration)
-- [Microsoft's matching VSIX sample](https://github.com/microsoft/VSExtensibility/tree/main/LSP/Samples/Language%20Configuration%20Setup%20Example)
-- [Microsoft test harness and public VSSDK feed](https://github.com/microsoft/vs-extension-testing)
-- [Runner labels and installed software](https://github.com/actions/runner-images)
-
-The test harness is pinned to `5.13.0-1.26502.3`, a published package whose
-`VisualStudioVersion.VS18` support was checked in its actual assembly. The
-production package uses `Microsoft.VSSDK.BuildTools` 18.5.40034; the 17.14.40265
-Visual Studio SDK references are confined to the test project. Native execution
-remains a required CI gate, rather than an assumption about package compatibility.
-
-The harness's published NuGet metadata omits several runtime assembly dependencies.
-The test project therefore pins VS18 Interop (from the same public Microsoft feed),
-System.Memory, Tasks.Extensions, Immutable and Unsafe explicitly. Before launching
-VS, the script checks their actual copied assembly identities and records them in
-`host-runtime-dependencies.json`. These references belong only to the test runner;
-no DLL is included in the production VSIX.
+References: [language configuration](https://learn.microsoft.com/en-us/visualstudio/extensibility/language-configuration),
+[native DialogWindow](https://learn.microsoft.com/en-us/dotnet/api/microsoft.visualstudio.platformui.dialogwindow?view=visualstudiosdk-2022),
+[native trust behavior](https://learn.microsoft.com/en-us/visualstudio/ide/trust-settings?view=visualstudio),
+[Microsoft test harness](https://github.com/microsoft/vs-extension-testing),
+[runner images](https://github.com/actions/runner-images).

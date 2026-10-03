@@ -7,6 +7,13 @@ on:
       - 'tools/visualstudio-extension/**'
       - 'tools/vscode-extension/syntaxes/**'
       - 'tools/vscode-extension/language-configuration.json'
+      - 'sdk/samples/asbuild/**'
+      - 'sdk/add_on/scriptbuilder/**'
+      - 'sdk/angelscript/**'
+      - 'tests/vasbuild/**'
+      - 'CMakeLists.txt'
+      - 'docs/vas-project.md'
+      - 'docs/vas-build-report.md'
       - '.github/workflows/visualstudio-extension.yml'
   pull_request:
     branches: [master]
@@ -14,6 +21,13 @@ on:
       - 'tools/visualstudio-extension/**'
       - 'tools/vscode-extension/syntaxes/**'
       - 'tools/vscode-extension/language-configuration.json'
+      - 'sdk/samples/asbuild/**'
+      - 'sdk/add_on/scriptbuilder/**'
+      - 'sdk/angelscript/**'
+      - 'tests/vasbuild/**'
+      - 'CMakeLists.txt'
+      - 'docs/vas-project.md'
+      - 'docs/vas-build-report.md'
       - '.github/workflows/visualstudio-extension.yml'
   workflow_dispatch:
 
@@ -29,25 +43,30 @@ jobs:
     # Official runner-images lists this as a supported YAML label. Also probe vswhere
     # and assert the actual host major/version path instead of trusting the label.
     runs-on: windows-2025-vs2026
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Build VSIX and exercise the real VS2026 editor
+      - name: Build native compiler and exercise VS2026 editor and project commands
         shell: pwsh
         run: ./tools/visualstudio-extension/scripts/test-vs2026.ps1
       - name: Upload focused test evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: vs2026-editor-results
+          name: vs2026-editor-project-results
           if-no-files-found: warn
           retention-days: 7
           path: |
             tools/visualstudio-extension/TestResults/VS2026.trx
             tools/visualstudio-extension/TestResults/host-instance.json
+            tools/visualstudio-extension/TestResults/native-build.json
+            tools/visualstudio-extension/TestResults/core-tests.log
+            tools/visualstudio-extension/TestResults/native-security-evidence.json
+            tools/visualstudio-extension/TestResults/native-build/Testing/Temporary/LastTest.log
+            tools/visualstudio-extension/TestResults/project-build/*.json
             tools/visualstudio-extension/TestResults/host-runtime-dependencies.json
             tools/visualstudio-extension/TestResults/*ActivityLog*
             tools/visualstudio-extension/TestResults/*editor-options.txt

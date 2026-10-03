@@ -25,11 +25,15 @@
   </ItemGroup>
   <ItemGroup>
     <Reference Include="PresentationCore" />
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="UIAutomationTypes" />
+    <Reference Include="UIAutomationProvider" />
     <Reference Include="PresentationFramework" />
     <Reference Include="WindowsBase" />
     <Reference Include="System.ComponentModel.Composition" />
     <Reference Include="System.Runtime.Remoting" />
     <Reference Include="System.Xml.Linq" />
+    <ProjectReference Include="../../VerseAngelScript.VisualStudio.csproj" ReferenceOutputAssembly="true" />
     <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

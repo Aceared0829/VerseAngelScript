@@ -8,7 +8,7 @@ New-Item -ItemType Directory -Force $ResultsDirectory | Out-Null
 
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
 if (!(Test-Path $vswhere)) { throw 'vswhere.exe is required.' }
-$instances = @(& $vswhere -products '*' -version '[18.0,19.0)' -requires Microsoft.VisualStudio.Component.VSSDK -format json | ConvertFrom-Json)
+$instances = @(& $vswhere -products '*' -version '[18.0,19.0)' -requires Microsoft.VisualStudio.Component.VSSDK Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -format json | ConvertFrom-Json)
 if ($LASTEXITCODE -ne 0 -or $instances.Count -eq 0) { throw 'A real VS2026 (18.x) instance with VSSDK is required; no fallback is allowed.' }
 $instance = $instances | Sort-Object { [version]$_.installationVersion } -Descending | Select-Object -First 1
 $install = $instance.installationPath
@@ -27,6 +27,41 @@ $env:VAS_EXPECTED_DEVENV = $devenv
 $env:VAS_TEST_WORKSPACE = Join-Path $ResultsDirectory 'fixtures'
 $env:VAS_TEST_RESULTS = $ResultsDirectory
 $env:XUNIT_LOGS = Join-Path $ResultsDirectory 'harness'
+$repositoryRoot = [IO.Path]::GetFullPath((Join-Path $extensionRoot '../..'))
+$nativeBuild = Join-Path $ResultsDirectory 'native-build'
+$projectEvidence = Join-Path $ResultsDirectory 'project-build'
+# Remove stale evidence before any run; a previous native pass cannot satisfy this gate.
+if (Test-Path $projectEvidence) { Remove-Item $projectEvidence -Recurse -Force }
+New-Item -ItemType Directory -Force $projectEvidence | Out-Null
+# Do not convert absence of a native MOTW prompt into trust-state evidence.
+[ordered]@{
+    nativeMotwPromptCancellation = 'unverified'
+    reason = 'This suite does not establish a native MOTW prompt on the selected host; no trust-state synchronization or prompt-cancellation pass is claimed.'
+} | ConvertTo-Json | Set-Content (Join-Path $ResultsDirectory 'native-security-evidence.json') -Encoding utf8
+
+# The extension tests consume the repository compiler, built with this exact VS18
+# installation. A canned descriptor or framework fixture cannot replace it.
+cmake -S $repositoryRoot -B $nativeBuild -G 'Visual Studio 18 2026' -A x64 "-DCMAKE_GENERATOR_INSTANCE=$install" -DBUILD_TESTING=ON
+if ($LASTEXITCODE -ne 0) { throw 'Native VS2026 CMake configuration failed.' }
+cmake --build $nativeBuild --config Release --target vasbuild vas_rider_argv_fixture vas_source_digest_test --parallel
+if ($LASTEXITCODE -ne 0) { throw 'Native compiler/argument fixture build failed.' }
+ctest --test-dir $nativeBuild -C Release --output-on-failure -R '^(vasbuild_project_|vasbuild_jsonl_|vas_source_digest$)'
+if ($LASTEXITCODE -ne 0) { throw 'Native compiler project/report conformance failed.' }
+$env:VAS_NATIVE_COMPILER = Join-Path $nativeBuild 'Release/vasbuild.exe'
+$env:VASBUILD_EXECUTABLE = $env:VAS_NATIVE_COMPILER
+$env:VAS_NATIVE_ARGV_FIXTURE = Join-Path $nativeBuild 'Release/vas_rider_argv_fixture.exe'
+foreach ($path in @($env:VAS_NATIVE_COMPILER, $env:VAS_NATIVE_ARGV_FIXTURE)) {
+    if (!(Test-Path $path -PathType Leaf)) { throw "Missing native test binary: $path" }
+}
+[ordered]@{
+    generator = 'Visual Studio 18 2026'
+    configuration = 'Release'
+    compiler = $env:VAS_NATIVE_COMPILER
+    compilerSha256 = (Get-FileHash $env:VAS_NATIVE_COMPILER -Algorithm SHA256).Hash.ToLowerInvariant()
+    argvFixture = $env:VAS_NATIVE_ARGV_FIXTURE
+    argvFixtureSha256 = (Get-FileHash $env:VAS_NATIVE_ARGV_FIXTURE -Algorithm SHA256).Hash.ToLowerInvariant()
+    conformancePassed = $true
+} | ConvertTo-Json | Set-Content (Join-Path $ResultsDirectory 'native-build.json') -Encoding utf8
 
 Push-Location $extensionRoot
 try {
@@ -38,6 +73,11 @@ try {
     if ($packages.Count -ne 1) { throw "Expected one production VSIX, found $($packages.Count)." }
     python 'test/check_package.py' --vsix $packages[0].FullName
     if ($LASTEXITCODE -ne 0) { throw 'Production VSIX contract failed.' }
+
+    & $msbuild 'test/CoreTests/CoreTests.csproj' /restore /t:Build /p:Configuration=Release /p:TargetFrameworks=net472 /p:TargetFramework=net472 /nologo /verbosity:minimal
+    if ($LASTEXITCODE -ne 0) { throw "Native Windows core test build failed ($LASTEXITCODE)." }
+    & 'test/CoreTests/bin/Release/net472/CoreTests.exe' 2>&1 | Tee-Object (Join-Path $ResultsDirectory 'core-tests.log')
+    if ($LASTEXITCODE -ne 0) { throw "Native Windows core tests failed ($LASTEXITCODE)." }
 
     & $msbuild 'test/HostTests/HostTests.csproj' /restore /t:Build /p:Configuration=Release /nologo /verbosity:minimal
     if ($LASTEXITCODE -ne 0) { throw "Host test restore/build failed ($LASTEXITCODE)." }
