@@ -56,7 +56,8 @@ test('symlink aliases are proven at capture and a retarget fails even with the s
     const target = path.join(root, 'target.txt'), sameInode = path.join(root, 'same-inode.txt'), link = path.join(root, 'main.vas');
     await fs.writeFile(target, 'same'); await fs.link(target, sameInode); await fs.symlink(target, link);
     const snapshot = await captureVersions([link]);
-    assert.equal(snapshot.match(target), snapshot.match(link));
+    assert.equal(snapshot.match(await fs.realpath(target)), snapshot.match(link), 'only the proven canonical target is indexed as a name alias');
+    assert.equal(snapshot.match(link).file, link, 'canonical aliases must not rewrite the original input identity');
     assert.equal(await snapshot.check(target), true);
     await fs.unlink(link); await fs.symlink(sameInode, link);
     assert.equal(await snapshot.check(link), false); await assert.rejects(snapshot.checkAll(), /changed/);
@@ -107,7 +108,9 @@ test('capture and checkAll enforce bounded file, per-input and total-byte resour
   }
   await assert.rejects(captureVersions(files), /aggregate validation limit/);
   const snapshot = await captureVersions([files[0]]);
-  const handle = await fs.open(files[0], 'a'); await handle.truncate(MAX_FILE_BYTES + 1); await handle.close();
+  // Windows append access permits appending but not SetEndOfFile/ftruncate.
+  const handle = await fs.open(files[0], 'r+');
+  try { await handle.truncate(MAX_FILE_BYTES + 1); } finally { await handle.close(); }
   await assert.rejects(snapshot.checkAll(), /byte validation limit/);
   await assert.rejects(readVersion(files[1], undefined, { bytes: MAX_TOTAL_BYTES - 1 }), /aggregate validation limit/);
 }));
@@ -126,17 +129,50 @@ test('cancellation is honored before work and between filesystem operations', ()
 }));
 
 test('a pathname replacement during the opened-handle read cannot become a trusted baseline', () => fixture(async root => {
-  const file = path.join(root, 'main.vas'), replacement = path.join(root, 'new.vas');
+  const file = path.join(root, 'main.vas'), replacement = path.join(root, 'new.vas'), displaced = path.join(root, 'displaced.vas');
   await fs.writeFile(file, 'same'); await fs.writeFile(replacement, 'same');
-  const original = fs.realpath; let calls = 0;
+  const identity = async name => { const stat = await fs.stat(name, { bigint: true }); return `${stat.dev}:${stat.ino}`; };
+  const oldIdentity = await identity(file), newIdentity = await identity(replacement);
+  assert.notEqual(oldIdentity, newIdentity, 'the fixture needs two genuinely distinct files');
+  const original = fs.realpath; let calls = 0, replaced = false;
   try {
     fs.realpath = async (...args) => {
       const result = await original(...args);
-      if (++calls === 1) await fs.rename(replacement, file);
+      if (++calls === 1) {
+        try {
+          // Move the open old file aside first. Windows permits renaming a
+          // FILE_SHARE_DELETE handle, but replacing an open target via
+          // MoveFileEx can fail. Both renames operate on absent destinations.
+          await fs.rename(file, displaced);
+          await fs.rename(replacement, file);
+          assert.equal(await identity(displaced), oldIdentity);
+          assert.equal(await identity(file), newIdentity);
+          replaced = true;
+        } catch (error) {
+          // An intervention failure is a fixture failure, not an input I/O
+          // error which readVersion may honestly represent as unreadable.
+          throw new Error('Could not perform the opened-file replacement fixture', { cause: error });
+        }
+      }
       return result;
     };
     await assert.rejects(captureVersions([file]), /changed/);
+    assert.equal(replaced, true, 'the regression must actually replace the pathname while its original handle is open');
   } finally { fs.realpath = original; }
+}));
+
+test('an availability error after opening cannot establish a readable baseline or authorize a later readable input', () => fixture(async root => {
+  const file = path.join(root, 'main.vas'); await fs.writeFile(file, 'source');
+  const original = fs.realpath;
+  let snapshot;
+  try {
+    fs.realpath = async () => { throw Object.assign(new Error('input became unavailable'), { code: 'EPERM' }); };
+    snapshot = await captureVersions([file]);
+    assert.equal(snapshot.match(file).kind, 'unreadable');
+    assert.equal(await snapshot.check(file), false, 'an unreadable state is never a comparable saved version');
+  } finally { fs.realpath = original; }
+  assert.equal(snapshot.matches(file, await readVersion(file)), false);
+  await assert.rejects(snapshot.checkAll(), /changed/, 'project freshness must reject the availability transition before launch');
 }));
 
 test('a same-inode write during a read is rejected rather than captured as a newer baseline', () => fixture(async root => {

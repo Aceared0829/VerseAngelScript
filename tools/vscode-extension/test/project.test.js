@@ -201,6 +201,7 @@ test('clean editor state skips dependency identity probes and physical matching 
 
 test('real native success cannot bless changed pre-compile entry/include bytes without a watcher event', { skip: !process.env.VAS_TEST_COMPILER }, async () => {
   const { ProjectDependencies } = require('../src/projectReport');
+  const { readVersion } = require('../src/projectVersions');
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vas-native-version-'));
   const context = host({ uri: { scheme: 'file', fsPath: root } });
   context.dependencies = new ProjectDependencies();
@@ -215,11 +216,16 @@ test('real native success cannot bless changed pre-compile entry/include bytes w
     const request = projectRequest({ project: 'vas-project.json', unit: 'main' }, context.folder, process.env.VAS_TEST_COMPILER);
     const initial = await projectPlan(request, undefined, context), first = await run(initial);
     assert.equal(first.code, 0, first.output.join(''));
-    assert.equal(initial.inputVersions.match(included), undefined, 'first-seen compiler sections must not acquire post-hoc baselines');
+    assert.equal(initial.inputVersions.lookup(included, await readVersion(included)).length, 0,
+      'first-seen compiler sections must not acquire post-hoc baselines under any proven physical alias');
     context.dependencies.update(initial, first.report, true);
     for (const input of [source, included]) {
       const plan = await projectPlan(request, undefined, context);
-      assert.ok(plan.inputVersions.match(input), 'previously observed include must be snapshotted before this native invocation');
+      const actual = await readVersion(input), baselines = plan.inputVersions.lookup(input, actual);
+      assert.ok(baselines.length, 'previously observed include must be snapshotted before this native invocation');
+      assert.equal(plan.inputVersions.matches(input, actual), true, 'fixture spelling must prove physical identity with the compiler-owned input');
+      assert.ok(baselines.some(record => record.file === plan.source || [...first.report.observed.values()].some(item => item.file === record.file)),
+        'the baseline must preserve an exact compiler input name rather than normalizing the fixture path');
       await fs.appendFile(input, '// modification after pre-compile capture\n');
       const result = await run(plan);
       assert.equal(result.code, 0, result.output.join(''));
