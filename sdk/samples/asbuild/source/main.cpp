@@ -10,6 +10,7 @@
 #include <sstream>
 #include "../../common/vas_scriptbuilder.h"
 #include "../../common/vas_build_report.h"
+#include "vas_project.h"
 #if defined(_MSC_VER)
 #include <crtdbg.h>
 #endif
@@ -18,8 +19,9 @@ using namespace std;
 
 // Function prototypes
 int ConfigureEngine(asIScriptEngine *engine, const char *configFile);
-int CompileScript(asIScriptEngine *engine, const char *scriptFile, vas::BuildReport *report);
-int SaveBytecode(asIScriptEngine *engine, const char *outputFile, bool reportMode);
+int CompileScript(asIScriptEngine *engine, const char *scriptFile, vas::BuildReport *report, vector<string> &sections);
+int SaveBytecode(asIScriptEngine *engine, const char *outputFile, bool reportMode,
+	const vas::Project *project, const vas::CompilationUnit *unit, const vector<string> &sections);
 static bool IsVasScriptFile(const char *filename);
 static int ReportInvalidVasScriptExtension(asIScriptEngine *engine, const char *filename, const char *role);
 static string ResolveIncludePath(const char *include, const char *from);
@@ -70,12 +72,44 @@ static int Run(int argc, char **argv)
 	//_CrtSetBreakAlloc(6150);
 #endif
 
+	if( argc > 1 && string(argv[1]) == "--describe-project=json" )
+		return vas::DescribeProject(argc, argv);
+
 	const bool reportMode = argc > 1 && string(argv[1]) == "--report=jsonl";
+	const bool projectMode = reportMode && argc > 2 &&
+		(string(argv[2]) == "--project" || string(argv[2]) == "--unit");
+	vas::Project project;
+	vas::ProjectError projectError;
+	const vas::CompilationUnit *unit = 0;
+	string requestedUnit;
+	bool projectValid = false;
+	string config, entry, output;
 	vas::BuildReport reportStorage;
 	vas::BuildReport *report = reportMode ? &reportStorage : 0;
 	if( report )
 	{
 		if( !report->Open() ) return -1;
+		if( projectMode )
+		{
+			if( argc == 6 && string(argv[2]) == "--project" && string(argv[4]) == "--unit" && argv[5][0] )
+			{
+				requestedUnit = argv[5];
+				projectValid = vas::ReadProject(argv[3], project, projectError);
+				if( projectValid )
+				{
+					for( const vas::CompilationUnit &candidate : project.units )
+						if( candidate.id == requestedUnit ) unit = &candidate;
+					if( !unit )
+					{
+						projectError.code = "project_unit";
+						projectError.message = "Unknown compilation unit: " + requestedUnit;
+						projectError.section = project.path;
+					}
+					else { config = unit->config; entry = unit->entry; output = unit->output; }
+				}
+			}
+			else projectError.message = "Usage: vasbuild --report=jsonl --project <manifest> --unit <id> (explicit unit required)";
+		}
 		vas::BuildReportRecord start = report->Record("start");
 		start.Text("compiler", "vasbuild");
 		start.Text("compilerVersion", asGetLibraryVersion());
@@ -85,36 +119,58 @@ static int Run(int argc, char **argv)
 		if( vas::ReadCurrentDirectory(cwd) ) start.Text("cwd", cwd);
 		else start.Null("cwd");
 		const char *names[] = {"config", "entry", "output"};
+		const string selected[] = {config, entry, output};
 		for( int i = 0; i < 3; ++i )
 		{
 			string path;
-			const char *argument = argc > i + 2 ? argv[i + 2] : "";
-			bool resolved = i == 1 ? vas::ScriptSectionPath(argument, path) : vas::AbsolutePath(argument, path);
+			const char *argument = projectMode ? selected[i].c_str() : argc > i + 2 ? argv[i + 2] : "";
+			bool resolved;
+			if( projectMode ) { path = selected[i]; resolved = !path.empty(); }
+			else resolved = i == 1 ? vas::ScriptSectionPath(argument, path) : vas::AbsolutePath(argument, path);
 			if( resolved ) start.Text(names[i], path);
 			else start.Null(names[i]);
 		}
+		if( projectMode )
+		{
+			if( project.path.empty() ) start.Null("project"); else start.Text("project", project.path);
+			if( projectValid && !project.legacy ) start.Number("projectSchemaVersion", 1); else start.Null("projectSchemaVersion");
+			if( requestedUnit.empty() ) start.Null("unit"); else start.Text("unit", requestedUnit);
+			start.Boolean("legacyProject", project.legacy);
+		}
 		if( !report->Write(start) ) return -1;
-		if( argc != 5 )
+		if( projectMode && (!projectValid || !unit) )
+		{
+			report->Diagnostic("error", projectError.section.c_str(), projectError.row, projectError.column, projectError.message.c_str());
+			report->Result(false);
+			return -1;
+		}
+		if( !projectMode && argc != 5 )
 		{
 			report->Diagnostic("error", "", 0, 0,
 				"Usage: vasbuild --report=jsonl <config file> <script.vas> <output>");
 			report->Result(false);
 			return -1;
 		}
-		// Retain the legacy tuple's indices for the common compilation path.
-		--argc;
-		++argv;
+		if( projectMode && project.legacy ) report->Diagnostic("warning", project.path.c_str(), 0, 0, vas::LegacyProjectWarning());
+		if( !projectMode ) { --argc; ++argv; }
 	}
 
-	if( argc < 4 )
+	if( !projectMode )
 	{
-		cout << "Usage: " << endl;
-		cout << "vasbuild <config file> <script.vas> <output>" << endl;
-		cout << " <config file>  is the file with the application interface" << endl;
-		cout << " <script.vas>  is the VAS script file that should be compiled" << endl;
-		cout << " <output>       is the name that the compiled script will be saved as" << endl;
-		return -1;
+		if( argc < 4 )
+		{
+			cout << "Usage: " << endl;
+			cout << "vasbuild <config file> <script.vas> <output>" << endl;
+			cout << "vasbuild --describe-project=json <manifest>" << endl;
+			cout << "vasbuild --report=jsonl --project <manifest> --unit <id>" << endl;
+			cout << " <config file>  is the file with the application interface" << endl;
+			cout << " <script.vas>  is the VAS script file that should be compiled" << endl;
+			cout << " <output>       is the name that the compiled script will be saved as" << endl;
+			return -1;
+		}
+		config = argv[1]; entry = argv[2]; output = argv[3];
 	}
+	vector<string> sections;
 
 	if( report ) report->phase = "engine";
 	asIScriptEngine *engine = asCreateScriptEngine();
@@ -135,23 +191,34 @@ static int Run(int argc, char **argv)
 	{
 		// Preserve the legacy extension diagnostic before reading config.
 		if( report ) report->phase = "arguments";
-		if( !IsVasScriptFile(argv[2]) )
+		if( !IsVasScriptFile(entry.c_str()) )
 		{
-			ReportInvalidVasScriptExtension(engine, argv[2], "entry script");
+			ReportInvalidVasScriptExtension(engine, entry.c_str(), "entry script");
 			break;
 		}
 		if( report ) report->phase = "config";
-		if( ConfigureEngine(engine, argv[1]) < 0 ) break;
-		if( report && report->Failed() ) break;
-		if( CompileScript(engine, argv[2], report) < 0 ) break;
-		if( report && report->Failed() ) break;
-		if( report ) report->phase = "output";
-		if( report && vas::InvalidReportOutput(argv[3]) )
+		if( projectMode && !vas::ValidateProjectInputs(project, *unit, projectError) )
 		{
-			engine->WriteMessage(argv[3], 0, 0, asMSGTYPE_ERROR, "Report bytecode output must be a regular file distinct from stdout");
+			if( projectError.field == "/entry" ) report->phase = "load";
+			report->Diagnostic("error", projectError.section.c_str(), 0, 0, projectError.message.c_str());
 			break;
 		}
-		if( SaveBytecode(engine, argv[3], report != 0) < 0 ) break;
+		if( ConfigureEngine(engine, config.c_str()) < 0 ) break;
+		if( report && report->Failed() ) break;
+		if( CompileScript(engine, entry.c_str(), report, sections) < 0 ) break;
+		if( report && report->Failed() ) break;
+		if( report ) report->phase = "output";
+		if( projectMode && !vas::PrepareProjectOutput(project, *unit, sections, projectError) )
+		{
+			report->Diagnostic("error", projectError.section.c_str(), 0, 0, projectError.message.c_str());
+			break;
+		}
+		if( report && vas::InvalidReportOutput(output.c_str()) )
+		{
+			engine->WriteMessage(output.c_str(), 0, 0, asMSGTYPE_ERROR, "Report bytecode output must be a regular file distinct from stdout");
+			break;
+		}
+		if( SaveBytecode(engine, output.c_str(), report != 0, projectMode ? &project : 0, unit, sections) < 0 ) break;
 		success = true;
 	} while( false );
 
@@ -283,18 +350,22 @@ struct IncludeContext
 {
 	asIScriptEngine *engine;
 	vas::BuildReport *report;
+	vector<string> *sections;
 };
 
 static void SectionLoaded(const string &section, const string &code, void *param)
 {
-	vas::BuildReport *report = static_cast<vas::BuildReport *>(param);
+	IncludeContext *context = static_cast<IncludeContext *>(param);
+	context->sections->push_back(section);
+	vas::BuildReport *report = context->report;
+	if( !report ) return;
 	vas::BuildReportRecord record = report->Record("section_loaded");
 	record.Text("section", section);
 	record.Boolean("utf8Valid", vas::IsValidUtf8(code));
 	report->Write(record);
 }
 
-int CompileScript(asIScriptEngine *engine, const char *scriptFile, vas::BuildReport *report)
+int CompileScript(asIScriptEngine *engine, const char *scriptFile, vas::BuildReport *report, vector<string> &sections)
 {
 	int r;
 	if( !IsVasScriptFile(scriptFile) )
@@ -302,8 +373,8 @@ int CompileScript(asIScriptEngine *engine, const char *scriptFile, vas::BuildRep
 
 	if( report ) report->phase = "load";
 	vas::ScriptBuilder builder;
-	IncludeContext context = {engine, report};
-	if( report ) builder.SetSectionLoadedCallback(SectionLoaded, report);
+	IncludeContext context = {engine, report, &sections};
+	builder.SetSectionLoadedCallback(SectionLoaded, &context);
 	r = builder.StartNewModule(engine, "build");
 	if( r < 0 ) return -1;
 	builder.SetIncludeCallback(VasIncludeCallback, &context);
@@ -411,12 +482,14 @@ public:
 	CBytecodeStream() : f(0), failed(false) {}
 	~CBytecodeStream() { if( f ) fclose(f); }
 
-	int Open(const char *filename, bool reportMode)
+	int Open(const char *filename, bool reportMode, const vas::Project *project,
+		const vas::CompilationUnit *unit, const vector<string> &sections)
 	{
 		if( f ) return -1;
 		f = vas::OpenFile(filename, reportMode ? "ab" : "wb");
 		if( f == 0 ) return -1;
-		if( reportMode && !vas::PrepareReportOutput(f) )
+		if( (project && !vas::ValidateProjectOutputHandle(f, *project, *unit, sections)) ||
+			(reportMode && !vas::PrepareReportOutput(f)) )
 		{
 			fclose(f);
 			f = 0;
@@ -446,10 +519,11 @@ protected:
 	bool failed;
 };
 
-int SaveBytecode(asIScriptEngine *engine, const char *outputFile, bool reportMode)
+int SaveBytecode(asIScriptEngine *engine, const char *outputFile, bool reportMode,
+	const vas::Project *project, const vas::CompilationUnit *unit, const vector<string> &sections)
 {
 	CBytecodeStream stream;
-	int r = stream.Open(outputFile, reportMode);
+	int r = stream.Open(outputFile, reportMode, project, unit, sections);
 	if( r < 0 )
 	{
 		engine->WriteMessage(outputFile, 0, 0, asMSGTYPE_ERROR, "Failed to open output file for writing");
