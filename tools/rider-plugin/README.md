@@ -70,3 +70,92 @@ $env:JAVA_HOME = 'C:\Program Files\JetBrains\JetBrains Rider 261.20362.35\jbr'
 类构造与结构声明族的语法边界另经实际 `vasbuild` 验证：隐式/显式类构造、析构、接口实现和基类 override 均可编译；接口实例化以及只重命名类/方法族的一部分会被编译器拒绝。宿主测试包含实际 `PsiReferenceService`、`ReferencesSearch`、`RenameProcessor` 拒绝/跨文件修改/单次撤销，以及缩小作用域时不修改文件的验证；另验证数字/heredoc 字面量不参与重命名、未闭合字符串和兄弟片段覆盖不明时拒绝修改、生命周期局部作用域、`@const` 接收者绑定、逻辑/位运算用法及三种 include 形式的跨文件重命名；依赖不完整的相关文件必须拒绝修改，无关文件则不阻止操作，并先断言 fixture 文件属于默认项目作用域且已进入符号索引。这些测试需在真实 Rider 宿主中执行。
 
 Unicode 边界 fixture `unicode-identifiers.vas` 使用同目录上一级的 `unicode-identifiers.config.txt`（`ep 25 1`）经过实际编译器验证；宿主测试只把 ASCII 符号改为 ASCII 新名，并断言 Unicode 同后缀名字、BOM 分隔成员和撤销结果均完整保留。
+
+## 显式 Build Project（源码模块）
+
+新增 **Build | Build VAS Project**（`VAS.BuildProject`），读取当前 Rider 项目根目录的
+`vas-project.json`，要求在对话框中确认一个明确的编译单元。即使只有一个单元，也不会
+省略选择步骤。当前活动编辑器不决定编译入口；既有 Build Current / Run Current 保持原样。
+
+先在 **Settings | Tools | VAS | Build Project native compiler (this application)**
+选择绝对路径的原生 `vasbuild`。此设置保存在当前应用、禁用 roaming，与项目共享
+`vas.xml` 的 builder/runner 字段独立；不会自动迁移、信任或执行项目提供的工具。
+支持 ELF、Windows `.exe` 和 Mach-O，不支持 shell/batch 包装脚本。设置保存、打开项目、
+索引或编辑文件都不会启动项目编译。项目必须已被 Rider 信任。
+
+编译器独占项目配置解释：先调用 `--describe-project=json`，随后仅用
+`--report=jsonl --project <manifest> --unit <id>`。新版多单元配置、同一入口的不同
+host API、以及旧格式适配都来自编译器。缺少 manifest、旧编译器或错误协议会明确失败，
+不会解析 manifest 猜测配置，也不会退回编译当前文件。插件不会预先创建输出目录或运行产物。
+
+**VAS Project Build** 工具窗口显示本次单元的编译诊断。双击或 **Open diagnostic**
+使用编译器的实际 section 和已验证的源文件快照导航；正数 UTF-8 字节位置转换为 Rider
+UTF-16 点位，保留 tab、Unicode、BOM 和 CRLF 差异。未知/零位置、无效 UTF-8 源内容只提供
+文件级位置；无效字节文件名或不能确认的 section 不绑定到任意文件。此模块不会创建另一套
+编辑器波浪线，也不把依赖观察当作精确语义绑定。若实际观察到的源文件身份无法映射为
+可验证的 Java 路径，则拒绝发布本次构建结果，不能略过该依赖的保存状态检查。
+
+只编译已保存输入：任何未保存的 `.vas`，以及 manifest、所选 host config/entry 的
+未保存别名会阻止编译；不会自动保存。取消、重新发起请求、项目释放、信任/工具设置变化、
+输入变化都会取消进程或拒绝旧结果。取消后不会将晚到结果显示为成功。文件改动不会自动重建。
+依赖按 manifest + unit 独立记录，失败或不完整遍历保留之前的观察；只有当前完整遍历可以替换。
+缺失 include 也会在后台根据最近存在的父目录保留规范路径别名，并附上原缺失后缀，
+仅用于文件事件关联。经目录别名创建缺失文件或变更其父目录会清除旧结果；无关文件创建不会
+自动编译。编译器 section 与输入快照仍使用原始身份。
+
+客户端限制：descriptor 16 MiB、单条报告 1 MiB、报告总计 64 MiB/100,000 条事件、
+每个输入 16 MiB、输入快照总计 64 MiB/4096 个文件。描述超时 30 秒、构建超时 120 秒；
+stderr 单独读取，保留前 16 KiB、总量限制 4 MiB。保存文件构建并非原子文件系统快照或对抗性
+竞态沙箱；不要在构建期间改写目录、链接或外部依赖。尚不支持未保存缓冲区、项目运行或
+编译器精确补全/重命名。
+
+### 验证边界
+
+`VasProjectProtocolTest`、`VasProjectProcessTest`、`VasProjectInputsTest`、`VasProjectWatchAliasTest` 覆盖纯 JVM
+协议、真实子进程取消/限流、UTF-8 点位与快照。`VAS_TEST_COMPILER` 指向本次源码编译的
+原生编译器时，`VasProjectProtocolCompilerTest` 验证真实协议往返。
+
+参数保真测试还要求 `VAS_TEST_ARGV_FIXTURE` 指向本次源码编译的
+`vas_rider_argv_fixture`。配置 CMake 时启用 `BUILD_TESTING=ON`，然后显式构建该目标；
+它不会进入默认构建或插件安装包。Windows 使用 `wmain` 直接接收宽字符 argv，再严格转为
+UTF-8，避免 `java.exe` launcher 的系统 ANSI 代码页转换丢失中文或 emoji。测试仍逐字节
+验证非 ASCII、引号、反斜杠和参数数量；缺少 fixture 会失败，不会跳过。进程取消、限流与
+子孙进程测试继续使用独立的 JVM helper。CI 会构建并设置两个原生测试工具的路径。
+
+`VasRiderProjectBuildIntegrationTest` 在真实 Rider Build 262 Solution Host 中通过注册动作
+调用真实编译器，覆盖显式单元、不同 host、嵌套诊断和实际编辑器导航、旧格式与特殊路径、
+脏输入、被动事件不执行工具、未信任项目、选择取消/排队请求替换、选择后的输入/工具/信任变化、
+不完整依赖保留、缺少 manifest 无回退。首次遍历 include 的硬链接别名已在非 `.vas` 编辑器中
+修改但未保存时，必须拒绝发布成功或诊断；此时编译器可能已经执行并产生字节码，测试不假设
+进程尚未启动。清除该别名的脏状态后，无关的脏 `.txt` 文档不应阻止构建。
+不完整依赖案例使用 Windows 目录 junction（其他平台使用目录符号链接），验证经别名引用的
+缺失外部 include 在真实路径创建、父目录重命名/删除后清除旧诊断，而无关同级文件创建
+不会清除结果或启动工具。别名建立失败会使必需案例失败；缺失文件不会预先刷新到 VFS。
+另覆盖构建完成后撤销信任/更改工具设置、
+依赖父目录重命名/删除、只清除一次过期结果，以及 `.vas` 后缀产物不会使自己的构建失效。
+宿主中的取消案例覆盖选择/排队阶段；已运行进程及其
+子进程的终止由独立 JVM 测试验证，不能混称为宿主中的在途取消验证。
+
+运行 `python -B -m unittest discover -s scripts -p test_project_build_results.py` 验证证据解析器。
+CI 的 project-build 证据门禁目前要求 16 个明确命名的原生宿主案例。
+CI 保留 Gradle、既有 trust gate、新 project-build gate 各自失败状态；缺失、跳过或失败的
+任何必需原生案例都不能算通过。源码通过普通 JVM/编译器测试不等于已在 Rider 中运行，也不等于
+仓库中旧安装 ZIP 已包含此模块；打包及原生宿主检查需对发布提交单独验证。
+
+### 编辑线程响应性
+
+项目构建的物理文件别名、元数据和哈希验证均在后台执行；EDT 上的文档/VFS 回调只检查
+内存中的路径、代次与状态。未知别名进入每次构建独立的合并队列，最多积累 1024 个不同
+待检查路径，始终只有一个队列检查器；超过限制会清除本次结果并要求重新构建。取消或替换
+请求后不会再检查排队路径，旧请求的检查也不能取消新的构建。
+
+后台只在短读操作中取得未保存文档的路径列表，离开读操作后再访问文件系统。进程取消轮询
+只检查内存状态；磁盘验证仍在启动前及结果发布前执行。结果返回 EDT 时再次比较请求、
+发布序号与输入事件代次，过期时退回后台验证。诊断导航的 VFS 刷新在后台完成，首次文档准备使用平台可取消、写操作优先的非阻塞读流程；
+返回 UI 的文档保持强引用，并再次检查缓存身份与文本。发现之前只由编译器读取的外部 include
+时会在后台重新验证保存的字节，不把 VFS 首次发现误当成源文件改动。
+
+`VasProjectChangeQueueTest` 使用真正的 Swing EDT 和受控后台阻塞，验证慢检查期间后续
+编辑事件仍可执行，以及合并、上限、取消和队列退出竞态。新增原生宿主案例
+`keepsFilesystemValidationOffEdt` 使用实际构建和后台检查观察器验证对应适配链路；该案例
+仍需在真实 Rider Solution Host 中运行后才能计为宿主通过。

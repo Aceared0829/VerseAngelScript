@@ -79,6 +79,18 @@ if(MINGW)
 endif()
 
 if(BUILD_TESTING)
+	# An independent native argv receiver for Rider transport tests. The Windows
+	# java.exe launcher narrows its arguments through the active ANSI code page;
+	# wmain is required to verify the compiler's actual Unicode argument boundary.
+	add_executable(vas_rider_argv_fixture EXCLUDE_FROM_ALL tests/vasbuild/rider_argv_fixture.cpp)
+	vas_enable_cxx23(vas_rider_argv_fixture)
+	if(MSVC)
+		target_compile_options(vas_rider_argv_fixture PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/EHsc>")
+	endif()
+	if(MINGW)
+		target_link_options(vas_rider_argv_fixture PRIVATE -municode)
+	endif()
+
 	foreach(case descriptor validation build safety includes)
 		add_test(NAME vasbuild_project_${case}
 			COMMAND ${CMAKE_COMMAND}

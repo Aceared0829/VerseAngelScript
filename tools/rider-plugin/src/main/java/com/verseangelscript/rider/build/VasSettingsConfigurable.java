@@ -22,6 +22,7 @@ public final class VasSettingsConfigurable implements Configurable {
     private final Project project;
     private JPanel panel;
     private TextFieldWithBrowseButton builderField;
+    private TextFieldWithBrowseButton projectCompilerField;
     private TextFieldWithBrowseButton runnerField;
     private TextFieldWithBrowseButton configField;
     private TextFieldWithBrowseButton outputField;
@@ -40,11 +41,13 @@ public final class VasSettingsConfigurable implements Configurable {
         panel = new JPanel(new GridBagLayout());
         panel.setBorder(JBUI.Borders.empty(8));
 
+        projectCompilerField = new TextFieldWithBrowseButton();
         builderField = new TextFieldWithBrowseButton();
         runnerField = new TextFieldWithBrowseButton();
         configField = new TextFieldWithBrowseButton();
         outputField = new TextFieldWithBrowseButton();
 
+        configureFileChooser(projectCompilerField, FileChooserDescriptorFactory.createSingleFileDescriptor());
         configureFileChooser(builderField, FileChooserDescriptorFactory.createSingleFileDescriptor());
         configureFileChooser(runnerField, FileChooserDescriptorFactory.createSingleFileDescriptor());
         configureFileChooser(configField, FileChooserDescriptorFactory.createSingleFileDescriptor());
@@ -54,10 +57,11 @@ public final class VasSettingsConfigurable implements Configurable {
         addRow(1, "vasrun executable:", runnerField);
         addRow(2, "Interface config file:", configField);
         addRow(3, "Bytecode output directory:", outputField);
+        addRow(4, "Build Project native compiler (this application):", projectCompilerField);
 
         GridBagConstraints spacer = new GridBagConstraints();
         spacer.gridx = 0;
-        spacer.gridy = 4;
+        spacer.gridy = 5;
         spacer.gridwidth = 2;
         spacer.weighty = 1;
         spacer.fill = GridBagConstraints.VERTICAL;
@@ -70,7 +74,8 @@ public final class VasSettingsConfigurable implements Configurable {
     @Override
     public boolean isModified() {
         VasSettingsState settings = VasSettingsState.getInstance(project);
-        return !builderField.getText().trim().equals(settings.builderPath)
+        return !projectCompilerField.getText().trim().equals(VasToolchainSettings.getInstance().compilerPath)
+            || !builderField.getText().trim().equals(settings.builderPath)
             || !runnerField.getText().trim().equals(settings.runnerPath)
             || !configField.getText().trim().equals(settings.configPath)
             || !outputField.getText().trim().equals(settings.outputDirectory);
@@ -79,6 +84,15 @@ public final class VasSettingsConfigurable implements Configurable {
     @Override
     public void apply() {
         VasSettingsState settings = VasSettingsState.getInstance(project);
+        String chosenCompiler = projectCompilerField.getText().trim();
+        boolean compilerChanged = !chosenCompiler.equals(VasToolchainSettings.getInstance().compilerPath);
+        VasToolchainSettings.getInstance().compilerPath = chosenCompiler;
+        if (compilerChanged) {
+            for (Project openProject : com.intellij.openapi.project.ProjectManager.getInstance().getOpenProjects()) {
+                var service = openProject.getServiceIfCreated(com.verseangelscript.rider.projectbuild.VasProjectBuildService.class);
+                if (service != null) service.compilerChanged();
+            }
+        }
         settings.builderPath = builderField.getText().trim();
         settings.runnerPath = runnerField.getText().trim();
         settings.configPath = configField.getText().trim();
@@ -91,6 +105,7 @@ public final class VasSettingsConfigurable implements Configurable {
             return;
         }
         VasSettingsState settings = VasSettingsState.getInstance(project);
+        projectCompilerField.setText(VasToolchainSettings.getInstance().compilerPath);
         builderField.setText(settings.builderPath);
         runnerField.setText(settings.runnerPath);
         configField.setText(settings.configPath);
@@ -100,6 +115,7 @@ public final class VasSettingsConfigurable implements Configurable {
     @Override
     public void disposeUIResources() {
         panel = null;
+        projectCompilerField = null;
         builderField = null;
         runnerField = null;
         configField = null;

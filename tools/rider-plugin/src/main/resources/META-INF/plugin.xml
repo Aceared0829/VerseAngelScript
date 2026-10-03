@@ -14,6 +14,8 @@
     <depends>com.intellij.modules.platform</depends>
 
     <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="VAS Project Build" anchor="bottom"
+                    factoryClass="com.verseangelscript.rider.projectbuild.VasProjectBuildView"/>
         <fileType
             name="VAS"
             language="VAS"
@@ -87,6 +89,10 @@
     </extensions>
 
     <actions>
+        <action id="VAS.BuildProject" class="com.verseangelscript.rider.build.VasBuildProjectAction"
+                text="Build VAS Project" description="Describe and build an explicit VAS compilation unit">
+            <add-to-group group-id="BuildMenu" anchor="last"/>
+        </action>
         <action
             id="VAS.BuildCurrentFile"
             class="com.verseangelscript.rider.build.VasBuildAction"
