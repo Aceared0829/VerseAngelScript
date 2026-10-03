@@ -41,9 +41,17 @@ async function withPickers(actions, start) {
   // for synchronization, then navigate/accept/cancel with built-in UI commands.
   // No synthetic selected unit, descriptor, or production test hook is used.
   const original = vscode.window.showQuickPick;
+  const originalError = vscode.window.showErrorMessage;
   const pending = [...actions];
-  const observed = [], interactions = [];
+  const observed = [], interactions = [], errors = [];
   let pickerError;
+  // Preserve the actual workbench notification and return value. If project
+  // selection exits before its next picker, report why rather than only the
+  // number of unconsumed UI actions (which hides freshness/trust failures).
+  vscode.window.showErrorMessage = function(message, ...args) {
+    errors.push(message);
+    return originalError.call(this, message, ...args);
+  };
   vscode.window.showQuickPick = function(items, options, token) {
     let focused;
     const shown = original.call(this, items, { ...options, onDidSelectItem(item) {
@@ -86,11 +94,16 @@ async function withPickers(actions, start) {
     })]);
     await Promise.all(interactions);
     if (pickerError) throw pickerError;
-    assert.equal(pending.length, 0, 'the command must display every required root/unit picker');
+    assert.equal(pending.length, 0,
+      `the command must display every required root/unit picker; remaining actions: ${JSON.stringify(pending)}; errors shown: ${JSON.stringify(errors)}`);
     return { result, observed };
+  } catch (error) {
+    console.error('Project picker failure:', JSON.stringify({ pending, errors }));
+    throw error;
   } finally {
     clearTimeout(timer);
     vscode.window.showQuickPick = original;
+    vscode.window.showErrorMessage = originalError;
     await vscode.commands.executeCommand('workbench.action.closeQuickOpen');
   }
 }
@@ -346,7 +359,9 @@ async function projectTests(folder, second) {
   assert.equal(await manifest.save(), true);
   await assertNoTrap(folder);
   await assertNoTrap(second);
-  // Resolving the preserved current-file tasks can prepare their .vas folders.
+  // Keep current-file outputs until project selection finishes: deleting them
+  // earlier sends late filesystem events into the next project's freshness
+  // checks. Also remove directories prepared while resolving preserved tasks.
   for (const workspace of [folder, second]) await fs.rm(path.join(workspace.uri.fsPath, '.vas'), { recursive: true, force: true });
   console.log('PASS: explicit real multi-root/multi-unit picks, Unicode/metacharacter argv, configured project tasks, native warnings/include/config diagnostics, same-entry config isolation, dirty source/config/manifest rejection, invalid/cancel no-artifact behavior');
 }
@@ -509,8 +524,6 @@ async function run() {
   assert.equal(await included.save(), true);
   assert.equal(await commandExit('vas.buildCurrentFile'), 0);
   await eventually(() => vscode.languages.getDiagnostics(uri('shared 文😀.vas')).length === 0, 'stale diagnostics to clear after a clean build');
-  await fs.rm(path.join(root, '.vas'), { recursive: true, force: true });
-  await fs.rm(path.join(second.uri.fsPath, '.vas'), { recursive: true, force: true });
   console.log('PASS: native Unicode/space build/run paths, exact bytecode names, errors/warnings, UTF-16 include positions, multi-root configuration, per-entry isolation and edit invalidation');
   await projectTests(folder, second);
 }

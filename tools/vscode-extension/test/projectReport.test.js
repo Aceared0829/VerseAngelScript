@@ -165,7 +165,8 @@ test('observed include symlink watches physical alias without changing exact com
     const watched = [], deps = new ProjectDependencies(files => watched.push(...files));
     const key = JSON.stringify(['text', lexical]);
     await deps.observe(plan, { key, file: lexical });
-    assert.ok(watched.includes(physical)); assert.ok(deps.relevant(physical));
+    const resolvedPhysical = await fs.realpath(physical);
+    assert.ok(watched.includes(resolvedPhysical)); assert.ok(deps.relevant(resolvedPhysical));
     assert.equal(deps.entries.get(plan.key).observed.get(key).file, lexical);
     assert.equal(deps.entries.get(plan.key).observed.size, 1);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
