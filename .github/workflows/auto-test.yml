@@ -143,6 +143,9 @@ jobs:
     - name: validate Rider trust evidence parser
       shell: powershell
       run: python -B -m unittest discover -s tools/rider-plugin/scripts -p test_trust_results.py
+    - name: validate Rider project build evidence parser
+      shell: powershell
+      run: python -B -m unittest discover -s tools/rider-plugin/scripts -p test_project_build_results.py
     - name: build compiler for Rider diagnostic regression tests
       shell: powershell
       run: |
@@ -166,9 +169,12 @@ jobs:
         .\gradlew.bat test buildPlugin --no-daemon
         $gradleExitCode = $LASTEXITCODE
         python -B scripts/check_trust_results.py build/test-results/test/TEST-com.verseangelscript.rider.diagnostics.VasRiderTrustIntegrationTest.xml
-        $evidenceExitCode = $LASTEXITCODE
+        $trustEvidenceExitCode = $LASTEXITCODE
+        python -B scripts/check_project_build_results.py build/test-results/test/TEST-com.verseangelscript.rider.projectbuild.VasRiderProjectBuildIntegrationTest.xml
+        $projectEvidenceExitCode = $LASTEXITCODE
         if ($gradleExitCode -ne 0) { exit $gradleExitCode }
-        exit $evidenceExitCode
+        if ($trustEvidenceExitCode -ne 0) { exit $trustEvidenceExitCode }
+        exit $projectEvidenceExitCode
 
   Windows_x86-64_Clang-Cl:
     runs-on: windows-latest

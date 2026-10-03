@@ -21,6 +21,7 @@ val configuredRiderPath = providers.gradleProperty("riderPath")
     .orElse(providers.environmentVariable("RIDER_HOME"))
 
 dependencies {
+    implementation("com.google.code.gson:gson:2.13.2")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.junit.jupiter:junit-jupiter:5.14.4")
     testRuntimeOnly("org.junit.vintage:junit-vintage-engine:5.14.4")
