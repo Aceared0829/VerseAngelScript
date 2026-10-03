@@ -7,7 +7,7 @@ const { createHash } = require('node:crypto');
 const { TextDecoder } = require('node:util');
 const { spawn } = require('node:child_process');
 const { resolvePath, contains, sameFileName } = require('./toolchain');
-const { captureVersions } = require('./projectVersions');
+const { captureVersions, documentDigest, MAX_FILES } = require('./projectVersions');
 
 function compilerPath(configuration, paths = path) {
   // machine-scoped values must not gain authority from workspace settings.
@@ -253,8 +253,27 @@ async function projectPlan(request, selected, { vscode, folder, cancel, dependen
       await fingerprint(request.project, 1024 * 1024, cancel) !== snapshot.manifestFingerprint || await fingerprint(plan.config, 16 * 1024 * 1024, cancel) !== configFingerprint) {
       throw new Error('VAS manifest, host configuration or compiler setting changed. Build Project again.');
     }
-    await plan.inputVersions.checkAll(cancel);
+    // A clean-editor reload can arrive while older diagnostics are invalidated
+    // during preparation. Check this invocation's actual relevant editor text,
+    // not the old diagnostic revision. Unrelated documents are identity-only
+    // probes; their contents and size never become build prerequisites.
+    const documents = vscode.workspace.textDocuments.filter(document => document.uri.scheme === 'file' &&
+      !document.isDirty && !document.isClosed && typeof document.getText === 'function');
+    if (documents.length > MAX_FILES) throw new Error(`VAS editor validation exceeds the ${MAX_FILES} document limit.`);
+    const documentBudget = { bytes: 0 };
+    for (const document of documents) {
+      if (!await plan.inputVersions.related(document.uri.fsPath, cancel)) continue;
+      const version = document.version, digest = documentDigest(document.getText());
+      if (digest === undefined || !await plan.inputVersions.check(document.uri.fsPath, cancel, digest, documentBudget) ||
+        version !== document.version || document.isDirty) {
+        throw new Error(`VAS editor content does not match its saved build input. Save or reload: ${document.uri.fsPath}`);
+      }
+    }
     await requireProjectReady(vscode, folder, request.project, inputs(), cancel);
+    // Keep the complete disk pass after editor/alias probes, so those awaits
+    // cannot hide a silent known-input change behind an earlier disk check.
+    await plan.inputVersions.checkAll(cancel);
+    if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace before building a VAS project.');
   };
   await plan.checkFresh();
   return plan;

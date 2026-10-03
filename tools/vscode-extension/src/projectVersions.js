@@ -130,9 +130,19 @@ async function captureVersions(files, cancel) {
       (expectedDocumentDigest === undefined || (expected.documentDigest !== undefined && expected.documentDigest === expectedDocumentDigest)) &&
       sameVersion(expected, actual, !named.includes(expected)));
   };
+  const related = async (file, cancel) => {
+    ready(cancel);
+    if (!validPath(file)) return false;
+    if (match(file)) return true;
+    try {
+      const stat = await fs.stat(file, { bigint: true });
+      ready(cancel);
+      return stat.isFile() && physical.has(physicalKey({ dev: stat.dev.toString(), ino: stat.ino.toString() }));
+    } catch (error) { ready(cancel); if (unreadableCodes.has(error.code)) return false; throw error; }
+  };
   return Object.freeze({
-    match, lookup, matches,
-    async check(file, cancel, expectedDocumentDigest) {
+    match, lookup, matches, related,
+    async check(file, cancel, expectedDocumentDigest, budget) {
       ready(cancel);
       if (!validPath(file)) return false;
       let expected = match(file);
@@ -148,7 +158,7 @@ async function captureVersions(files, cancel) {
       }
       if (!expected || expected.kind !== 'readable' ||
         (expectedDocumentDigest !== undefined && expected.documentDigest !== expectedDocumentDigest)) return false;
-      const actual = await readVersion(file, cancel);
+      const actual = await readVersion(file, cancel, budget);
       ready(cancel);
       return matches(file, actual, expectedDocumentDigest);
     },

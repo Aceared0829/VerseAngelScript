@@ -84,10 +84,13 @@ function createProjectTerminal({ vscode, prepare, diagnostics, dependencies, obs
       void (async () => {
         if (observations) await observations.settle();
         if (cancel.cancelled || finished) return;
-        const revision = diagnostics.revision;
         plan = await prepare(cancel);
         if (cancel.cancelled || finished) return;
-        if (diagnostics.revision !== revision) throw new Error('Project inputs changed during preparation. Build Project again.');
+        // Preparation has not compiled any source. Its manifest/selection is
+        // bound by the descriptor checks, and its own pre-compile versions are
+        // verified below. A late save notification may invalidate OLD results
+        // while this preparation captures the saved bytes for a NEW build.
+        // Do not couple that new plan to the old diagnostic store's revision.
         token = diagnostics.begin(plan.key);
         dependencies.update(plan, { observed: new Map() }, false);
         observations?.register(plan, token);
