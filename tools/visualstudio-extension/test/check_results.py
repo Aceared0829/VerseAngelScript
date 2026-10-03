@@ -25,7 +25,7 @@ PROJECT_EVIDENCE = {
     "NativeDiagnosticsNavigateUtf8ByteColumnsWithSourceDigest": {"nativeCompileFailure", "sourceDigest", "errorListTask", "navigateToCalled", "astralUtf16Position"},
     "ChangedOrDigestlessDiagnosticsDoNotNavigate": {"changedSourceRejected", "digestlessRejected", "actualTaskNavigateTo"},
     "DirtyInputsAndAliasesBlockNativeBuild": {"dirtyEntryBlocked", "dirtyConfigBlocked", "dirtyManifestBlocked", "dirtyHardLinkBlocked", "dirtyJunctionBlocked", "noBuildProcesses"},
-    "RepeatedBuildCancelAndCloseIgnoreLateResults": {"repeatDisabled", "cancelCommand", "closeInvalidated", "lateResultIgnored", "processReleased"},
+    "RepeatedBuildCancelAndCloseIgnoreLateResults": {"repeatDisabled", "cancelCommand", "closeInvalidated", "lateResultIgnored", "processReleased", "sameRootFolderReopened", "folderToSolutionSettled"},
     "NativeIncludeObservationsRetainPartialDependencies": {"nativeIncludeDiscovery", "includeDigests", "partialDiscovery", "previousDependencyRetained", "retainedDependencyInvalidates"},
     "CanonicalMissingIncludesAndAncestorChangesInvalidate": {"nativeMissingInclude", "canonicalAliasCreate", "ancestorRename", "ancestorDelete"},
     "FirstTraversalDirtyIncludeAliasBlocksPublication": {"firstTraversalObserved", "dirtyTxtHardLinkRejected", "noStalePublication", "unrelatedDirtyAllowed"},

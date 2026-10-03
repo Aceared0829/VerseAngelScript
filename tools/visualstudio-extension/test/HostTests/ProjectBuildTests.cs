@@ -60,6 +60,7 @@ namespace VerseAngelScript.VisualStudio.Tests
         private string previousCompiler;
         private bool hadCompiler;
         private string openedFolder;
+        private RootEvents rootEvents;
         private bool packageClosed;
         private Window activeDialog;
         private readonly List<EnvDTE.Window> windows = new List<EnvDTE.Window>();
@@ -354,7 +355,7 @@ namespace VerseAngelScript.VisualStudio.Tests
             File.Delete(fixture.ReleaseFile);
             await ChooseAndBuildAsync(fixture, 0);
             await WaitForAsync(() => Busy && fixture.Calls.Count(call => call == "build") == 2, "second control compiler");
-            CloseSolution();
+            await CloseSolutionAsync();
             await WaitForAsync(() => !Busy && fixture.NoLiveProcesses(), "solution close cancels compiler");
             var closedStatus = Status;
             File.WriteAllText(fixture.ReleaseFile, "late result after root closed");
@@ -366,18 +367,40 @@ namespace VerseAngelScript.VisualStudio.Tests
             await OpenFolderAsync(fixture);
             await ChooseAndBuildAsync(fixture, 0);
             await WaitForAsync(() => Busy && fixture.Calls.Count(call => call == "build") == 3, "Open Folder control compiler");
-            CloseSolution();
+            await CloseSolutionAsync();
             await WaitForAsync(() => !Busy && fixture.NoLiveProcesses(), "native CloseFolder cancellation");
             var folderClosedStatus = Status;
             File.WriteAllText(fixture.ReleaseFile, "late result after folder closed");
             await Task.Delay(350);
             Assert.Equal(folderClosedStatus, Status);
             Assert.DoesNotContain(ErrorTasks(), task => TaskText(task).Contains("fixture_missing_symbol"));
-            Assert.Equal(3, fixture.Calls.Count(call => call == "describe"));
-            Assert.Equal(3, fixture.Calls.Count(call => call == "build"));
+
+            // Reopening the identical folder is a new native lifetime. Its new
+            // explicit operation must survive completion notifications and still
+            // be cancelled by the next real close.
+            var previousGeneration = Convert.ToInt64(Member(Coordinator, "Generation"));
+            File.Delete(fixture.ReleaseFile);
+            await OpenFolderAsync(fixture);
+            await ChooseAndBuildAsync(fixture, 0);
+            await WaitForAsync(() => Busy && fixture.Calls.Count(call => call == "build") == 4, "same folder reopened with a fresh operation");
+            Assert.True(Convert.ToInt64(Member(Coordinator, "Generation")) > previousGeneration);
+            await CloseSolutionAsync();
+            await WaitForAsync(() => !Busy && fixture.NoLiveProcesses(), "reopened folder close cancels fresh compiler");
+            Assert.DoesNotContain(ErrorTasks(), task => TaskText(task).Contains("fixture_missing_symbol"));
+            Assert.Equal(4, fixture.Calls.Count(call => call == "describe"));
+            Assert.Equal(4, fixture.Calls.Count(call => call == "build"));
             Assert.False(Directory.Exists(fixture.OutputDirectory));
+
+            // Establish that folder cleanup permits the next actual solution
+            // lifetime, instead of deferring that evidence to another test.
+            await OpenSolutionAsync(fixture);
+            ConfigureCompiler(NativeCompiler);
+            await ChooseAndBuildAsync(fixture, 1);
+            await WaitForAsync(() => !Busy && Status.StartsWith("Build succeeded", StringComparison.Ordinal), "folder to solution native build");
+            Assert.True(File.Exists(fixture.SecondOutput));
+            AssertReportDigest(fixture.Entry);
             SaveEvidence(nameof(RepeatedBuildCancelAndCloseIgnoreLateResults),
-                "repeatDisabled", "cancelCommand", "closeInvalidated", "lateResultIgnored", "processReleased");
+                "repeatDisabled", "cancelCommand", "closeInvalidated", "lateResultIgnored", "processReleased", "sameRootFolderReopened", "folderToSolutionSettled");
         }
 
         [IdeFact(MinVersion = VisualStudioVersion.VS18, MaxVersion = VisualStudioVersion.VS18, RootSuffix = "VASIntegration", MaxAttempts = 1)]
@@ -674,7 +697,8 @@ namespace VerseAngelScript.VisualStudio.Tests
             var store = Settings();
             hadCompiler = store.CollectionExists(SettingsCollection) && store.PropertyExists(SettingsCollection, "CompilerPath");
             previousCompiler = hadCompiler ? store.GetString(SettingsCollection, "CompilerPath") : null;
-            CloseSolution();
+            rootEvents = new RootEvents();
+            await CloseSolutionAsync();
         }
 
         private static string NativeCompiler => Environment.GetEnvironmentVariable("VAS_NATIVE_COMPILER");
@@ -698,42 +722,70 @@ namespace VerseAngelScript.VisualStudio.Tests
         private async Task OpenSolutionAsync(Fixture fixture)
         {
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-            CloseSolution();
+            await CloseSolutionAsync();
             var solution = (IVsSolution)Package.GetGlobalService(typeof(SVsSolution));
+            var opened = rootEvents.SolutionOpens;
             ErrorHandler.ThrowOnFailure(solution.OpenSolutionFile(0, fixture.Solution));
             await WaitForAsync(() =>
             {
                 ThreadHelper.ThrowIfNotOnUIThread();
                 ErrorHandler.ThrowOnFailure(solution.GetSolutionInfo(out var directory, out var file, out var options));
-                return SamePath(file, fixture.Solution);
+                return rootEvents.SolutionOpens > opened && SamePath(file, fixture.Solution);
             }, "native .sln open");
         }
 
         private async Task OpenFolderAsync(Fixture fixture)
         {
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-            CloseSolution();
+            await CloseSolutionAsync();
             var solution = (IVsSolution7)Package.GetGlobalService(typeof(SVsSolution));
+            var opened = rootEvents.FolderOpens;
             solution.OpenFolder(fixture.Root);
             openedFolder = fixture.Root;
             await WaitForAsync(() =>
             {
                 var components = (IComponentModel)Package.GetGlobalService(typeof(SComponentModel));
-                return SamePath(components.GetService<IVsFolderWorkspaceService>()?.CurrentWorkspace?.Location, fixture.Root);
+                return rootEvents.FolderOpens > opened && SamePath(rootEvents.LastOpenedFolder, fixture.Root) &&
+                    SamePath(components.GetService<IVsFolderWorkspaceService>()?.CurrentWorkspace?.Location, fixture.Root);
             }, "native IVsSolution7.OpenFolder");
         }
 
-        private void CloseSolution()
+        private static string CurrentFolder()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (openedFolder != null)
-            {
-                ((IVsSolution7)Package.GetGlobalService(typeof(SVsSolution))).CloseFolder(openedFolder);
-                openedFolder = null;
-            }
+            var components = (IComponentModel)Package.GetGlobalService(typeof(SComponentModel));
+            return components.GetService<IVsFolderWorkspaceService>()?.CurrentWorkspace?.Location;
+        }
+        private static string CurrentSolution()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var solution = (IVsSolution)Package.GetGlobalService(typeof(SVsSolution));
+            ErrorHandler.ThrowOnFailure(solution.GetSolutionInfo(out var directory, out var file, out var options));
+            return file;
+        }
+        private async Task CloseSolutionAsync()
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
             var dte = (DTE)Package.GetGlobalService(typeof(SDTE));
             dte.Documents.CloseAll(vsSaveChanges.vsSaveChangesNo);
-            dte.Solution.Close(false);
+            var folder = CurrentFolder() ?? openedFolder;
+            if (folder != null)
+            {
+                var closed = rootEvents.FolderCloses;
+                // This void method starts the native close. Its documented argument
+                // is the folder's full path; completion arrives through Events7.
+                ((IVsSolution7)Package.GetGlobalService(typeof(SVsSolution))).CloseFolder(folder);
+                await WaitForAsync(() => rootEvents.FolderCloses > closed && SamePath(rootEvents.LastClosedFolder, folder) &&
+                    CurrentFolder() == null, "native folder close completion and cleared workspace");
+                openedFolder = null;
+            }
+            if (!string.IsNullOrEmpty(CurrentSolution()))
+            {
+                var closed = rootEvents.SolutionCloses;
+                dte.Solution.Close(false);
+                await WaitForAsync(() => rootEvents.SolutionCloses > closed && string.IsNullOrEmpty(CurrentSolution()), "native solution close completion");
+            }
+            await WaitForAsync(() => CurrentFolder() == null && string.IsNullOrEmpty(CurrentSolution()), "native root cleared before next open");
         }
 
         private async Task ChooseAndBuildAsync(Fixture fixture, int index)
@@ -890,7 +942,9 @@ namespace VerseAngelScript.VisualStudio.Tests
             var dialogStatus = activeDialog == null ? "none" : Control<TextBlock>(activeDialog, "ProjectBuildStatus").Text;
             var calls = string.Join("; ", fixtures.Select(f => Path.GetFileName(f.Root) + ": calls=[" + string.Join(",", f.Calls) + "], reaped=" + f.NoLiveProcesses()));
             var state = "Status=" + Status + "; Busy=" + Busy + "; Generation=" + Member(Coordinator, "Generation") +
-                "; DialogVisible=" + activeDialog?.IsVisible + "; DialogStatus=" + dialogStatus + "; " + calls;
+                "; DialogVisible=" + activeDialog?.IsVisible + "; DialogStatus=" + dialogStatus +
+                "; CurrentFolder=" + CurrentFolder() + "; CurrentSolution=" + CurrentSolution() +
+                "; RootEvents=" + rootEvents?.History + "; " + calls;
             return state.Length <= 4096 ? state : state.Substring(0, 4096);
         }
 
@@ -1019,11 +1073,59 @@ namespace VerseAngelScript.VisualStudio.Tests
             if (package == null) return;
             if (!packageClosed) ExecuteCommand(CancelCommand);
             foreach (var window in windows.ToArray()) { try { window.Close(vsSaveChanges.vsSaveChangesNo); } catch (COMException) { } }
-            CloseSolution();
-            foreach (var fixture in fixtures) fixture.ReleaseAndStop();
-            var settings = Settings();
-            if (hadCompiler) settings.SetString(SettingsCollection, "CompilerPath", previousCompiler);
-            else if (settings.CollectionExists(SettingsCollection) && settings.PropertyExists(SettingsCollection, "CompilerPath")) settings.DeleteProperty(SettingsCollection, "CompilerPath");
+            try { ThreadHelper.JoinableTaskFactory.Run(CloseSolutionAsync); }
+            finally
+            {
+                try { rootEvents?.Dispose(); }
+                finally
+                {
+                    try { foreach (var fixture in fixtures) fixture.ReleaseAndStop(); }
+                    finally
+                    {
+                        var settings = Settings();
+                        if (hadCompiler) settings.SetString(SettingsCollection, "CompilerPath", previousCompiler);
+                        else if (settings.CollectionExists(SettingsCollection) && settings.PropertyExists(SettingsCollection, "CompilerPath")) settings.DeleteProperty(SettingsCollection, "CompilerPath");
+                    }
+                }
+            }
+        }
+
+        private sealed class RootEvents : IVsSolutionEvents, IVsSolutionEvents7, IDisposable
+        {
+            private readonly IVsSolution solution;
+            private readonly uint cookie;
+            private readonly Queue<string> history = new Queue<string>();
+            internal int FolderOpens, FolderCloses, SolutionOpens, SolutionCloses;
+            internal string LastOpenedFolder, LastClosedFolder;
+            internal string History => string.Join(" | ", history);
+            internal RootEvents()
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                solution = (IVsSolution)Package.GetGlobalService(typeof(SVsSolution));
+                ErrorHandler.ThrowOnFailure(solution.AdviseSolutionEvents(this, out cookie));
+            }
+            private void Record(string value)
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                if (history.Count == 12) history.Dequeue();
+                history.Enqueue(value);
+            }
+            public void Dispose() { ThreadHelper.ThrowIfNotOnUIThread(); ErrorHandler.ThrowOnFailure(solution.UnadviseSolutionEvents(cookie)); }
+            public void OnAfterOpenFolder(string path) { ThreadHelper.ThrowIfNotOnUIThread(); ++FolderOpens; LastOpenedFolder = path; Record("AfterOpenFolder:" + path); }
+            public void OnBeforeCloseFolder(string path) { ThreadHelper.ThrowIfNotOnUIThread(); Record("BeforeCloseFolder:" + path); }
+            public void OnQueryCloseFolder(string path, ref int cancel) { }
+            public void OnAfterCloseFolder(string path) { ThreadHelper.ThrowIfNotOnUIThread(); ++FolderCloses; LastClosedFolder = path; Record("AfterCloseFolder:" + path); }
+            public void OnAfterLoadAllDeferredProjects() { }
+            public int OnAfterOpenSolution(object reserved, int isNew) { ThreadHelper.ThrowIfNotOnUIThread(); ++SolutionOpens; Record("AfterOpenSolution"); return VSConstants.S_OK; }
+            public int OnBeforeCloseSolution(object reserved) { ThreadHelper.ThrowIfNotOnUIThread(); Record("BeforeCloseSolution"); return VSConstants.S_OK; }
+            public int OnAfterCloseSolution(object reserved) { ThreadHelper.ThrowIfNotOnUIThread(); ++SolutionCloses; Record("AfterCloseSolution"); return VSConstants.S_OK; }
+            public int OnAfterOpenProject(IVsHierarchy hierarchy, int added) => VSConstants.S_OK;
+            public int OnQueryCloseProject(IVsHierarchy hierarchy, int removing, ref int cancel) => VSConstants.S_OK;
+            public int OnBeforeCloseProject(IVsHierarchy hierarchy, int removed) => VSConstants.S_OK;
+            public int OnAfterLoadProject(IVsHierarchy stub, IVsHierarchy real) => VSConstants.S_OK;
+            public int OnQueryUnloadProject(IVsHierarchy real, ref int cancel) => VSConstants.S_OK;
+            public int OnBeforeUnloadProject(IVsHierarchy real, IVsHierarchy stub) => VSConstants.S_OK;
+            public int OnQueryCloseSolution(object reserved, ref int cancel) => VSConstants.S_OK;
         }
 
         private static void CreateJunction(string junction, string target)

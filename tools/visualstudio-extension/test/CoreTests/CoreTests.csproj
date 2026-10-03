@@ -15,5 +15,6 @@
     <Compile Include="..\..\Build\NativeProcess.cs" Link="NativeProcess.cs" />
     <Compile Include="..\..\Build\FileIdentity.cs" Link="FileIdentity.cs" />
     <Compile Include="..\..\Build\InputEvents.cs" Link="InputEvents.cs" />
+    <Compile Include="..\..\Build\WorkspaceEvents.cs" Link="WorkspaceEvents.cs" />
   </ItemGroup>
 </Project>

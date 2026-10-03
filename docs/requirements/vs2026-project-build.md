@@ -32,6 +32,8 @@ during selection, or persistent trust flag.
   writes, ancestor rename/delete and missing-candidate creation invalidate it
 - Suppress late publication/navigation after cancel, dispose, root close/reopen,
   new generation, changed compiler or changed saved/dirty inputs
+- Treat same-root open completion notifications as idempotent; a before-close
+  event still ends the previous operation when the identical root is reopened
 - Publish genuine structured diagnostics in native Error List; map UTF-8 byte
   positions to UTF-16 only for current matching native loaded-source proofs and
   verified saved file identity/editor text. Missing/invalid evidence never gains

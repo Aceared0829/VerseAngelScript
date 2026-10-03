@@ -272,7 +272,14 @@ namespace VerseAngelScript.VisualStudio.Build
             finally { checking = false; }
         }
 
-        private void WorkspaceChanged() { ThreadHelper.ThrowIfNotOnUIThread(); Cancel("Workspace changed; build again"); }
+        private void WorkspaceChanged(bool closing, string notification)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var session = current;
+            if (session == null) return;
+            if (WorkspaceEvents.Invalidates(closing, session.Root, closing ? null : CaptureView().Root))
+                Cancel("Workspace changed (" + notification + "); build again");
+        }
         private void DocumentsChanged()
         {
             ThreadHelper.ThrowIfNotOnUIThread();

@@ -21,7 +21,7 @@ internal static class Program
         if (args.Length >= 2 && args[0] == "--fixture") return Fixture(args[1]);
         try
         {
-            DescriptorTests(); ReportTests(); PositionTests(); CompilerPathTests(); InputEventTests(); ProcessTests();
+            DescriptorTests(); ReportTests(); PositionTests(); CompilerPathTests(); InputEventTests(); WorkspaceEventTests(); ProcessTests();
             string native = Environment.GetEnvironmentVariable("VAS_NATIVE_ARGV_FIXTURE");
             if (!string.IsNullOrEmpty(native)) NativeArguments(native);
             else if (Environment.OSVersion.Platform == PlatformID.Win32NT) throw new Exception("Windows core gate requires VAS_NATIVE_ARGV_FIXTURE (tests/vasbuild/rider_argv_fixture.cpp).");
@@ -122,6 +122,17 @@ internal static class Program
         Check(InputEvents.Classify("C:/project/tool/vasbuild.exe", "C:/project/tool", WatcherChangeTypes.Changed) == InputEventEffect.Verify, "Compiler sidecar parent metadata requires identity verification");
         Check(InputEvents.Classify("C:/real/nested/missing.vas", "C:/real/nested", WatcherChangeTypes.Created) == InputEventEffect.Invalidate, "Missing canonical suffix ancestor creation invalidates");
         Check(InputEvents.Classify("C:/real/nested/missing.vas", "C:/real/nested/missing.vas", WatcherChangeTypes.Created) == InputEventEffect.Invalidate, "Missing canonical include creation invalidates");
+    }
+    private static void WorkspaceEventTests()
+    {
+        Check(!WorkspaceEvents.Invalidates(false, "C:/project", @"c:\project\"), "Same-root open completion preserves prepared operation");
+        Check(!WorkspaceEvents.Invalidates(false, "C:/project", "C:/project"), "Repeated same-root completion preserves prepared operation");
+        Check(WorkspaceEvents.Invalidates(true, "C:/project", "C:/project"), "Closing invalidates before same-root reopen");
+        Check(WorkspaceEvents.Invalidates(true, "C:/project", null), "Closing invalidates when native root already cleared");
+        Check(WorkspaceEvents.Invalidates(false, "C:/project", null), "Completed close invalidates stale visible root");
+        Check(WorkspaceEvents.Invalidates(false, "C:/project", "C:/other"), "Different-root completion invalidates");
+        Check(!WorkspaceEvents.Invalidates(false, null, "C:/project"), "Passive opening has no operation to invalidate");
+        Check(!WorkspaceEvents.Invalidates(true, null, null), "Repeated close has no old operation to invalidate");
     }
     private static JObject Event(string type, int seq)
     { return new JObject { ["protocol"] = "vasbuild", ["version"] = 1, ["type"] = type, ["seq"] = seq, ["invalidUtf8Fields"] = new JArray(), ["rawBytes"] = new JObject() }; }
