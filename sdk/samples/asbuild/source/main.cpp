@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <sstream>
 #include "../../common/vas_scriptbuilder.h"
+#include "../../common/vas_source_digest.h"
 #include "../../common/vas_build_report.h"
 #include "vas_project.h"
 #if defined(_MSC_VER)
@@ -353,7 +354,7 @@ struct IncludeContext
 	vector<string> *sections;
 };
 
-static void SectionLoaded(const string &section, const string &code, void *param)
+static void SectionLoaded(const string &section, const string &code, bool regularFile, void *param)
 {
 	IncludeContext *context = static_cast<IncludeContext *>(param);
 	context->sections->push_back(section);
@@ -362,6 +363,13 @@ static void SectionLoaded(const string &section, const string &code, void *param
 	vas::BuildReportRecord record = report->Record("section_loaded");
 	record.Text("section", section);
 	record.Boolean("utf8Valid", vas::IsValidUtf8(code));
+	if( regularFile )
+	{
+		record.Number("sourceDigestVersion", 1);
+		record.Text("sourceDigestAlgorithm", "sha256");
+		record.Number("sourceByteLength", static_cast<std::int64_t>(code.size()));
+		record.Text("sourceDigest", vas::SourceDigestSha256(code));
+	}
 	report->Write(record);
 }
 
