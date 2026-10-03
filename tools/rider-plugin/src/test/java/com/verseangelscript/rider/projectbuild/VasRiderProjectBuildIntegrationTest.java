@@ -24,6 +24,10 @@ import com.intellij.openapi.ui.TextFieldWithBrowseButton;
 import com.intellij.openapi.util.Disposer;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.openapi.vfs.VirtualFileManager;
+import com.intellij.openapi.vfs.newvfs.BulkFileListener;
+import com.intellij.openapi.vfs.newvfs.events.VFileCreateEvent;
+import com.intellij.openapi.vfs.newvfs.events.VFileEvent;
 import com.intellij.psi.PsiDocumentManager;
 import com.intellij.testFramework.EdtTestUtil;
 import com.intellij.testFramework.PlatformTestUtil;
@@ -470,6 +474,11 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
             Path aliasParent = externalRoot.resolve("alias-parent");
             Path realMissing = realParent.resolve("not-created.vas");
             Path aliasMissing = aliasParent.resolve("not-created.vas");
+            Path sibling = realParent.resolve("unrelated.vas");
+            String realMissingVfsPath = realMissing.toString().replace('\\', '/');
+            String aliasMissingVfsPath = aliasMissing.toString().replace('\\', '/');
+            String siblingVfsPath = sibling.toString().replace('\\', '/');
+            List<String> refreshCreatedPaths = new CopyOnWriteArrayList<>();
             try {
                 Files.createDirectory(realParent);
                 createDirectoryAlias(externalRoot, aliasParent, realParent);
@@ -485,8 +494,23 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
                 assertNotNull(realDirectory);
                 assertEquals(realParent, Path.of(realDirectory.getPath()));
                 EdtTestUtil.runInEdtAndWait(() -> {
-                    assertNull(LocalFileSystem.getInstance().findFileByNioFile(aliasMissing));
-                    assertNull(LocalFileSystem.getInstance().findFileByNioFile(realMissing));
+                    // Cache the existing empty child listing before disk writes.
+                    // The cache-only probes must not discover an alias ancestor
+                    // or consume a newly created child's refresh notification.
+                    assertEquals(0, realDirectory.getChildren().length);
+                    assertNull(LocalFileSystem.getInstance().findFileByPathIfCached(aliasMissingVfsPath));
+                    assertNull(LocalFileSystem.getInstance().findFileByPathIfCached(realMissingVfsPath));
+                    ApplicationManager.getApplication().getMessageBus().connect(fixture.lifetime)
+                        .subscribe(VirtualFileManager.VFS_CHANGES, new BulkFileListener() {
+                            @Override public void after(List<? extends VFileEvent> events) {
+                                for (VFileEvent event : events) {
+                                    if (event instanceof VFileCreateEvent && event.isFromRefresh()
+                                        && (event.getPath().equals(siblingVfsPath) || event.getPath().equals(realMissingVfsPath))) {
+                                        refreshCreatedPaths.add(event.getPath());
+                                    }
+                                }
+                            }
+                        });
                 });
                 fixture.writePath(fixture.entry, "#include \"" + aliasMissing.toString().replace('\\', '/')
                     + "\"\n#include \"known-first.vas\"\nvoid main() { included(); }\n");
@@ -499,19 +523,21 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
                 assertTrue(aliasIncomplete.contains(aliasMissing), "retain the compiler's original missing include identity");
                 assertTrue(aliasIncomplete.contains(realMissing), "watch the canonical missing candidate without requiring it to exist");
                 EdtTestUtil.runInEdtAndWait(() -> {
-                    assertNull(LocalFileSystem.getInstance().findFileByNioFile(aliasMissing));
-                    assertNull(LocalFileSystem.getInstance().findFileByNioFile(realMissing));
+                    assertNull(LocalFileSystem.getInstance().findFileByPathIfCached(aliasMissingVfsPath));
+                    assertNull(LocalFileSystem.getInstance().findFileByPathIfCached(realMissingVfsPath));
                 });
 
                 int launchesBeforeSibling = fixture.launches.size();
                 int selectionsBeforeSibling = fixture.selections.get();
                 int publicationsBeforeSibling = fixture.outcomes.size();
-                Path sibling = realParent.resolve("unrelated.vas");
                 assertFalse(Files.exists(sibling));
-                assertNull(EdtTestUtil.runInEdtAndGet(() -> LocalFileSystem.getInstance().findFileByNioFile(sibling)));
-                fixture.writePath(sibling, "void unrelatedExternalSibling() {}\n");
-                assertNotNull(EdtTestUtil.runInEdtAndGet(() -> LocalFileSystem.getInstance().findFileByNioFile(sibling)),
-                    "the unrelated creation must actually reach VFS");
+                assertNull(EdtTestUtil.runInEdtAndGet(() -> LocalFileSystem.getInstance().findFileByPathIfCached(siblingVfsPath)));
+                assertFalse(refreshCreatedPaths.contains(siblingVfsPath));
+                Files.writeString(sibling, "void unrelatedExternalSibling() {}\n", StandardCharsets.UTF_8);
+                EdtTestUtil.runInEdtAndWait(() -> realDirectory.refresh(false, true));
+                assertTrue(refreshCreatedPaths.contains(siblingVfsPath),
+                    "the unrelated canonical path must emit an actual refresh-origin VFileCreateEvent");
+                assertNotNull(EdtTestUtil.runInEdtAndGet(() -> LocalFileSystem.getInstance().findFileByPathIfCached(siblingVfsPath)));
                 quietEdt();
                 assertSame(aliasFailed, fixture.service.latest(), "watching a missing candidate must not watch every sibling");
                 assertEquals(publicationsBeforeSibling, fixture.outcomes.size());
@@ -522,13 +548,22 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
                 // An explicit VirtualFile.createChildData would falsely pass the
                 // old code even when the canonical missing candidate was unwatched.
                 assertInvalidatesWithoutExecution(fixture, aliasFailed,
-                    () -> fixture.writePath(realMissing, "void externalIncluded() {}\n"),
+                    () -> {
+                        assertFalse(refreshCreatedPaths.contains(realMissingVfsPath));
+                        Files.writeString(realMissing, "void externalIncluded() {}\n", StandardCharsets.UTF_8);
+                        EdtTestUtil.runInEdtAndWait(() -> realDirectory.refresh(false, true));
+                        assertTrue(refreshCreatedPaths.contains(realMissingVfsPath),
+                            "the missing canonical path must emit an actual refresh-origin VFileCreateEvent");
+                        assertNotNull(EdtTestUtil.runInEdtAndGet(() ->
+                            LocalFileSystem.getInstance().findFileByPathIfCached(realMissingVfsPath)));
+                    },
                     "creation through the real path must clear old missing-include diagnostics");
                 assertTrue(Files.isSameFile(aliasMissing, realMissing));
                 assertArrayEquals(successfulOutput, Files.readAllBytes(fixture.goodOutput));
                 Files.delete(realMissing);
-                fixture.refresh(realMissing);
+                EdtTestUtil.runInEdtAndWait(() -> realDirectory.refresh(false, true));
                 assertFalse(Files.exists(aliasMissing));
+                assertNull(EdtTestUtil.runInEdtAndGet(() -> LocalFileSystem.getInstance().findFileByPathIfCached(realMissingVfsPath)));
 
                 var beforeRename = fixture.build();
                 assertFalse(beforeRename.success());
