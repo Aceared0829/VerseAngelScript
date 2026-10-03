@@ -3,6 +3,8 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { createHash } = require('node:crypto');
+const { StringDecoder } = require('node:string_decoder');
 const vscode = require('vscode');
 
 // Observe the real child-process boundary before activating the extension. These
@@ -13,15 +15,33 @@ let auditSequence = 0, processAudit, fileAudit, inputAudit, lastInputObservation
 // Pass-through audit of the actual version checks. It also provides a barrier
 // so the saved-notification assertion cannot race an asynchronous decision.
 const { ProjectInputObservations } = require('../src/projectObservations');
+const { BuildDiagnostics } = require('../src/diagnostics');
+const originalPublish = BuildDiagnostics.prototype.publish;
+BuildDiagnostics.prototype.publish = function(token, entries) {
+  const published = originalPublish.call(this, token, entries);
+  if (this === lastInputObservations?.diagnostics) inputAudit?.({ order: ++auditSequence, action: 'publish', key: token.key, published,
+    entries: entries.slice(0, 8).map(([uri, items]) => ({ uri: uri.toString(), items: items.slice(0, 8).map(item =>
+      ({ severity: item.severity, message: item.message.slice(0, 2048) })) })) });
+  return published;
+};
 const originalInputChanged = ProjectInputObservations.prototype.changed;
 const originalInputRegister = ProjectInputObservations.prototype.register;
+const originalInputInvalidate = ProjectInputObservations.prototype.invalidate;
 ProjectInputObservations.prototype.register = function(...args) {
   lastInputObservations = this;
+  inputAudit?.({ order: ++auditSequence, action: 'register', key: args[0].key });
   return originalInputRegister.apply(this, args);
+};
+ProjectInputObservations.prototype.invalidate = function(...args) {
+  inputAudit?.({ order: ++auditSequence, action: 'invalidate',
+    callers: new Error().stack.split('\n').slice(2, 6).map(line => line.trim()) });
+  return originalInputInvalidate.apply(this, args);
 };
 ProjectInputObservations.prototype.changed = function(file, options) {
   lastInputObservations = this;
-  inputAudit?.({ order: ++auditSequence, file, kind: options?.kind || 'change', cleanDocument: options?.documentDigest !== undefined });
+  inputAudit?.({ order: ++auditSequence, action: 'changed', file, kind: options?.kind || 'change', cleanDocument: options?.documentDigest !== undefined,
+    baselines: [...this.registrations.values()].filter(item => this.diagnostics.current(item.token)).slice(0, 8).map(item => ({ key: item.plan.key, exactName: Boolean(item.versions?.match(file)),
+      observedInput: this.dependencies.affects(item.plan.key, file) })) });
   return originalInputChanged.call(this, file, options);
 };
 for (const method of ['spawn', 'execFile']) {
@@ -30,7 +50,27 @@ for (const method of ['spawn', 'execFile']) {
     const call = { order: ++auditSequence, method, executable, args: Array.isArray(args) ? [...args] : [], options };
     if (processAudit) call.editorState = processAudit();
     processCalls.push(call);
-    return original.call(this, executable, args, options, ...rest);
+    const child = original.call(this, executable, args, options, ...rest);
+    if (executable === process.env.VAS_TEST_COMPILER && call.args.includes('--report=jsonl')) {
+      // Read-only, bounded native wire audit. Never substitute or transform
+      // bytes delivered to the production report consumer.
+      const decoder = new StringDecoder('utf8');
+      let pending = '', bytes = 0;
+      call.report = [];
+      child.once('close', (code, signal) => { call.nativeClose = { order: ++auditSequence, code, signal }; });
+      child.stdout.on('data', chunk => {
+        bytes += chunk.length;
+        if (bytes > 128 * 1024) { call.reportTruncated = true; pending = ''; return; }
+        const lines = (pending + decoder.write(chunk)).split('\n');
+        pending = lines.pop();
+        for (const line of lines) {
+          if (call.report.length >= 48) { call.reportTruncated = true; break; }
+          try { call.report.push({ order: ++auditSequence, ...JSON.parse(line) }); }
+          catch { call.report.push({ auditError: 'non-JSON native report line' }); }
+        }
+      });
+    }
+    return child;
   };
 }
 
@@ -46,7 +86,7 @@ vscode.CustomExecution = class extends OriginalCustomExecution {
       const terminal = await callback(...args);
       terminal.onDidClose(code => { record.closeCodes.push(code); record.closeEvents.push({ order: ++auditSequence, code }); });
       terminal.onDidWrite(text => {
-        if (record.messages.length < 12 && text.includes('VAS:')) record.messages.push(text.slice(0, 2048));
+        if (record.messages.length < 24 && (text.includes('VAS:') || text.includes(' : '))) record.messages.push(text.slice(0, 2048));
       });
       const open = terminal.open, close = terminal.close;
       terminal.open = function(...parameters) { record.opened++; return open.apply(this, parameters); };
@@ -336,22 +376,57 @@ async function dirtyIncludeAliasTests(folder, fixture) {
 async function savedIncludeAliasTests(folder, fixture) {
   const alias = fixture.includeAlias, unit = fixture.manifest.compilationUnits.find(item => item.id === alias.unit);
   const uri = relative => vscode.Uri.joinPath(folder.uri, relative);
-  const document = await vscode.workspace.openTextDocument(uri(alias.alias));
-  assert.equal(document.isDirty, false);
-  assert.match(document.getText(), /dirty physical include alias/, 'the preceding session must have explicitly saved this same alias');
-  await missing(uri(unit.output).fsPath);
-  const notes = await vscode.workspace.openTextDocument(uri(alias.unrelated));
-  await replaceText(notes, notes.getText() + 'Still unrelated and unsaved\n');
-  assert.equal(await projectTaskExit(folder, alias.unit), 0, 'saving the alias must allow a genuine successful build');
-  assert.ok((await fs.stat(uri(unit.output).fsPath)).size > 0);
-  await eventually(() => vscode.languages.getDiagnostics(uri(alias.include)).some(item =>
-    item.severity === vscode.DiagnosticSeverity.Warning), 'the saved include warning under its compiler-owned .vas identity');
-  assert.equal(vscode.languages.getDiagnostics(document.uri).length, 0,
-    'physical safety checks must not rewrite compiler diagnostic paths to the .txt editor alias');
-  assert.equal(notes.isDirty, true, 'a dirty unrelated .txt must not block or be silently saved by the build');
-  assert.equal(await notes.save(), true);
+  async function inputEvidence() {
+    return Promise.all([alias.entry, alias.include, alias.alias, alias.rerunAlias].map(async relative => {
+      const file = uri(relative).fsPath;
+      const [bytes, stat, realpath] = await Promise.all([fs.readFile(file), fs.stat(file, { bigint: true }), fs.realpath(file)]);
+      return { relative, file, realpath, dev: stat.dev.toString(), ino: stat.ino.toString(), bytes: bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex'), text: bytes.subarray(0, 2048).toString('utf8') };
+    }));
+  }
+  const before = await inputEvidence(), fileEvents = [], diagnosticEvents = [], inputEvents = [], textEvents = [];
+  const from = processCalls.length, customFrom = customExecutions.length;
+  fileAudit = (kind, file) => { if (fileEvents.length < 64) fileEvents.push({ order: ++auditSequence, kind, path: file.fsPath }); };
+  inputAudit = event => { if (inputEvents.length < 64) inputEvents.push(event); };
+  const diagnosticListener = vscode.languages.onDidChangeDiagnostics(event => {
+    for (const file of event.uris) if (diagnosticEvents.length < 64) diagnosticEvents.push({ order: ++auditSequence, uri: file.toString(),
+      items: vscode.languages.getDiagnostics(file).slice(0, 8).map(item => ({ severity: item.severity, message: item.message.slice(0, 2048) })) });
+  });
+  const textListener = vscode.workspace.onDidChangeTextDocument(event => {
+    if (event.contentChanges.length && textEvents.length < 64) textEvents.push({ order: ++auditSequence,
+      file: event.document.uri.fsPath, dirty: event.document.isDirty, version: event.document.version });
+  });
+  const configurationListener = vscode.workspace.onDidChangeConfiguration(event => {
+    if (event.affectsConfiguration('vas') && inputEvents.length < 64) inputEvents.push({ order: ++auditSequence, action: 'configuration' });
+  });
+  try {
+    const document = await vscode.workspace.openTextDocument(uri(alias.alias));
+    assert.equal(document.isDirty, false);
+    assert.match(document.getText(), /dirty physical include alias/, 'the preceding session must have explicitly saved this same alias');
+    await missing(uri(unit.output).fsPath);
+    const notes = await vscode.workspace.openTextDocument(uri(alias.unrelated));
+    await replaceText(notes, notes.getText() + 'Still unrelated and unsaved\n');
+    assert.equal(await projectTaskExit(folder, alias.unit), 0, 'saving the alias must allow a genuine successful build');
+    assert.ok((await fs.stat(uri(unit.output).fsPath)).size > 0);
+    await eventually(() => vscode.languages.getDiagnostics(uri(alias.include)).some(item =>
+      item.severity === vscode.DiagnosticSeverity.Warning), 'the saved include warning under its compiler-owned .vas identity');
+    assert.equal(vscode.languages.getDiagnostics(document.uri).length, 0,
+      'physical safety checks must not rewrite compiler diagnostic paths to the .txt editor alias');
+    assert.equal(notes.isDirty, true, 'a dirty unrelated .txt must not block or be silently saved by the build');
+    assert.equal(await notes.save(), true);
 
-  console.log('PASS: saved alias builds and publishes its compiler-owned warning while unrelated text remains dirty');
+    console.log('PASS: saved alias builds and publishes its compiler-owned warning while unrelated text remains dirty');
+  } finally {
+    try {
+      let after;
+      try { after = await inputEvidence(); } catch (error) { after = { evidenceError: error.message }; }
+      console.log('VAS saved-alias evidence:', JSON.stringify({ before, after, fileEvents, diagnosticEvents, inputEvents, textEvents,
+        processes: nativeCalls(from).map(call => ({ order: call.order, args: call.args, report: call.report, reportTruncated: call.reportTruncated, nativeClose: call.nativeClose })),
+        executions: customExecutions.slice(customFrom) }));
+    } finally {
+      fileAudit = undefined; inputAudit = undefined; diagnosticListener.dispose(); textListener.dispose(); configurationListener.dispose();
+    }
+  }
 }
 
 async function userRerunTests(folder, fixture, inputKind = 'entry') {
