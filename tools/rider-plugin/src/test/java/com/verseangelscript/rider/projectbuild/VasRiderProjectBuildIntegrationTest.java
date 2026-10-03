@@ -177,6 +177,83 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
     }
 
     @Test
+    void navigatesExternalIncludeOnFirstVfsDiscovery() throws Exception {
+        try (Fixture fixture = fixture()) {
+            Path externalDirectory = Files.createTempDirectory("vas-native-external 漢😀 ").toAbsolutePath().normalize();
+            Path externalLeaf = externalDirectory.resolve("external-leaf 漢😀.vas");
+            try {
+                assertFalse(externalDirectory.startsWith(fixture.root), "this case must exercise a native include outside the Rider project");
+                // Use NIO only: the compiler, not VFS or PSI, first discovers and
+                // reads this source. The first navigation must establish VFS identity.
+                Files.writeString(externalLeaf, UTF8_SOURCE, StandardCharsets.UTF_8);
+                Files.setLastModifiedTime(externalLeaf, FileTime.fromMillis(System.currentTimeMillis() - 2_000));
+                String includePath = externalLeaf.toString().replace('\\', '/');
+                fixture.writePath(fixture.entry, "#include \"" + includePath + "\"\nvoid main() { included(); }\n");
+                fixture.open(fixture.decoy);
+                EdtTestUtil.runInEdtAndWait(() -> {
+                    assertNull(LocalFileSystem.getInstance().findFileByNioFile(externalDirectory));
+                    assertNull(LocalFileSystem.getInstance().findFileByNioFile(externalLeaf));
+                });
+                var completed = fixture.build();
+                assertFalse(completed.success());
+                var item = completed.items().stream()
+                    .filter(value -> value.diagnostic().message().contains("No matching symbol 'missing'"))
+                    .findFirst().orElseThrow();
+                assertEquals(2, item.diagnostic().row());
+                assertEquals(17, item.diagnostic().column());
+                assertNotNull(item.location());
+                assertEquals(externalLeaf, item.location().file().toAbsolutePath().normalize());
+                assertEquals(UTF8_SOURCE.indexOf("missing"), item.location().offset());
+                assertEquals(UTF8_SOURCE, item.location().snapshot().text());
+                assertTrue(item.location().snapshot().unchanged(true));
+                assertTrue(fixture.service.dependencies(fixture.manifest.toString(), "good").contains(externalLeaf));
+                EdtTestUtil.runInEdtAndWait(() -> {
+                    assertNull(LocalFileSystem.getInstance().findFileByNioFile(externalDirectory),
+                        "native compilation must not prime VFS discovery for this test");
+                    assertNull(LocalFileSystem.getInstance().findFileByNioFile(externalLeaf));
+                });
+                int launchesAfterBuild = fixture.launches.size();
+                int publicationsAfterBuild = fixture.outcomes.size();
+                EdtTestUtil.runInEdtAndWait(() -> VasProjectBuildView.navigate(fixture.project, completed, item));
+                await(() -> EdtTestUtil.runInEdtAndGet(() -> {
+                    var editor = FileEditorManager.getInstance(fixture.project).getSelectedTextEditor();
+                    if (editor == null) return false;
+                    var file = FileDocumentManager.getInstance().getFile(editor.getDocument());
+                    return file != null && Path.of(file.getPath()).equals(externalLeaf)
+                        && editor.getCaretModel().getOffset() == UTF8_SOURCE.indexOf("missing");
+                }), "first production navigation must discover the external include and open its precise diagnostic location");
+                quietEdt();
+                assertSame(completed, fixture.service.latest(), "discovering unchanged external bytes must not invalidate completed diagnostics");
+                assertEquals(publicationsAfterBuild, fixture.outcomes.size());
+                assertEquals(launchesAfterBuild, fixture.launches.size(), "VFS discovery must never trigger a new compilation");
+                assertTrue(fixture.service.isCurrent(completed));
+                EdtTestUtil.runInEdtAndWait(() -> {
+                    assertNotNull(LocalFileSystem.getInstance().findFileByNioFile(externalDirectory));
+                    assertNotNull(LocalFileSystem.getInstance().findFileByNioFile(externalLeaf));
+                });
+            } finally {
+                EdtTestUtil.runInEdtAndWait(() -> {
+                    fixture.service.cancel();
+                    for (VirtualFile file : FileEditorManager.getInstance(fixture.project).getOpenFiles()) {
+                        if (Path.of(file.getPath()).startsWith(externalDirectory)) {
+                            FileEditorManager.getInstance(fixture.project).closeFile(file);
+                        }
+                    }
+                });
+                if (Files.exists(externalDirectory)) {
+                    try (var paths = Files.walk(externalDirectory)) {
+                        for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
+                    }
+                }
+                fixture.refresh(externalLeaf);
+                fixture.refresh(externalDirectory);
+                assertFalse(Files.exists(externalDirectory));
+            }
+        }
+        passed("navigatesExternalIncludeOnFirstVfsDiscovery");
+    }
+
+    @Test
     void preservesLegacyWarningsAndLiteralUnicodeMetacharacterPaths() throws Exception {
         try (Fixture fixture = fixture()) {
             byte[] originalCompiler = Files.readAllBytes(fixture.compiler);
@@ -330,6 +407,45 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
             assertEquals(1, fixture.buildArguments().size());
         }
         passed("cancelsSelectionAndSuppressesSupersededResults");
+    }
+
+    @Test
+    void preservesNewBuildWhenSupersededSelectionIsCancelled() throws Exception {
+        try (Fixture fixture = fixture()) {
+            assertNull(fixture.service.latest());
+            AtomicInteger selectionOrder = new AtomicInteger();
+            AtomicInteger publicationsBeforeNewRequest = new AtomicInteger(-1);
+            fixture.selection = descriptor -> {
+                if (selectionOrder.getAndIncrement() == 0) {
+                    publicationsBeforeNewRequest.set(fixture.outcomes.size());
+                    // Model a modal selection dialog being superseded by a new
+                    // registered action before the obsolete dialog returns cancel.
+                    fixture.invokeAction();
+                    return null;
+                }
+                return "good";
+            };
+            var completed = fixture.build();
+            assertTrue(completed.success(), completed.status());
+            assertEquals(2, completed.generation(), "the second explicit invocation must own the completed result");
+            assertEquals("good", completed.unit());
+            assertEquals(2, selectionOrder.get());
+            assertEquals(2, fixture.selections.get());
+            assertEquals(2, fixture.launches.stream().filter(args -> args.getFirst().equals("--describe-project=json")).count());
+            assertEquals(1, fixture.buildArguments().size(), "only the new selection may launch the native unit build");
+            assertEquals(List.of("--report=jsonl", "--project", fixture.manifest.toString(), "--unit", "good"),
+                fixture.buildArguments().getFirst());
+            assertTrue(Files.size(fixture.goodOutput) > 0);
+            quietEdt();
+            assertSame(completed, fixture.service.latest());
+            assertTrue(publicationsBeforeNewRequest.get() >= 0);
+            assertTrue(fixture.outcomes.stream().skip(publicationsBeforeNewRequest.get())
+                .allMatch(outcome -> outcome.generation() == completed.generation()),
+                "the cancelled obsolete selection must not publish late outcomes or cancel the newer session");
+            assertTrue(fixture.outcomes.stream().skip(publicationsBeforeNewRequest.get())
+                .noneMatch(outcome -> outcome.status().toLowerCase(java.util.Locale.ROOT).contains("cancel")));
+        }
+        passed("preservesNewBuildWhenSupersededSelectionIsCancelled");
     }
 
     @Test

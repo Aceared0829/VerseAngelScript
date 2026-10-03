@@ -14,11 +14,13 @@ CLASS = "com.verseangelscript.rider.projectbuild.VasRiderProjectBuildIntegration
 EXPECTED = frozenset({
     "buildsExplicitUnitsWithDistinctHostConfigurations",
     "navigatesNestedUtf8DiagnosticsIndependentlyOfActiveEditor",
+    "navigatesExternalIncludeOnFirstVfsDiscovery",
     "preservesLegacyWarningsAndLiteralUnicodeMetacharacterPaths",
     "rejectsDirtyEntryManifestHostAndKnownInclude",
     "retainsDependenciesAfterPartialTraversal",
     "blocksUntrustedAndPassiveProjectExecution",
     "cancelsSelectionAndSuppressesSupersededResults",
+    "preservesNewBuildWhenSupersededSelectionIsCancelled",
     "suppressesResultsAfterInputsSettingsOrTrustChange",
     "invalidatesCompletedResultsAfterTrustOrCompilerChange",
     "invalidatesCompletedResultsAfterDependencyDirectoryChanges",

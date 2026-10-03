@@ -20,6 +20,8 @@ import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.openapi.vfs.VirtualFileManager;
 import com.intellij.openapi.vfs.newvfs.BulkFileListener;
 import com.intellij.openapi.vfs.newvfs.events.VFileEvent;
+import com.intellij.openapi.vfs.newvfs.events.VFileCreateEvent;
+import com.intellij.openapi.vfs.newvfs.events.VFilePropertyChangeEvent;
 import com.verseangelscript.rider.build.VasToolchainSettings;
 import org.jetbrains.annotations.NotNull;
 
@@ -90,10 +92,10 @@ public final class VasProjectBuildService implements Disposable {
             @Override public void before(@NotNull List<? extends VFileEvent> events) {
                 // Rename/move events must be checked while their old directory
                 // identity still exists, including parents of observed sources.
-                for (VFileEvent event : events) changed(Path.of(event.getPath()), true);
+                for (VFileEvent event : events) vfsChanged(event);
             }
             @Override public void after(@NotNull List<? extends VFileEvent> events) {
-                for (VFileEvent event : events) changed(Path.of(event.getPath()), true);
+                for (VFileEvent event : events) vfsChanged(event);
             }
         });
     }
@@ -121,8 +123,17 @@ public final class VasProjectBuildService implements Disposable {
         session.aliasChecks = new VasProjectChangeQueue(1024,
             runnable -> ApplicationManager.getApplication().executeOnPooledThread(runnable),
             () -> active(session), path -> {
-                if (inputAlias(session, path)) invalidate(session, "Inputs changed; build again");
-            }, () -> invalidate(session, "Too many pending input changes. Build again."));
+                boolean discovery = Boolean.TRUE.equals(session.changeKinds.remove(path));
+                if (discovery) {
+                    // VFS can discover a file already read by the native compiler.
+                    // Keep results only after revalidating all saved bytes off-thread.
+                    try { guard(session, true); }
+                    catch (RuntimeException exception) { invalidate(session, exception.getMessage()); }
+                } else if (inputAlias(session, path)) invalidate(session, "Inputs changed; build again");
+            }, () -> {
+                session.changeKinds.clear();
+                invalidate(session, "Too many pending input changes. Build again.");
+            });
         synchronized (stateLock) {
             Session old = current;
             if (old != null) old.cancelled = true;
@@ -160,7 +171,7 @@ public final class VasProjectBuildService implements Disposable {
                 try {
                     guardState(session);
                     String chosen = ui().select(selection.descriptor());
-                    if (chosen == null) { cancel(); return; }
+                    if (chosen == null) { invalidate(session, "Build cancelled"); return; }
                     var unit = selection.descriptor().units().stream().filter(value -> value.id().equals(chosen)).findFirst()
                         .orElseThrow(() -> new IllegalStateException("Select an explicit VAS compilation unit."));
                     guardState(session);
@@ -169,7 +180,7 @@ public final class VasProjectBuildService implements Disposable {
                     build(session, selection);
                 } catch (Exception exception) { failed(session, exception); }
             }
-            @Override public void onCancel() { if (current == session) cancel(); }
+            @Override public void onCancel() { invalidate(session, "Build cancelled"); }
         });
     }
 
@@ -208,7 +219,7 @@ public final class VasProjectBuildService implements Disposable {
                     failed(session, exception);
                 }
             }
-            @Override public void onCancel() { if (current == session) cancel(); }
+            @Override public void onCancel() { invalidate(session, "Build cancelled"); }
         });
     }
 
@@ -313,25 +324,49 @@ public final class VasProjectBuildService implements Disposable {
         return false;
     }
 
+    private void vfsChanged(VFileEvent event) {
+        if (event instanceof VFilePropertyChangeEvent property && !property.isRename()
+            && !VirtualFile.PROP_SYMLINK_TARGET.equals(property.getPropertyName())
+            && !VirtualFile.PROP_CHILDREN_CASE_SENSITIVITY.equals(property.getPropertyName())) return;
+        if (event instanceof VFileCreateEvent && event.isFromRefresh()) {
+            Session session = current;
+            if (session == null || !active(session)) return;
+            Path path = Path.of(event.getPath()).toAbsolutePath().normalize();
+            if (!knownPath(session, path, true)) return;
+            session.inputEvents.incrementAndGet();
+            // Every discovery validates the same saved snapshot. Coalesce a whole
+            // refresh burst under one key instead of hashing every input per file.
+            queueChange(session, session.manifest, true);
+        } else changed(Path.of(event.getPath()), true);
+    }
+
+    private void queueChange(Session session, Path path, boolean discovery) {
+        // A mutation wins over discovery when both events coalesce for one path.
+        session.changeKinds.merge(path, discovery, (previous, next) -> previous && next);
+        session.aliasChecks.submit(path);
+    }
+
     /** Listener work is purely lexical. Physical aliases are coalesced on a worker. */
     private void changed(Path path, boolean includeAncestors) {
         Session session = current;
         if (session == null || !active(session)) return;
         Path changed = path.toAbsolutePath().normalize();
         session.inputEvents.incrementAndGet();
-        boolean known = same(changed, session.manifest) || session.inputs.containsKey(changed)
-            || dependencies.values().stream().anyMatch(paths -> paths.contains(changed));
-        if (!known && includeAncestors) {
-            known = session.inputs.keySet().stream().anyMatch(input -> input.startsWith(changed))
-                || dependencies.values().stream().anyMatch(paths -> paths.stream().anyMatch(input -> input.startsWith(changed)));
-        }
+        boolean known = knownPath(session, changed, includeAncestors);
         // A bytecode destination can itself end .vas; only real inputs invalidate it.
         boolean output = session.unit != null && same(changed, Path.of(session.unit.output()));
         if (known || !output && changed.toString().toLowerCase(Locale.ROOT).endsWith(".vas")) {
             invalidate(session, "Inputs changed; build again");
         } else {
-            session.aliasChecks.submit(changed);
+            queueChange(session, changed, false);
         }
+    }
+    private boolean knownPath(Session session, Path path, boolean includeAncestors) {
+        if (same(path, session.manifest) || session.inputs.containsKey(path)
+            || dependencies.values().stream().anyMatch(paths -> paths.contains(path))) return true;
+        return includeAncestors && (session.manifest.startsWith(path)
+            || session.inputs.keySet().stream().anyMatch(input -> input.startsWith(path))
+            || dependencies.values().stream().anyMatch(paths -> paths.stream().anyMatch(input -> input.startsWith(path))));
     }
     private static boolean same(Path first, Path second) { return first.toAbsolutePath().normalize().equals(second.toAbsolutePath().normalize()); }
     private static Path resolve(String cwd, String path) {
@@ -414,6 +449,7 @@ public final class VasProjectBuildService implements Disposable {
         final String compilerSetting;
         final Map<Path, VasProjectInputs.Snapshot> inputs = new ConcurrentHashMap<>();
         final Set<Path> observed = ConcurrentHashMap.newKeySet();
+        final Map<Path, Boolean> changeKinds = new ConcurrentHashMap<>();
         final AtomicLong inputEvents = new AtomicLong();
         final AtomicLong publications = new AtomicLong();
         VasProjectChangeQueue aliasChecks;

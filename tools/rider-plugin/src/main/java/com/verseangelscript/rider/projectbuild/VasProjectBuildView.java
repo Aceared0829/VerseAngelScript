@@ -111,23 +111,30 @@ public final class VasProjectBuildView implements ToolWindowFactory {
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
             try {
                 var service = VasProjectBuildService.getInstance(project);
-                long inputRevision = service.inputRevision(outcome);
-                if (inputRevision < 0 || !service.isCurrent(outcome) || !location.snapshot().unchanged(true)) return;
-                // Refresh and load the document before returning to EDT. The final
-                // UI callback only inspects cached state and navigates the editor.
+                if (!service.isCurrent(outcome) || !location.snapshot().unchanged(true)) return;
+                // Refresh without holding the application read lock. Discovering an
+                // unchanged native include in VFS is not a source mutation.
                 var file = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(location.file());
-                if (file == null) return;
+                if (file == null || !service.isCurrent(outcome) || !location.snapshot().unchanged(true)) return;
+                long inputRevision = service.inputRevision(outcome);
+                if (inputRevision < 0) return;
                 var manager = FileDocumentManager.getInstance();
-                com.intellij.openapi.application.ReadAction.computeBlocking(() -> manager.getDocument(file));
-                ApplicationManager.getApplication().invokeLater(() -> {
-                    if (project.isDisposed() || !TrustedProjects.isProjectTrusted(project)
-                        || service.inputRevision(outcome) != inputRevision || !file.isValid()) return;
-                    var document = manager.getCachedDocument(file);
-                    if (document != null && (manager.isDocumentUnsaved(document)
-                        || location.snapshot().text() != null && !document.getText().equals(location.snapshot().editorText()))) return;
-                    if (location.offset() < 0) new OpenFileDescriptor(project, file).navigate(true);
-                    else new OpenFileDescriptor(project, file, location.offset()).navigate(true);
-                });
+                // Document preparation uses the platform's cancellable, write-priority
+                // non-blocking read flow. Never hold our own blocking read action over
+                // an uncached document load, and retain the returned document strongly.
+                com.intellij.openapi.application.ReadAction.nonBlocking(() -> manager.getDocument(file))
+                    .expireWith(project)
+                    .expireWhen(() -> service.inputRevision(outcome) != inputRevision)
+                    .coalesceBy(project, outcome, location.file())
+                    .finishOnUiThread(com.intellij.openapi.application.ModalityState.nonModal(), document -> {
+                        if (project.isDisposed() || !TrustedProjects.isProjectTrusted(project)
+                            || service.inputRevision(outcome) != inputRevision || !file.isValid()
+                            || document == null || manager.getCachedDocument(file) != document) return;
+                        if (manager.isDocumentUnsaved(document)
+                            || location.snapshot().text() != null && !document.getText().equals(location.snapshot().editorText())) return;
+                        if (location.offset() < 0) new OpenFileDescriptor(project, file).navigate(true);
+                        else new OpenFileDescriptor(project, file, location.offset()).navigate(true);
+                    }).submit(com.intellij.util.concurrency.AppExecutorUtil.getAppExecutorService());
             } catch (Exception ignored) { /* Stale/deleted/invalid sources must not navigate to a fabricated point. */ }
         });
     }
