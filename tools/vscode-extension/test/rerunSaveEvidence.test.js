@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
-const { watch, writeFileSync } = require('node:fs');
+const { writeFileSync } = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { execFile } = require('node:child_process');
@@ -11,6 +11,7 @@ const { promisify } = require('node:util');
 const { RerunSaveEvidence } = require('./rerunSaveEvidence');
 const { readVersion } = require('../src/projectVersions');
 const { sameFileName } = require('../src/toolchain');
+const { readyDirectoryWatch } = require('./watchReadiness');
 
 const file = path.resolve('rerun-save-fixture.vas'), text = 'void main() {}\n// saved 文😀\n';
 function fixture(read) {
@@ -148,19 +149,22 @@ for (const mode of ['early entry', 'early include alias', 'late entry']) {
       evidence = new RerunSaveEvidence({ files: [input, await fs.realpath(input)], version: 2, text: nextText, before: await readVersion(input) });
       let order = 0, notify;
       const received = new Promise(resolve => { notify = resolve; });
-      watcher = watch(root, (kind, name) => {
+      watcher = await readyDirectoryWatch(root, (kind, name) => {
         if (!name || !sameFileName(path.join(root, name), input)) return;
         const event = { order: ++order, kind: kind === 'rename' ? 'create' : 'change', path: input };
         evidence.observed(event); notify(event);
       });
+      assert.equal(evidence.events.length, 0, 'independent readiness receipts cannot count as source notifications');
+      assert.equal(evidence.will, undefined, 'the readiness gate must precede this save window');
+      watcher.audit.phase = 'target-save';
       evidence.willSave({ order: ++order, version: 2, dirty: true, digest: evidence.expected.documentDigest });
       if (mode.startsWith('early')) {
         await fs.writeFile(input, nextText);
-        await deadline(received, 'actual early filesystem notification');
+        await deadline(watcher.wait(received), 'actual early filesystem notification');
         assert.equal(evidence.pending.size, 0, 'early notification cannot read until save completion');
       } else writeFileSync(input, nextText); // Complete the write before permitting callbacks to run.
       evidence.didSave({ order: ++order, version: 2, dirty: false, digest: evidence.expected.documentDigest });
-      const event = await deadline(received, 'actual filesystem notification');
+      const event = await deadline(watcher.wait(received), 'actual filesystem notification');
       assert.equal(event.order < evidence.saved.order, mode.startsWith('early'));
       await deadline(evidence.settle(), 'actual stable saved-input observation');
       const { stdout, stderr } = await promisify(execFile)(process.env.VAS_TEST_COMPILER,
@@ -171,7 +175,12 @@ for (const mode of ['early entry', 'early include alias', 'late entry']) {
       assert.ok(records.some(record => record.type === 'diagnostic' && record.severity === 'warning'));
       const proof = records.find(record => record.type === 'section_loaded' && sameFileName(record.section, section));
       assert.ok(proof, 'actual compiler must report the selected entry/include section');
-      evidence.verify(proof, await readVersion(section));
+      const current = await readVersion(section);
+      await watcher.wait(evidence.settle());
+      evidence.verify(proof, current);
+    } catch (error) {
+      console.error('VAS native watch evidence:', JSON.stringify({ mode, watch: watcher?.audit, save: evidence?.snapshot() }));
+      throw error;
     } finally {
       watcher?.close();
       await evidence?.dispose();
