@@ -45,7 +45,8 @@ namespace VerseAngelScript.VisualStudio.Tests
 {
     // Every fact is executed by the VS18 harness after RequireExtension installs the
     // production VSIX. Tests invoke the registered command and actual WPF controls;
-    // reflection reads state only, except the isolated native argv transport check.
+    // Reflection reads state and invokes only the pure freshness guards, except
+    // for the isolated native argv transport check.
     public sealed class ProjectBuildTests : IDisposable
     {
         private const string PackageId = "d3a6e112-5f40-4df1-8bb7-0b79f0e74226";
@@ -65,6 +66,7 @@ namespace VerseAngelScript.VisualStudio.Tests
         private Window activeDialog;
         private readonly List<EnvDTE.Window> windows = new List<EnvDTE.Window>();
         private readonly List<Fixture> fixtures = new List<Fixture>();
+        private readonly List<object> inputInvalidations = new List<object>();
 
         [IdeFact(MinVersion = VisualStudioVersion.VS18, MaxVersion = VisualStudioVersion.VS18, RootSuffix = "VASIntegration", MaxAttempts = 1)]
         public async Task SolutionCommandBuildsExplicitUnitWithNativeCompiler()
@@ -427,8 +429,9 @@ namespace VerseAngelScript.VisualStudio.Tests
             Assert.False(Convert.ToBoolean(Member(Member(Coordinator, "LastReport"), "DependenciesComplete")));
             Assert.Contains(((IEnumerable)Member(Coordinator, "ObservedPaths")).Cast<string>(), path => SamePath(path, retained));
             var generation = Convert.ToInt64(Member(Coordinator, "Generation"));
+            var previousSession = CaptureInputSession(generation, false);
             File.AppendAllText(retained, "// retained dependency changed\n");
-            await WaitForAsync(() => Convert.ToInt64(Member(Coordinator, "Generation")) > generation, "previous complete dependency remains watched after partial discovery");
+            await AwaitInputInvalidationAsync(previousSession, generation, "previous dependency after partial discovery", retained);
             Assert.DoesNotContain("succeeded", Status);
             SaveEvidence(nameof(NativeIncludeObservationsRetainPartialDependencies), "nativeIncludeDiscovery", "includeDigests", "partialDiscovery", "previousDependencyRetained", "retainedDependencyInvalidates");
         }
@@ -448,24 +451,43 @@ namespace VerseAngelScript.VisualStudio.Tests
             var observation = ((IEnumerable)Member(Member(Coordinator, "LastReport"), "Observations")).Cast<object>();
             Assert.Contains(observation, item => SamePath(Convert.ToString(Member(Member(item, "Identity"), "Display")), Path.Combine(alias, "missing.vas")));
             var generation = Convert.ToInt64(Member(Coordinator, "Generation"));
+            var previousSession = CaptureInputSession(generation, false);
             File.WriteAllText(Path.Combine(target, "missing.vas"), "void nowPresent() {}\n");
-            await WaitForAsync(() => Convert.ToInt64(Member(Coordinator, "Generation")) > generation, "canonical missing alias creation invalidates result");
+            await AwaitInputInvalidationAsync(previousSession, generation, "canonical missing alias creation", Path.Combine(target, "missing.vas"), Path.Combine(alias, "missing.vas"));
 
             foreach (var rename in new[] { true, false })
             {
                 var fixture = CreateFixture(rename ? "ancestor rename" : "ancestor delete");
                 var ancestor = Path.Combine(fixture.Root, "src", "ancestor"); Directory.CreateDirectory(ancestor);
                 File.WriteAllText(Path.Combine(ancestor, "loaded.vas"), "void loaded() {}\n");
-                File.WriteAllText(fixture.Entry, "#include \"ancestor/loaded.vas\"\nvoid main() {}\n", new UTF8Encoding(false));
+                File.WriteAllText(fixture.Entry, "#include \"ancestor/loaded.vas\"\nvoid main() { int guard_unused; int value = guard_unused; }\n", new UTF8Encoding(false));
                 await OpenSolutionAsync(fixture);
                 await ChooseAndBuildAsync(fixture, 0);
                 await WaitForAsync(() => !Busy && File.Exists(fixture.FirstOutput), "native ancestor include build");
+                Assert.StartsWith("Build succeeded", Status);
+                Assert.Contains(ErrorTasks(), task => TaskText(task).Contains("Script successfully built"));
+                var staleWarning = ErrorTasks().Single(task => TaskText(task).Contains("guard_unused"));
+                ErrorHandler.ThrowOnFailure(staleWarning.Document(out var warningDocument));
+                Assert.True(SamePath(warningDocument, fixture.Entry));
+                AssertReportDigest(fixture.Entry);
+                var unrelated = OpenEditor(fixture.Unrelated);
+                var caret = unrelated.View.Caret.Position.BufferPosition.Position;
                 generation = Convert.ToInt64(Member(Coordinator, "Generation"));
+                previousSession = CaptureInputSession(generation, true);
                 if (rename) Directory.Move(ancestor, ancestor + " moved"); else Directory.Delete(ancestor, true);
-                await WaitForAsync(() => Convert.ToInt64(Member(Coordinator, "Generation")) > generation, "include ancestor mutation invalidates result");
+                await AwaitInputInvalidationAsync(previousSession, generation, rename ? "include ancestor rename" : "include ancestor delete",
+                    ancestor, Path.Combine(ancestor, "loaded.vas"));
                 Assert.DoesNotContain("succeeded", Status);
+                Assert.DoesNotContain(ErrorTasks(), task => TaskText(task).Contains("Script successfully built"));
+                Assert.DoesNotContain(ErrorTasks(), task => TaskText(task).Contains("guard_unused"));
+                // Try the retained native row only after independently observing
+                // cleanup; a refused navigation must not be what causes cleanup.
+                staleWarning.NavigateTo();
+                Assert.Same(unrelated.View, ActiveView());
+                Assert.Equal(caret, unrelated.View.Caret.Position.BufferPosition.Position);
+                CloseEditor(unrelated.Window);
             }
-            SaveEvidence(nameof(CanonicalMissingIncludesAndAncestorChangesInvalidate), "nativeMissingInclude", "canonicalAliasCreate", "ancestorRename", "ancestorDelete");
+            SaveEvidence(nameof(CanonicalMissingIncludesAndAncestorChangesInvalidate), "nativeMissingInclude", "canonicalAliasCreate", "ancestorRename", "ancestorDelete", "sameSessionUiInvalidated", "nativeSuccessRowsCleared", "staleSessionGuardsRejected", "staleNativeWarningDoesNotNavigate");
         }
 
         [IdeFact(MinVersion = VisualStudioVersion.VS18, MaxVersion = VisualStudioVersion.VS18, RootSuffix = "VASIntegration", MaxAttempts = 1)]
@@ -924,6 +946,90 @@ namespace VerseAngelScript.VisualStudio.Tests
             ErrorHandler.ThrowOnFailure(route.Exec(ref group, id, 0, IntPtr.Zero, IntPtr.Zero));
         }
 
+        private object CaptureInputSession(long generation, bool success)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var session = Member(Coordinator, "current");
+            Assert.NotNull(session);
+            Assert.Equal(generation, Convert.ToInt64(Member(session, "Generation")));
+            var report = Member(Coordinator, "LastReport");
+            Assert.NotNull(report);
+            Assert.Same(Member(session, "Report"), report);
+            Assert.Equal(success, Convert.ToBoolean(Member(report, "Success")));
+            Assert.False(((CancellationToken)Member(session, "Token")).IsCancellationRequested);
+            Assert.False(Busy);
+            return session;
+        }
+
+        private async Task AwaitInputInvalidationAsync(object session, long generation, string purpose, params string[] expectedPaths)
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+            Assert.NotNull(session);
+            Assert.Equal(generation, Convert.ToInt64(Member(session, "Generation")));
+            var token = (CancellationToken)Member(session, "Token");
+            var provider = (ErrorListProvider)Member(Coordinator, "ErrorProvider");
+            // The watcher advances its generation before dispatching UI cleanup.
+            // At the first observed generation advance, verify stale-session
+            // rejection, then await this session's visible input invalidation.
+            // Cleanup may already have completed; record the observed phase.
+            long barrierGeneration = 0;
+            string barrierStatus = null;
+            bool barrierCurrentIsCaptured = false, barrierTokenCancelled = false;
+            int barrierProviderRowCount = -1;
+            // Both phases share the existing 30-second bound; no arbitrary delay
+            // or independent later lifecycle event can satisfy this wait.
+            await WaitForAsync(() =>
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                if (barrierGeneration == 0 && Convert.ToInt64(Member(Coordinator, "Generation")) > generation)
+                {
+                    barrierGeneration = Convert.ToInt64(Member(Coordinator, "Generation"));
+                    barrierStatus = Status;
+                    barrierCurrentIsCaptured = ReferenceEquals(session, Member(Coordinator, "current"));
+                    barrierTokenCancelled = token.IsCancellationRequested;
+                    barrierProviderRowCount = provider.Tasks.Count;
+                    // These guards are pure checks of the exact publication and
+                    // navigation safety conditions; they cannot cause UI cleanup.
+                    foreach (var guard in new[] { "Guard", "GuardPublication" })
+                    {
+                        var method = Coordinator.GetType().GetMethod(guard, BindingFlags.Instance | BindingFlags.NonPublic);
+                        Assert.NotNull(method);
+                        var error = Assert.Throws<TargetInvocationException>(() => method.Invoke(Coordinator, new[] { session }));
+                        Assert.IsAssignableFrom<OperationCanceledException>(error.InnerException);
+                    }
+                }
+                return barrierGeneration != 0 && token.IsCancellationRequested && !Busy && Member(Coordinator, "current") == null &&
+                    Member(Coordinator, "LastReport") == null && provider.Tasks.Count == 0 &&
+                    MatchesInputInvalidation(Status, expectedPaths);
+            }, purpose + " matching input invalidation and native provider cleanup");
+            var completedGeneration = Convert.ToInt64(Member(Coordinator, "Generation"));
+            Assert.InRange(completedGeneration, generation + 1, generation + 2);
+            Assert.DoesNotContain("succeeded", Status);
+            Assert.Empty(provider.Tasks.Cast<object>());
+            inputInvalidations.Add(new {
+                purpose, sourceGeneration = generation, barrierGeneration, barrierStatus, barrierCurrentIsCaptured,
+                barrierTokenCancelled, barrierProviderRowCount, completedGeneration,
+                completedStatus = Status, workerReason = Convert.ToString(Member(session, "InvalidationReason")),
+                expectedPaths, oldSessionCancelled = token.IsCancellationRequested,
+                providerRowCount = provider.Tasks.Count, nativeRowCount = ErrorTasks().Count
+            });
+        }
+
+        private static bool MatchesInputInvalidation(string status, IEnumerable<string> expectedPaths)
+        {
+            foreach (var prefix in new[] { "Saved input changed; build again: ", "Input path alias changed; build again: " })
+                if (status.StartsWith(prefix, StringComparison.Ordinal))
+                    return expectedPaths.Any(path => SamePath(status.Substring(prefix.Length), path));
+            foreach (var change in new[] { "Changed", "Created", "Deleted", "Renamed" })
+            {
+                var prefix = "Saved input changed (" + change + "): ";
+                const string suffix = "; build again.";
+                if (status.StartsWith(prefix, StringComparison.Ordinal) && status.EndsWith(suffix, StringComparison.Ordinal))
+                    return expectedPaths.Any(path => SamePath(status.Substring(prefix.Length, status.Length - prefix.Length - suffix.Length), path));
+            }
+            return false;
+        }
+
         private async Task WaitForAsync(Func<bool> condition, string purpose)
         {
             var timer = Stopwatch.StartNew();
@@ -1063,7 +1169,7 @@ namespace VerseAngelScript.VisualStudio.Tests
                 testName = name, hostMajor = FileVersionInfo.GetVersionInfo(Process.GetCurrentProcess().MainModule.FileName).FileMajorPart,
                 processName = Process.GetCurrentProcess().ProcessName, rootSuffix = suffix,
                 hostExe = Path.GetFullPath(Process.GetCurrentProcess().MainModule.FileName), packageAssemblySha256,
-                compilerSha256 = Hash(NativeCompiler), checks = checks.ToDictionary(check => check, check => true)
+                compilerSha256 = Hash(NativeCompiler), checks = checks.ToDictionary(check => check, check => true), inputInvalidations
             }, Formatting.Indented), new UTF8Encoding(false));
         }
 

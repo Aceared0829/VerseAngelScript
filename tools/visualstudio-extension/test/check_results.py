@@ -27,7 +27,7 @@ PROJECT_EVIDENCE = {
     "DirtyInputsAndAliasesBlockNativeBuild": {"dirtyEntryBlocked", "dirtyConfigBlocked", "dirtyManifestBlocked", "dirtyHardLinkBlocked", "dirtyJunctionBlocked", "noBuildProcesses"},
     "RepeatedBuildCancelAndCloseIgnoreLateResults": {"repeatDisabled", "cancelCommand", "closeInvalidated", "lateResultIgnored", "processReleased", "sameRootFolderReopened", "folderToSolutionSettled"},
     "NativeIncludeObservationsRetainPartialDependencies": {"nativeIncludeDiscovery", "includeDigests", "partialDiscovery", "previousDependencyRetained", "retainedDependencyInvalidates"},
-    "CanonicalMissingIncludesAndAncestorChangesInvalidate": {"nativeMissingInclude", "canonicalAliasCreate", "ancestorRename", "ancestorDelete"},
+    "CanonicalMissingIncludesAndAncestorChangesInvalidate": {"nativeMissingInclude", "canonicalAliasCreate", "ancestorRename", "ancestorDelete", "sameSessionUiInvalidated", "nativeSuccessRowsCleared", "staleSessionGuardsRejected", "staleNativeWarningDoesNotNavigate"},
     "FirstTraversalDirtyIncludeAliasBlocksPublication": {"firstTraversalObserved", "dirtyTxtHardLinkRejected", "noStalePublication", "unrelatedDirtyAllowed"},
     "MismatchedProofAndTruncatedReportsNeverPublish": {"mismatchedDigestRejected", "truncatedTerminalRejected", "noDiagnosticPublication", "actualProcessCalls"},
     "BlockedBuildInputAndCompilerChangesInvalidate": {"sourceMutationCancels", "configMutationCancels", "manifestMutationCancels", "compilerSettingCancels", "lateOutputIgnored", "processesReaped", "concurrentWatcherCancelSafe"},
