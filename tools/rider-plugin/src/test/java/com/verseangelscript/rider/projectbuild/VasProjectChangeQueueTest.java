@@ -217,7 +217,15 @@ public final class VasProjectChangeQueueTest {
     }
 
     @Test(timeout = 10000) public void slowCheckDoesNotBlockSubmissionOrTheSwingEdt() throws Exception {
+        assertFalse("The test coordinator must not block the EDT", SwingUtilities.isEventDispatchThread());
+        AtomicReference<Thread> edt = new AtomicReference<>();
+        // Rider's host suite shares this JVM and event queue. Establish that its
+        // preceding EDT work has finished before measuring this queue's contract.
+        // Initialization is still bounded by the unchanged whole-test timeout.
+        SwingUtilities.invokeAndWait(() -> edt.set(Thread.currentThread()));
         ExecutorService worker = Executors.newSingleThreadExecutor();
+        AtomicBoolean active = new AtomicBoolean(true);
+        AtomicReference<Throwable> asynchronousFailure = new AtomicReference<>();
         CountDownLatch started = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         CountDownLatch finished = new CountDownLatch(2);
@@ -229,9 +237,10 @@ public final class VasProjectChangeQueueTest {
         AtomicInteger checks = new AtomicInteger();
         VasProjectChangeQueue queue = new VasProjectChangeQueue(2, task -> {
             dispatches.incrementAndGet();
-            worker.execute(task);
-        }, () -> true, path -> {
+            worker.execute(() -> recordFailure(task, asynchronousFailure));
+        }, active::get, path -> {
             checker.set(Thread.currentThread());
+            assertFalse("The slow checker must run off EDT", SwingUtilities.isEventDispatchThread());
             checks.incrementAndGet();
             if (path.equals(FIRST)) {
                 started.countDown();
@@ -240,29 +249,68 @@ public final class VasProjectChangeQueueTest {
             finished.countDown();
         }, () -> fail("Unexpected overflow"));
         try {
-            SwingUtilities.invokeLater(() -> {
+            Thread workerThread = worker.submit(Thread::currentThread).get(3, TimeUnit.SECONDS);
+            assertNotSame(edt.get(), workerThread);
+            SwingUtilities.invokeLater(() -> recordFailure(() -> {
+                if (!active.get()) return;
                 submitter.set(Thread.currentThread());
                 queue.submit(FIRST);
                 submitted.countDown();
-            });
-            assertTrue(started.await(3, TimeUnit.SECONDS));
-            assertTrue("Submission must return while the check is blocked", submitted.await(3, TimeUnit.SECONDS));
-            SwingUtilities.invokeLater(() -> {
+            }, asynchronousFailure));
+            awaitQueuePhase(started, "Checker must start after EDT/worker readiness", asynchronousFailure, edt.get(), workerThread);
+            awaitQueuePhase(submitted, "Submission must return while the check is blocked", asynchronousFailure, edt.get(), workerThread);
+            SwingUtilities.invokeLater(() -> recordFailure(() -> {
+                if (!active.get()) return;
                 queue.submit(SECOND);
                 queue.submit(SECOND);
                 responsive.countDown();
-            });
-            assertTrue("EDT must process another event during the slow check", responsive.await(3, TimeUnit.SECONDS));
+            }, asynchronousFailure));
+            awaitQueuePhase(responsive, "EDT must process another event during the slow check", asynchronousFailure, edt.get(), workerThread);
+            assertSame(edt.get(), submitter.get());
+            assertSame(workerThread, checker.get());
             assertNotSame(submitter.get(), checker.get());
+            assertEquals("The slow check must still be held during the EDT probe", 1, release.getCount());
             assertEquals(1, checks.get());
             assertEquals(1, dispatches.get());
             release.countDown();
-            assertTrue(finished.await(3, TimeUnit.SECONDS));
+            awaitQueuePhase(finished, "Both distinct checks must finish after release", asynchronousFailure, edt.get(), workerThread);
+            // A second countDown alone does not prove the drain has ended: an
+            // incorrectly retained duplicate could still be checked afterwards.
+            worker.submit(() -> { }).get(3, TimeUnit.SECONDS);
+            if (asynchronousFailure.get() != null)
+                throw new AssertionError("Queue drain must finish without asynchronous errors", asynchronousFailure.get());
             assertEquals(2, checks.get());
+            assertEquals(1, dispatches.get());
         } finally {
+            // A failed readiness/response assertion can leave an EDT callback
+            // queued. Deactivate it and drain posted callbacks before closing its
+            // executor, so it cannot leak RejectedExecutionException into a later test.
+            active.set(false);
             release.countDown();
-            worker.shutdownNow();
-            assertTrue(worker.awaitTermination(3, TimeUnit.SECONDS));
+            try { SwingUtilities.invokeAndWait(() -> { }); }
+            finally {
+                worker.shutdownNow();
+                assertTrue(worker.awaitTermination(3, TimeUnit.SECONDS));
+            }
+        }
+    }
+
+    private static void recordFailure(Runnable action, AtomicReference<Throwable> failure) {
+        try { action.run(); }
+        catch (Throwable exception) { failure.compareAndSet(null, exception); }
+    }
+
+    private static void awaitQueuePhase(CountDownLatch latch, String phase, AtomicReference<Throwable> failure,
+                                       Thread edt, Thread worker) throws InterruptedException {
+        boolean completed = latch.await(3, TimeUnit.SECONDS);
+        if (failure.get() != null) throw new AssertionError(phase, failure.get());
+        if (!completed) {
+            StringBuilder evidence = new StringBuilder(phase);
+            for (Thread thread : List.of(edt, worker)) {
+                evidence.append("\n").append(thread.getName()).append(": ").append(thread.getState());
+                for (StackTraceElement frame : thread.getStackTrace()) evidence.append("\n  at ").append(frame);
+            }
+            fail(evidence.toString());
         }
     }
 
