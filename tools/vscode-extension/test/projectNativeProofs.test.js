@@ -15,6 +15,7 @@ const { ProjectInputObservations } = require('../src/projectObservations');
 const { createProjectWatchers } = require('../src/projectWatch');
 const { BuildDiagnostics } = require('../src/diagnostics');
 const { documentDigest } = require('../src/projectVersions');
+const { readyDirectoryWatch } = require('./watchReadiness');
 
 // These are native-process/component tests, not extension-host or native Windows
 // UI tests. An old compiler is covered by the other compatibility tests. CI's
@@ -325,6 +326,37 @@ test('a first real native include proof preserves warnings across pending and la
       await assert.rejects(build.plan.checkFresh(), /input changed/, mode);
     });
   });
+
+test('real native publication survives a single metadata-only change delivered by a ready Node filesystem watcher', nativeProofOptions,
+  async () => fixture(async state => {
+    let armed = false;
+    const received = deferred();
+    // This is a native-process/component test. The separate Extension Host
+    // fixture must establish readiness on the extension's own VS Code watcher.
+    const watcher = await readyDirectoryWatch(state.root, (kind, name) => {
+      if (armed && kind === 'change' && name && samePath(path.join(state.root, name), state.include)) {
+        state.fsChanged(state.include); received.resolve();
+      }
+    });
+    try {
+      const build = state.start();
+      assert.equal(await bounded(build.closed.promise, 'single native build'), 0, build.output.join(''));
+      assertActualProof(state, build); assertNativeSuccess(build);
+      const publication = warningEntries(state)[0]; assert.ok(publication);
+      const before = await fs.stat(state.include, { bigint: true });
+      armed = true;
+      await fs.utimes(state.include, Number(before.atimeNs) / 1e9, Number(before.mtimeNs) / 1e9 + 2);
+      await bounded(watcher.wait(received.promise), 'post-publication metadata notification');
+      await bounded(state.observations.settle(), 'classify the actual metadata notification');
+      const after = await fs.stat(state.include, { bigint: true });
+      assert.notEqual(after.mtimeNs, before.mtimeNs);
+      assert.equal(after.dev, before.dev); assert.equal(after.ino, before.ino); assert.equal(after.size, before.size);
+      assert.deepEqual(await fs.readFile(state.include), state.bytes);
+      assert.equal(warningEntries(state)[0], publication);
+      assert.deepEqual(build.closeCodes, [0]);
+      assert.equal(build.wire.filter(record => record.type === 'start').length, 1);
+    } finally { watcher.close(); }
+  }));
 
 test('real cold-include proofs retain mandatory dirty and clean physical-alias checks', nativeProofOptions, async () => {
   for (const mode of ['dirty-alias', 'clean-alias-mismatch', 'clean-alias-match', 'unrelated-equal-bytes']) await fixture(async state => {
