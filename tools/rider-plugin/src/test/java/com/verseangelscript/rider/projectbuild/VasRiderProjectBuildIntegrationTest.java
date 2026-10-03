@@ -65,6 +65,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -232,14 +233,19 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
                 });
                 int launchesAfterBuild = fixture.launches.size();
                 int publicationsAfterBuild = fixture.outcomes.size();
+                long revisionBeforeNavigation = fixture.service.inputRevision(completed);
+                assertTrue(revisionBeforeNavigation >= 0);
                 EdtTestUtil.runInEdtAndWait(() -> VasProjectBuildView.navigate(fixture.project, completed, item));
-                await(() -> EdtTestUtil.runInEdtAndGet(() -> {
-                    var editor = FileEditorManager.getInstance(fixture.project).getSelectedTextEditor();
-                    if (editor == null) return false;
-                    var file = FileDocumentManager.getInstance().getFile(editor.getDocument());
-                    return file != null && Path.of(file.getPath()).equals(externalLeaf)
-                        && editor.getCaretModel().getOffset() == UTF8_SOURCE.indexOf("missing");
-                }), "first production navigation must discover the external include and open its precise diagnostic location");
+                await(() -> {
+                    SelectedPoint selected = selectedPoint(fixture.project);
+                    // Build 262 LocalFileSystemBase.normalize expands Windows 8.3
+                    // names. The native temp path may retain RUNNER~1 while VFS
+                    // returns the long spelling: require the same physical file,
+                    // not the same lexical spelling. Keep that filesystem call off EDT.
+                    return selected.path() != null && selected.caret() == UTF8_SOURCE.indexOf("missing")
+                        && samePhysicalFile(selected.path(), externalLeaf);
+                }, () -> "first production navigation must discover the external include and open its precise diagnostic location; "
+                    + coldNavigationState(fixture, completed, item, externalLeaf, revisionBeforeNavigation));
                 quietEdt();
                 assertSame(completed, fixture.service.latest(), "discovering unchanged external bytes must not invalidate completed diagnostics");
                 assertEquals(publicationsAfterBuild, fixture.outcomes.size());
@@ -252,11 +258,10 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
             } finally {
                 EdtTestUtil.runInEdtAndWait(() -> {
                     fixture.service.cancel();
-                    for (VirtualFile file : FileEditorManager.getInstance(fixture.project).getOpenFiles()) {
-                        if (Path.of(file.getPath()).startsWith(externalDirectory)) {
-                            FileEditorManager.getInstance(fixture.project).closeFile(file);
-                        }
-                    }
+                    // Resolve only cached VFS identity; this also handles an
+                    // expanded Windows temp path without introducing a refresh.
+                    VirtualFile externalFile = LocalFileSystem.getInstance().findFileByNioFile(externalLeaf);
+                    if (externalFile != null) FileEditorManager.getInstance(fixture.project).closeFile(externalFile);
                 });
                 if (Files.exists(externalDirectory)) {
                     try (var paths = Files.walk(externalDirectory)) {
@@ -950,6 +955,81 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
         passed("rejectsMissingManifestWithoutActiveFileFallback");
     }
 
+    private record SelectedPoint(Path path, int caret) {}
+
+    private static SelectedPoint selectedPoint(Project project) {
+        return EdtTestUtil.runInEdtAndGet(() -> {
+            var editor = FileEditorManager.getInstance(project).getSelectedTextEditor();
+            if (editor == null) return new SelectedPoint(null, -1);
+            VirtualFile file = FileDocumentManager.getInstance().getFile(editor.getDocument());
+            return new SelectedPoint(file == null ? null : Path.of(file.getPath()), editor.getCaretModel().getOffset());
+        });
+    }
+
+    private static boolean samePhysicalFile(Path first, Path second) {
+        assertFalse(ApplicationManager.getApplication().isDispatchThread(), "physical file identity checks must remain off EDT");
+        if (first == null || second == null) return false;
+        try { return Files.isSameFile(first, second); }
+        catch (java.io.IOException ignored) { return false; }
+    }
+
+    private record ColdVfsState(Path path, boolean valid, boolean documentCached,
+                                boolean documentUnsaved, boolean documentMatches,
+                                boolean selectedVfsIdentity, boolean selectedDocumentIdentity) {}
+
+    /** Failure-only, fixed fields: never emit paths, source text, or raw exception/status messages. */
+    private static String coldNavigationState(Fixture fixture, VasProjectBuildService.Outcome completed,
+                                             VasProjectBuildService.Item item, Path expected, long initialRevision) {
+        assertFalse(ApplicationManager.getApplication().isDispatchThread());
+        var latest = fixture.service.latest();
+        SelectedPoint selected = selectedPoint(fixture.project);
+        ColdVfsState cached = EdtTestUtil.runInEdtAndGet(() -> {
+            VirtualFile file = LocalFileSystem.getInstance().findFileByNioFile(expected);
+            if (file == null) return new ColdVfsState(null, false, false, false, false, false, false);
+            var manager = FileDocumentManager.getInstance();
+            Document document = manager.getCachedDocument(file);
+            var editor = FileEditorManager.getInstance(fixture.project).getSelectedTextEditor();
+            return new ColdVfsState(Path.of(file.getPath()), file.isValid(), document != null,
+                document != null && manager.isDocumentUnsaved(document),
+                document != null && document.getText().equals(item.location().snapshot().editorText()),
+                editor != null && manager.getFile(editor.getDocument()) == file,
+                editor != null && document != null && editor.getDocument() == document);
+        });
+        String snapshot;
+        try { snapshot = item.location().snapshot().unchanged(true) ? "unchanged" : "changed"; }
+        catch (java.io.IOException | RuntimeException ignored) { snapshot = "check-error"; }
+        String selectedIdentity = selected.path() == null ? "none"
+            : samePhysicalFile(selected.path(), expected) ? "external"
+            : samePhysicalFile(selected.path(), fixture.decoy) ? "decoy" : "other";
+        return "cold-navigation{status=" + outcomeCategory(latest)
+            + ",expectedGeneration=" + completed.generation()
+            + ",latestGeneration=" + (latest == null ? -1 : latest.generation())
+            + ",sameOutcome=" + (latest == completed)
+            + ",initialRevision=" + initialRevision + ",currentRevision=" + fixture.service.inputRevision(completed)
+            + ",snapshot=" + snapshot + ",vfsCached=" + (cached.path() != null) + ",vfsValid=" + cached.valid()
+            + ",lexicalIdentity=" + expected.equals(cached.path()) + ",physicalIdentity=" + samePhysicalFile(cached.path(), expected)
+            + ",documentCached=" + cached.documentCached() + ",documentUnsaved=" + cached.documentUnsaved()
+            + ",documentMatches=" + cached.documentMatches() + ",selected=" + selectedIdentity
+            + ",selectedVfsIdentity=" + cached.selectedVfsIdentity()
+            + ",selectedDocumentIdentity=" + cached.selectedDocumentIdentity()
+            + ",caret=" + selected.caret() + ",expectedCaret=" + item.location().offset()
+            + ",publications=" + fixture.outcomes.size() + ",launches=" + fixture.launches.size() + "}";
+    }
+
+    private static String outcomeCategory(VasProjectBuildService.Outcome outcome) {
+        if (outcome == null) return "missing";
+        if (outcome.success()) return "success";
+        String status = outcome.status().toLowerCase(java.util.Locale.ROOT);
+        if (status.startsWith("build failed")) return "build-failed";
+        if (status.contains("trust")) return "trust";
+        if (status.contains("save")) return "save-required";
+        if (status.contains("input") || status.contains("files changed")) return "input-changed";
+        if (status.contains("compiler")) return "compiler";
+        if (status.contains("cancel")) return "cancelled";
+        if (status.equals("reading project…") || status.equals("building…")) return "progress";
+        return "other-failure";
+    }
+
     @FunctionalInterface
     private interface NativeCase {
         void run() throws Exception;
@@ -1038,6 +1118,10 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
     }
 
     private static void await(BooleanSupplier condition, String message) throws InterruptedException {
+        await(condition, () -> message);
+    }
+
+    private static void await(BooleanSupplier condition, Supplier<String> message) throws InterruptedException {
         assertFalse(ApplicationManager.getApplication().isDispatchThread());
         long deadline = System.nanoTime() + WAIT.toNanos();
         while (!condition.getAsBoolean()) {

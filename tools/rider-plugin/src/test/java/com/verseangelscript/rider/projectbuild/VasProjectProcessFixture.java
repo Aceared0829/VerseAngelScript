@@ -14,9 +14,19 @@ public final class VasProjectProcessFixture {
         switch (args[0]) {
             case "classpath" -> out(System.getProperty("java.class.path"));
             case "arguments" -> {
+                if (args.length != 2) {
+                    throw new IllegalArgumentException("Expected one intact argument, received " + (args.length - 1));
+                }
                 out(args[1] + "\n");
                 System.err.write("diagnostic 漢字😀\n".getBytes(StandardCharsets.UTF_8));
                 System.exit(7);
+            }
+            case "argument-list" -> {
+                out((args.length - 1) + "\n");
+                for (int index = 1; index < args.length; index++) {
+                    out(java.util.Base64.getEncoder().encodeToString(args[index].getBytes(StandardCharsets.UTF_8))
+                        + "\n");
+                }
             }
             case "environment" -> out(Path.of(".").toRealPath() + "\n" + System.in.read() + "\n");
             case "document" -> out("{\"plan\":true}");

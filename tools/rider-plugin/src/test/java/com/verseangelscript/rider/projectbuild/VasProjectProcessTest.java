@@ -131,6 +131,87 @@ public final class VasProjectProcessTest {
     }
 
     @Test
+    public void encodesWindowsCrtArgumentsForLegacyProcessImpl() throws Exception {
+        assertEquals("\"\"", VasProjectProcess.encodeWindowsArgument("", true));
+        assertEquals("\"plain\"", VasProjectProcess.encodeWindowsArgument("plain", true));
+        assertEquals("\"two words\"", VasProjectProcess.encodeWindowsArgument("two words", true));
+        assertEquals("\"\\\"\"", VasProjectProcess.encodeWindowsArgument("\"", true));
+        assertEquals("\"\\\"quoted\\\"\"", VasProjectProcess.encodeWindowsArgument("\"quoted\"", true));
+        assertEquals("\"漢字😀 ; & | < > ^ %PATH%\"",
+            VasProjectProcess.encodeWindowsArgument("漢字😀 ; & | < > ^ %PATH%", true));
+        for (int slashes = 0; slashes <= 6; slashes++) {
+            assertEquals("\"before" + "\\".repeat(2 * slashes + 1) + "\" after\"",
+                VasProjectProcess.encodeWindowsArgument("before" + "\\".repeat(slashes) + "\" after", true));
+            assertEquals("\"path with spaces" + "\\".repeat(2 * slashes) + "\"",
+                VasProjectProcess.encodeWindowsArgument("path with spaces" + "\\".repeat(slashes), true));
+        }
+    }
+
+    @Test
+    public void leavesStrictWindowsArgumentsForTheJdkToEscape() throws Exception {
+        for (String argument : nativeArguments()) {
+            if (!hasSurroundingQuotes(argument)) {
+                assertSame(argument, VasProjectProcess.encodeWindowsArgument(argument, false));
+            }
+        }
+    }
+
+    @Test
+    public void rejectsUnrepresentableStrictWindowsArgumentsRatherThanChangingThem() throws Exception {
+        for (String argument : List.of("\"\"", "\"quoted\"", "\"with \"interior\" quotes\"")) {
+            IOException failure = expectIOException(() -> VasProjectProcess.encodeWindowsArgument(argument, false));
+            assertTrue(failure.getMessage(), failure.getMessage().contains("literal surrounding quotes"));
+        }
+    }
+
+    @Test
+    public void preservesExactArgumentCountAndBytesInBothProcessModes() throws Exception {
+        String property = "jdk.lang.Process.allowAmbiguousCommands";
+        String original = System.getProperty(property);
+        try {
+            for (boolean legacy : List.of(true, false)) {
+                // Test-only selection. Production never changes this JVM-wide property.
+                System.setProperty(property, Boolean.toString(legacy));
+                List<String> arguments = nativeArguments().stream()
+                    .filter(argument -> legacy || !hasSurroundingQuotes(argument)).toList();
+                VasProjectProcess.Result result = run("argument-list", OUTPUT_LIMIT, null, () -> {},
+                    arguments.toArray(String[]::new));
+                StringBuilder expected = new StringBuilder().append(arguments.size()).append('\n');
+                for (String argument : arguments) {
+                    expected.append(java.util.Base64.getEncoder()
+                        .encodeToString(argument.getBytes(StandardCharsets.UTF_8))).append('\n');
+                }
+                assertEquals("legacy=" + legacy + ", stderr=" + result.stderr(), 0, result.exitCode());
+                assertEquals("legacy=" + legacy, expected.toString(), utf8(result.stdout()));
+                assertEquals("", result.stderr());
+                if (isWindows() && !legacy) {
+                    // Verify the actual launch path rejects the known JDK limitation,
+                    // rather than publishing success for a changed argument.
+                    expectIOException(() -> run("argument-list", OUTPUT_LIMIT, null, () -> {}, "\"quoted\""));
+                }
+            }
+        } finally {
+            if (original == null) {
+                System.clearProperty(property);
+            } else {
+                System.setProperty(property, original);
+            }
+        }
+    }
+
+    private static List<String> nativeArguments() {
+        return List.of("", "plain", "two words", "\t", "line\nbreak", "\"", "a\"b", "a \"b c",
+            "\"quoted\"", "\"\"", "\"a\"b\"", "\\", "\\\\", "C:\\Program Files\\VAS\\",
+            "backslash\\\"quote", "two\\\\\"quote", "three\\\\\\\" quote", "a\\\"", "\"a\\",
+            "trailing\\\\", "漢字😀", "space ; $(echo injected) & | > < \" quote 漢字",
+            "; $(echo injected) & | > < ^ %PATH% !x!");
+    }
+
+    private static boolean hasSurroundingQuotes(String argument) {
+        return argument.length() >= 2 && argument.startsWith("\"") && argument.endsWith("\"");
+    }
+
+    @Test
     public void usesRequestedWorkingDirectoryAndClosesStdin() throws Exception {
         VasProjectProcess.Result result = run("environment", OUTPUT_LIMIT, null, () -> {});
         assertEquals(temporary.getRoot().toPath().toRealPath() + "\n-1\n", utf8(result.stdout()));

@@ -107,7 +107,12 @@ public final class VasProjectProcess {
         }
         List<String> command = new ArrayList<>(args.size() + 1);
         command.add(executable.toString());
-        command.addAll(args);
+        boolean windows = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("windows");
+        boolean allowAmbiguousCommands = !"false".equalsIgnoreCase(
+            System.getProperty("jdk.lang.Process.allowAmbiguousCommands", "true"));
+        for (String argument : args) {
+            command.add(windows ? encodeWindowsArgument(argument, allowAmbiguousCommands) : argument);
+        }
         ProcessBuilder builder = new ProcessBuilder(command).directory(cwd.toFile());
         builder.redirectErrorStream(false);
         guard.run();
@@ -164,6 +169,52 @@ public final class VasProjectProcess {
                 }
             }
         }
+    }
+
+    /**
+     * OpenJDK/JBR 25 ProcessImpl's default Windows LEGACY mode does not escape
+     * interior quotes. Supply a fully CRT-quoted token, which that mode preserves,
+     * so the native compiler receives the original argument rather than extra argv
+     * entries. This is native command-line encoding, never shell escaping.
+     *
+     * Strict mode already performs CRT escaping and must receive raw arguments.
+     * Its surrounding-quote convention cannot represent literal surrounding quotes;
+     * reject that case rather than silently changing the argument. Do not mutate the
+     * process-wide jdk.lang.Process.allowAmbiguousCommands property in the IDE.
+     *
+     * See OpenJDK jdk25u, src/java.base/windows/classes/java/lang/ProcessImpl.java,
+     * createCommandLine/needsEscaping; and Microsoft's C command-line parsing rules.
+     */
+    static String encodeWindowsArgument(String argument, boolean allowAmbiguousCommands) throws IOException {
+        Objects.requireNonNull(argument, "argument");
+        if (!allowAmbiguousCommands) {
+            if (argument.length() >= 2 && argument.startsWith("\"") && argument.endsWith("\"")) {
+                throw new IOException("Cannot preserve literal surrounding quotes in a native compiler argument "
+                    + "under Windows strict process mode");
+            }
+            return argument;
+        }
+        StringBuilder encoded = new StringBuilder(argument.length() + 2);
+        encoded.append('"');
+        int backslashes = 0;
+        for (int index = 0; index < argument.length(); index++) {
+            char value = argument.charAt(index);
+            if (value == '\\') {
+                backslashes++;
+                continue;
+            }
+            int escapedSlashes = value == '"' ? backslashes * 2 + 1 : backslashes;
+            for (int slash = 0; slash < escapedSlashes; slash++) {
+                encoded.append('\\');
+            }
+            encoded.append(value);
+            backslashes = 0;
+        }
+        // A trailing backslash must not escape the closing delimiter.
+        for (int slash = 0; slash < backslashes * 2; slash++) {
+            encoded.append('\\');
+        }
+        return encoded.append('"').toString();
     }
 
     @FunctionalInterface
