@@ -4,11 +4,12 @@ const { sourcePosition } = require('./diagnostics');
 const { cancellation, readSourceText } = require('./project');
 const { ProjectBuildProcess } = require('./projectReport');
 
-function createProjectTerminal({ vscode, prepare, diagnostics, dependencies, done,
+function createProjectTerminal({ vscode, prepare, diagnostics, dependencies, observations, done,
   createProcess = (plan, callbacks) => new ProjectBuildProcess(plan, callbacks) }) {
   const writes = new vscode.EventEmitter(), closes = new vscode.EventEmitter(), cancel = cancellation();
-  let process, plan, token, opened = false, finished = false, completing = false;
+  let process, plan, token, publicationStamp, opened = false, finished = false, completing = false;
   const output = text => { if (!finished && text) writes.fire(text.replace(/\r?\n/g, '\r\n')); };
+  const checkFresh = () => observations ? observations.validate(() => plan.checkFresh()) : plan.checkFresh();
 
   async function publish() {
     if (!diagnostics.current(token)) return false;
@@ -31,7 +32,9 @@ function createProjectTerminal({ vscode, prepare, diagnostics, dependencies, don
         return diagnostic;
       })]);
     }
-    await plan.checkFresh();
+    const stamp = await checkFresh();
+    if (cancel.cancelled || finished || observations && !observations.current(stamp)) return false;
+    publicationStamp = stamp;
     return diagnostics.publish(token, entries);
   }
 
@@ -49,14 +52,16 @@ function createProjectTerminal({ vscode, prepare, diagnostics, dependencies, don
     try {
       let current = token && diagnostics.current(token) && !cancel.cancelled;
       if (plan && current) {
-        try { await plan.checkFresh(); }
+        try { await checkFresh(); }
         catch (error) { current = false; diagnostics.cancel(token); output(`VAS: ${error.message}\n`); }
       }
       if (token && current && !report?.error) {
         if (!(await publish())) { current = false; output('VAS: Build diagnostics discarded because inputs changed or a newer build started.\n'); }
         if (token.truncated) output('VAS: Problems limit reached; remaining diagnostics are in the terminal.\n');
       } else if (token && diagnostics.current(token)) diagnostics.cancel(token);
-      current = current && diagnostics.current(token) && !cancel.cancelled && !finished;
+      current = current && diagnostics.current(token) && !cancel.cancelled && !finished &&
+        (!observations || observations.current(publicationStamp));
+      if (!current && token) diagnostics.cancel(token);
       // Commit complete observations only after all publication/freshness awaits.
       if (plan && report) dependencies.update(plan, report,
         Boolean(current && !report.error && report.result?.dependenciesComplete && code !== 130));
@@ -76,16 +81,19 @@ function createProjectTerminal({ vscode, prepare, diagnostics, dependencies, don
     open() {
       if (opened || finished) return;
       opened = true;
-      const revision = diagnostics.revision;
       void (async () => {
+        if (observations) await observations.settle();
+        if (cancel.cancelled || finished) return;
+        const revision = diagnostics.revision;
         plan = await prepare(cancel);
         if (cancel.cancelled || finished) return;
         if (diagnostics.revision !== revision) throw new Error('Project inputs changed during preparation. Build Project again.');
         token = diagnostics.begin(plan.key);
         dependencies.update(plan, { observed: new Map() }, false);
-        await plan.checkFresh();
+        observations?.register(plan, token);
+        const stamp = await checkFresh();
         if (cancel.cancelled || finished) return;
-        if (!diagnostics.current(token)) throw new Error('Project inputs changed before compiler launch. Build Project again.');
+        if (!diagnostics.current(token) || observations && !observations.current(stamp)) throw new Error('Project inputs changed before compiler launch. Build Project again.');
         process = createProcess(plan, { output, diagnostic: record => diagnostics.add(token, record),
           observe: item => dependencies.observe(plan, item), complete });
         process.start();

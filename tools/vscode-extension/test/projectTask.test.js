@@ -65,6 +65,97 @@ test('in-flight edit, newer completion, trust/freshness failure and malformed re
   }
 });
 
+test('project task awaits delivered input classification before native launch and final publication', async () => {
+  for (const phase of ['launch', 'publish']) {
+    const state = store();
+    let calls = 0, release;
+    state.observations = { register() {}, current() { return true; }, async validate(check) { await check(); await this.settle(); }, async settle() {
+      if (++calls === (phase === 'launch' ? 2 : 4)) await new Promise(resolve => { release = resolve; });
+    } };
+    const fixture = build(state, { ...plan });
+    await tick();
+    let complete;
+    if (phase === 'publish') {
+      assert.equal(fixture.started, 1);
+      fixture.callbacks.diagnostic({ file: '/missing/main.vas', row: 0, column: 0, severity: 'WARN', message: 'pending warning' });
+      complete = fixture.callbacks.complete(0, fixture.report);
+      await tick();
+    } else assert.equal(fixture.started, 0);
+    assert.equal(typeof release, 'function');
+    assert.ok(state.collections.every(collection => collection.entries.length === 0));
+    state.diagnostics.invalidate();
+    release();
+    if (complete) await complete;
+    assert.equal(await fixture.closed, 1);
+    assert.ok(state.collections.every(collection => collection.entries.length === 0));
+  }
+});
+
+test('a silent known-input change during final event settlement cannot publish successful diagnostics', async () => {
+  const { ProjectInputObservations } = require('../src/projectObservations');
+  const { captureVersions, readVersion } = require('../src/projectVersions');
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vas-publication-barrier-'));
+  const source = path.join(root, 'entry.vas'), included = path.join(root, 'known.vas');
+  const state = store();
+  state.observations = new ProjectInputObservations(state.diagnostics, state.dependencies);
+  try {
+    await fs.writeFile(source, 'void main() {}\n'); await fs.writeFile(included, 'int known() { return 1; }\n');
+    const versions = await captureVersions([source, included]);
+    let checks = 0, release;
+    state.observations.read = async (...args) => {
+      await new Promise(resolve => { release = resolve; });
+      return readVersion(...args);
+    };
+    const invocation = { ...plan, source, inputVersions: versions, async checkFresh() {
+      await versions.checkAll();
+      if (++checks === 3) state.observations.changed(source);
+    } };
+    const fixture = build(state, invocation);
+    while (!fixture.callbacks) await tick();
+    fixture.callbacks.diagnostic({ file: source, row: 0, column: 0, severity: 'WARN', message: 'must not publish' });
+    const completion = fixture.callbacks.complete(0, fixture.report);
+    while (!release) await tick();
+    await fs.appendFile(included, '// no watcher event for this changed known input\n');
+    release(); await completion;
+    assert.equal(await fixture.closed, 1);
+    assert.ok(state.collections.every(collection => collection.entries.length === 0));
+  } finally { state.observations.dispose(); await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('delivered microtask events cannot enter between freshness, publication and successful task close', async () => {
+  const { ProjectInputObservations } = require('../src/projectObservations');
+  const { captureVersions, documentDigest } = require('../src/projectVersions');
+  for (const phase of ['launch', 'publication', 'close']) {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vas-microtask-barrier-'));
+    const source = path.join(root, 'entry.vas'), state = store();
+    state.observations = new ProjectInputObservations(state.diagnostics, state.dependencies);
+    try {
+      await fs.writeFile(source, 'void main() {}\n');
+      const versions = await captureVersions([source]);
+      const changed = () => state.observations.changed(source, { documentDigest: documentDigest('different clean document text') });
+      let checks = 0;
+      const invocation = { ...plan, source, inputVersions: versions, async checkFresh() {
+        await versions.checkAll();
+        if (++checks === (phase === 'launch' ? 1 : 3) && phase !== 'close') queueMicrotask(() => queueMicrotask(changed));
+      } };
+      const fixture = build(state, invocation);
+      if (phase !== 'launch') {
+        while (!fixture.callbacks) await tick();
+        if (phase === 'close') {
+          const collection = state.collections[0], set = collection.set;
+          collection.set = function(entries) { set.call(this, entries); queueMicrotask(changed); };
+        }
+        fixture.callbacks.diagnostic({ file: source, row: 0, column: 0, severity: 'WARN', message: 'must not remain successful' });
+        await fixture.callbacks.complete(0, fixture.report);
+      }
+      assert.equal(await fixture.closed, 1, phase);
+      assert.ok(state.collections.every(collection => collection.entries.length === 0), phase);
+      if (phase === 'launch') assert.equal(fixture.started, 0);
+      await state.observations.settle();
+    } finally { state.observations.dispose(); await fs.rm(root, { recursive: true, force: true }); }
+  }
+});
+
 test('UTF-8/BOM diagnostics publish exact UTF-16 and unit identity isolates same-entry collections', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vas-terminal-'));
   const source = path.join(root, 'shared 文😀.vas'), text = '\ufeff/* 文😀 */ int Broken() { return; }\r\n';

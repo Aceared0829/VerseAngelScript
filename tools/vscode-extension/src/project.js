@@ -7,6 +7,7 @@ const { createHash } = require('node:crypto');
 const { TextDecoder } = require('node:util');
 const { spawn } = require('node:child_process');
 const { resolvePath, contains, sameFileName } = require('./toolchain');
+const { captureVersions } = require('./projectVersions');
 
 function compilerPath(configuration, paths = path) {
   // machine-scoped values must not gain authority from workspace settings.
@@ -242,12 +243,17 @@ async function projectPlan(request, selected, { vscode, folder, cancel, dependen
   plan.observeInput = file => observedInputs.add(file);
   const inputs = () => [...new Set([plan.config, plan.source,
     ...(dependencies?.inputFiles(plan.key) || []), ...observedInputs])];
+  // Only known inputs can acquire a pre-compile baseline. A section first
+  // learned from the compiler has already been read; never bless its contents
+  // by adding a post-hoc hash to this invocation's immutable snapshot.
+  plan.inputVersions = await captureVersions([plan.project, ...inputs()], cancel);
   plan.checkFresh = async () => {
     await requireProjectReady(vscode, folder, request.project, inputs(), cancel);
     if (compilerPath(vscode.workspace.getConfiguration('vas', folder.uri)) !== plan.executable ||
       await fingerprint(request.project, 1024 * 1024, cancel) !== snapshot.manifestFingerprint || await fingerprint(plan.config, 16 * 1024 * 1024, cancel) !== configFingerprint) {
       throw new Error('VAS manifest, host configuration or compiler setting changed. Build Project again.');
     }
+    await plan.inputVersions.checkAll(cancel);
     await requireProjectReady(vscode, folder, request.project, inputs(), cancel);
   };
   await plan.checkFresh();

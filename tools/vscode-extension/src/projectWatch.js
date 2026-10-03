@@ -3,16 +3,20 @@
 const path = require('node:path');
 const { contains } = require('./toolchain');
 
-function createProjectWatchers(vscode, dependencies, invalidate) {
+function createProjectWatchers(vscode, dependencies, invalidate, observations) {
   let disposed = false;
   const subscriptions = [], external = new Map();
-  const changed = uri => {
+  const changed = (uri, kind) => {
     if (!disposed && uri.scheme === 'file' && !dependencies.outputOnly(uri.fsPath) &&
-      (uri.fsPath.toLowerCase().endsWith('.vas') || path.basename(uri.fsPath) === 'vas-project.json' || dependencies.relevant(uri.fsPath))) invalidate();
+      (uri.fsPath.toLowerCase().endsWith('.vas') || path.basename(uri.fsPath) === 'vas-project.json' || dependencies.relevant(uri.fsPath))) {
+      if (observations) observations.changed(uri.fsPath, { kind });
+      else invalidate();
+    }
   };
   function watch(pattern) {
     const watcher = vscode.workspace.createFileSystemWatcher(pattern);
-    subscriptions.push(watcher, watcher.onDidCreate(changed), watcher.onDidChange(changed), watcher.onDidDelete(changed));
+    subscriptions.push(watcher, watcher.onDidCreate(uri => changed(uri, 'create')),
+      watcher.onDidChange(uri => changed(uri, 'change')), watcher.onDidDelete(uri => changed(uri, 'delete')));
   }
   watch('**/*');
   dependencies.onFiles = files => {

@@ -9,6 +9,8 @@ const { createBuildTerminal } = require('./buildTask');
 const { createProjectTerminal } = require('./projectTask');
 const { ProjectDependencies } = require('./projectReport');
 const { createProjectWatchers } = require('./projectWatch');
+const { ProjectInputObservations } = require('./projectObservations');
+const { documentDigest } = require('./projectVersions');
 const { compilerPath, projectRequest, snapshotDescriptor, projectPlan } = require('./project');
 
 async function requireFile(file, label) {
@@ -115,7 +117,7 @@ function createProjectTask(definition, folder, name, builds, selected) {
   const executable = compilerPath(vscode.workspace.getConfiguration('vas', folder.uri));
   const request = projectRequest(definition, folder, executable);
   const execution = new vscode.CustomExecution(async () => {
-    const terminal = createProjectTerminal({ vscode, diagnostics: builds.projectDiagnostics, dependencies: builds.dependencies,
+    const terminal = createProjectTerminal({ vscode, diagnostics: builds.projectDiagnostics, dependencies: builds.dependencies, observations: builds.observations,
       prepare: cancel => projectPlan(request, selected, { vscode, folder, cancel, dependencies: builds.dependencies }),
       done: () => builds.active.delete(terminal) });
     builds.active.add(terminal);
@@ -137,6 +139,7 @@ async function buildProject(builds) {
       { title: 'VAS: Select Project Workspace', placeHolder: 'Choose the workspace root containing vas-project.json' });
     if (!picked) return undefined;
     const folder = picked.folder, project = path.join(folder.uri.fsPath, 'vas-project.json');
+    await builds.observations.settle();
     const revision = builds.projectDiagnostics.revision;
     const executable = compilerPath(vscode.workspace.getConfiguration('vas', folder.uri));
     const selected = await snapshotDescriptor({ vscode, folder, project, executable });
@@ -160,19 +163,30 @@ function activate(context) {
     active: new Set(),
     dependencies: new ProjectDependencies()
   };
+  builds.observations = new ProjectInputObservations(builds.projectDiagnostics, builds.dependencies);
   context.subscriptions.push(
     { dispose() {
       for (const terminal of builds.active) terminal.dispose();
       builds.active.clear();
+      builds.observations.dispose();
       builds.diagnostics.dispose();
       builds.projectDiagnostics.dispose();
     } },
-    // Observed edits conservatively invalidate all build results, including
-    // pending reads, even if the user saves again. No automatic rebuild occurs.
+    // Dirty edits invalidate immediately. Clean reloads can preserve Project
+    // diagnostics only when text and disk match that generation's baseline.
+    // Current keeps its existing invalidation behavior. No automatic rebuild.
     vscode.workspace.onDidChangeTextDocument(event => {
       if (event.document.uri.scheme === 'file' && event.contentChanges.length) {
         builds.diagnostics.invalidate();
-        builds.projectDiagnostics.invalidate();
+        if (event.document.isDirty !== false) builds.observations.invalidate();
+        else {
+          // A saved hardlink can reload another clean editor after compilation.
+          // Its actual text and disk identity must both match a pre-launch
+          // baseline; isDirty=false by itself is never sufficient evidence.
+          const digest = documentDigest(event.document.getText());
+          if (digest === undefined) builds.observations.invalidate();
+          else builds.observations.changed(event.document.uri.fsPath, { documentDigest: digest });
+        }
       }
     }),
     vscode.commands.registerCommand('vas.buildProject', () => buildProject(builds)),
@@ -187,10 +201,10 @@ function activate(context) {
     })
   );
   if (vscode.workspace.onDidChangeConfiguration) context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
-    if (event.affectsConfiguration('vas')) builds.projectDiagnostics.invalidate();
+    if (event.affectsConfiguration('vas')) builds.observations.invalidate();
   }));
   if (vscode.workspace.createFileSystemWatcher) context.subscriptions.push(
-    createProjectWatchers(vscode, builds.dependencies, () => builds.projectDiagnostics.invalidate()));
+    createProjectWatchers(vscode, builds.dependencies, () => builds.observations.invalidate(), builds.observations));
 }
 
 module.exports = { activate };

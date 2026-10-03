@@ -9,7 +9,21 @@ const vscode = require('vscode');
 // wrappers never replace compiler output, exit status, tasks, or VS Code APIs.
 const childProcess = require('node:child_process');
 const processCalls = [];
-let auditSequence = 0, processAudit, fileAudit;
+let auditSequence = 0, processAudit, fileAudit, inputAudit, lastInputObservations;
+// Pass-through audit of the actual version checks. It also provides a barrier
+// so the saved-notification assertion cannot race an asynchronous decision.
+const { ProjectInputObservations } = require('../src/projectObservations');
+const originalInputChanged = ProjectInputObservations.prototype.changed;
+const originalInputRegister = ProjectInputObservations.prototype.register;
+ProjectInputObservations.prototype.register = function(...args) {
+  lastInputObservations = this;
+  return originalInputRegister.apply(this, args);
+};
+ProjectInputObservations.prototype.changed = function(file, options) {
+  lastInputObservations = this;
+  inputAudit?.({ order: ++auditSequence, file, kind: options?.kind || 'change', cleanDocument: options?.documentDigest !== undefined });
+  return originalInputChanged.call(this, file, options);
+};
 for (const method of ['spawn', 'execFile']) {
   const original = childProcess[method];
   childProcess[method] = function(executable, args, options, ...rest) {
@@ -359,7 +373,12 @@ async function userRerunTests(folder, fixture, inputKind = 'entry') {
     cachedTask = await projectTask(folder, alias.unit);
   }
   const entryPaths = [entry.uri.fsPath, await fs.realpath(entry.uri.fsPath)];
-  const fileEvents = [], diagnosticEvents = [];
+  const fileEvents = [], diagnosticEvents = [], inputEvents = [], textEvents = [];
+  inputAudit = event => { if (inputEvents.length < 64) inputEvents.push(event); };
+  const textListener = vscode.workspace.onDidChangeTextDocument(event => {
+    if (event.contentChanges.length && textEvents.length < 64) textEvents.push({ order: ++auditSequence,
+      path: event.document.uri.fsPath, dirty: event.document.isDirty, version: event.document.version });
+  });
   const { sameFileName } = require('../src/toolchain');
   fileAudit = (kind, file) => {
     if (fileEvents.length < 64 && entryPaths.some(input => sameFileName(input, file.fsPath))) {
@@ -398,7 +417,7 @@ async function userRerunTests(folder, fixture, inputKind = 'entry') {
       await eventually(() => rerunExecution !== undefined, 'the real Rerun Last Task to start the selected unit');
       return rerunExecution;
     }, 'user Rerun Last Task');
-    const audit = { inputKind, code, dirty: entry.isDirty, saved: rerunSaved, fileEvents, diagnosticEvents,
+    const audit = { inputKind, code, dirty: entry.isDirty, saved: rerunSaved, fileEvents, diagnosticEvents, inputEvents, textEvents,
       processes: nativeCalls(rerunStart).map(call => ({ order: call.order, args: call.args, shell: call.options?.shell, editorState: call.editorState })),
       executions: customExecutions.slice(rerunCustom) };
     console.log('VAS user-rerun evidence:', JSON.stringify(audit));
@@ -417,9 +436,13 @@ async function userRerunTests(folder, fixture, inputKind = 'entry') {
         'the observed workbench save must precede the native --project spawn');
       assert.ok(builds[0].order < customExecutions[rerunCustom].closeEvents[0].order, 'native spawn must precede successful PTY close');
       try {
-        await eventually(() => fileEvents.length > 0, 'the saved participating input notification on the extension actual watcher');
+        const savedOrder = Math.min(...rerunSaved.map(event => event.order));
+        await eventually(() => fileEvents.some(event => event.order > savedOrder), 'this rerun saved input notification on the extension actual watcher');
+        assert.ok(lastInputObservations, 'the actual task must register its production input observation barrier');
+        await bounded(lastInputObservations.settle(), 'classify the saved input notification against its pre-compile baseline');
+        audit.notificationAfterNativeClose = fileEvents.some(event => event.order > customExecutions[rerunCustom].closeEvents[0].order);
         assert.ok(vscode.languages.getDiagnostics(uri(alias.include)).some(item => item.severity === vscode.DiagnosticSeverity.Warning),
-          'save → native build → actual filesystem notification must retain current included-file diagnostics');
+          'the saved native build must retain current included-file diagnostics after its actual notification is classified');
       } catch (error) {
         console.error('VAS saved-rerun diagnostic evidence:', JSON.stringify(audit));
         throw error;
@@ -427,7 +450,7 @@ async function userRerunTests(folder, fixture, inputKind = 'entry') {
       if (inputKind === 'include-alias') assert.equal(vscode.languages.getDiagnostics(entry.uri).length, 0, 'physical alias recovery must not rebind compiler diagnostics');
       console.log('VAS saved-rerun diagnostic evidence:', JSON.stringify(audit));
     }
-  } finally { processAudit = undefined; fileAudit = undefined; diagnosticListener.dispose(); rerunListener.dispose(); rerunSaveListener.dispose(); }
+  } finally { processAudit = undefined; fileAudit = undefined; inputAudit = undefined; textListener.dispose(); diagnosticListener.dispose(); rerunListener.dispose(); rerunSaveListener.dispose(); }
   if (entry.isDirty) assert.equal(await entry.save(), true);
   console.log('PASS: real user Rerun Last Task preserves saved-input and event-order invariants');
 }

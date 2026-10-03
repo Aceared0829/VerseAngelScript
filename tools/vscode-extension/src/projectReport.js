@@ -251,9 +251,13 @@ class ProjectDependencies {
   outputOnly(file) {
     return !this.relevant(file) && [...this.entries.values()].some(entry => entry.outputs.some(output => sameFileName(output, file)));
   }
+  affects(key, file) {
+    const entry = this.entries.get(key);
+    return Boolean(entry && (entry.inputs.some(input => sameFileName(input, file)) || [...entry.aliases].some(alias => sameFileName(alias, file)) ||
+      [...entry.observed.values()].some(item => item.file && sameFileName(item.file, file))));
+  }
   relevant(file) {
-    return [...this.entries.values()].some(entry => entry.inputs.some(input => sameFileName(input, file)) || [...entry.aliases].some(alias => sameFileName(alias, file)) ||
-      [...entry.observed.values()].some(item => item.file && sameFileName(item.file, file)));
+    return [...this.entries.keys()].some(key => this.affects(key, file));
   }
 }
 

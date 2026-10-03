@@ -198,3 +198,37 @@ test('clean editor state skips dependency identity probes and physical matching 
     assert.equal(probes, 1, 'cancellation must stop before probing the include graph');
   } finally { fs.stat = stat; await fs.rm(root, { recursive: true, force: true }); }
 });
+
+test('real native success cannot bless changed pre-compile entry/include bytes without a watcher event', { skip: !process.env.VAS_TEST_COMPILER }, async () => {
+  const { ProjectDependencies } = require('../src/projectReport');
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vas-native-version-'));
+  const context = host({ uri: { scheme: 'file', fsPath: root } });
+  context.dependencies = new ProjectDependencies();
+  const source = path.join(root, 'main.vas'), included = path.join(root, 'shared.vas');
+  try {
+    await fs.writeFile(path.join(root, 'vas-project.json'), JSON.stringify({ schemaVersion: 1, compilationUnits: [
+      { id: 'main', entry: 'main.vas', hostApi: { config: 'api.txt' }, output: 'out/main.vasbc' }
+    ] }));
+    await fs.writeFile(path.join(root, 'api.txt'), '');
+    await fs.writeFile(source, '#include "shared.vas"\nvoid main() {}\n');
+    await fs.writeFile(included, 'int Shared() { int value; return value; }\n');
+    const request = projectRequest({ project: 'vas-project.json', unit: 'main' }, context.folder, process.env.VAS_TEST_COMPILER);
+    const initial = await projectPlan(request, undefined, context), first = await run(initial);
+    assert.equal(first.code, 0, first.output.join(''));
+    assert.equal(initial.inputVersions.match(included), undefined, 'first-seen compiler sections must not acquire post-hoc baselines');
+    context.dependencies.update(initial, first.report, true);
+    for (const input of [source, included]) {
+      const plan = await projectPlan(request, undefined, context);
+      assert.ok(plan.inputVersions.match(input), 'previously observed include must be snapshotted before this native invocation');
+      await fs.appendFile(input, '// modification after pre-compile capture\n');
+      const result = await run(plan);
+      assert.equal(result.code, 0, result.output.join(''));
+      await assert.rejects(plan.checkFresh(), /input changed/, 'exit 0 cannot retroactively update the baseline');
+    }
+    const plan = await projectPlan(request, undefined, context), result = await run(plan);
+    assert.equal(result.code, 0);
+    await plan.checkFresh();
+    await fs.appendFile(included, '// changed after native close but before publication\n');
+    await assert.rejects(plan.checkFresh(), /input changed/);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
