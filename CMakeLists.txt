@@ -111,8 +111,11 @@ if(BUILD_TESTING)
 	target_link_libraries(vas_source_digest_test PRIVATE angelscript)
 	vas_enable_cxx23(vas_source_digest_test)
 	add_test(NAME vas_source_digest
-		COMMAND vas_source_digest_test "${CMAKE_CURRENT_BINARY_DIR}/source-digest-test.vas")
-	set_tests_properties(vas_source_digest PROPERTIES TIMEOUT 60)
+		COMMAND vas_source_digest_test source-digest-test.vas)
+	# Keep test argv ASCII even when a Windows build directory contains Unicode;
+	# the production loader resolves it using the native working directory.
+	set_tests_properties(vas_source_digest PROPERTIES TIMEOUT 60
+		WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 
 	if(WIN32)
 		add_executable(vas_windows_arguments_test tests/vasbuild/test_windows_arguments.cpp)
