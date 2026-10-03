@@ -255,6 +255,7 @@ public final class VasProjectBuildService implements Disposable {
 
     private void mergeDependencies(Session session, VasProjectProtocol.Report report, boolean complete) {
         if (session.unit == null) return;
+        filesystemWork();
         String key = key(session.manifest.toString(), session.unit.id());
         dependencies.compute(key, (ignored, previous) -> {
             Set<Path> paths = new HashSet<>(complete && active(session) ? Set.of() : previous == null ? Set.of() : previous);
@@ -262,7 +263,10 @@ public final class VasProjectBuildService implements Disposable {
             paths.add(Path.of(session.unit.config()));
             paths.add(Path.of(session.unit.entry()));
             paths.addAll(session.observed);
-            for (Path path : List.copyOf(paths)) try { paths.add(path.toRealPath()); } catch (IOException ignoredException) { }
+            // Watch aliases do not replace protocol identities or input snapshots.
+            // Missing candidates retain the canonical ancestor plus missing suffix,
+            // including after failed/partial traversals.
+            for (Path path : List.copyOf(paths)) try { paths.add(VasProjectInputs.watchAlias(path)); } catch (IOException ignoredException) { }
             return Set.copyOf(paths);
         });
     }

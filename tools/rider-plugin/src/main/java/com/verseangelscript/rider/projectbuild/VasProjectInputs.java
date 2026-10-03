@@ -8,16 +8,44 @@ import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayDeque;
 import java.util.Arrays;
 
 /** Saved-file observations, not an atomic filesystem snapshot. */
 public final class VasProjectInputs {
     private static final int LIMIT = 16 * 1024 * 1024;
     private VasProjectInputs() {}
+
+    @FunctionalInterface interface CanonicalPath { Path resolve(Path path) throws IOException; }
+
+    /**
+     * Event association only: a missing include still has a canonical parent.
+     * Keep its missing suffix so an unrelated sibling creation does not match.
+     * This performs filesystem work; callers must run outside the EDT/read lock.
+     */
+    static Path watchAlias(Path path) throws IOException { return watchAlias(path, Path::toRealPath); }
+
+    static Path watchAlias(Path path, CanonicalPath canonical) throws IOException {
+        Path ancestor = path.toAbsolutePath().normalize();
+        var missing = new ArrayDeque<Path>();
+        while (true) {
+            try {
+                Path alias = canonical.resolve(ancestor);
+                for (Path component : missing) alias = alias.resolve(component);
+                return alias;
+            } catch (NoSuchFileException exception) {
+                // Never reinterpret denied access or other I/O failures as absence.
+                if (ancestor.getParent() == null) throw exception;
+                missing.addFirst(ancestor.getFileName());
+                ancestor = ancestor.getParent();
+            }
+        }
+    }
 
     /** An escaped display path is not a filesystem identity or a verified input. */
     public static Path resolveObservedPath(String cwd, VasProjectProtocol.Identity identity) throws IOException {

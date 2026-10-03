@@ -47,6 +47,7 @@ import org.junit.jupiter.api.Timeout;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.FileTime;
@@ -463,6 +464,109 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
             assertTrue(incomplete.contains(missing), "missing include candidates must remain watched for later creation");
             assertTrue(fixture.service.dependencies(fixture.manifest.toString(), "other-host").isEmpty());
             assertArrayEquals(successfulOutput, Files.readAllBytes(fixture.goodOutput));
+
+            Path externalRoot = Files.createTempDirectory("vas-missing-alias-").toRealPath();
+            Path realParent = externalRoot.resolve("real-parent");
+            Path aliasParent = externalRoot.resolve("alias-parent");
+            Path realMissing = realParent.resolve("not-created.vas");
+            Path aliasMissing = aliasParent.resolve("not-created.vas");
+            try {
+                Files.createDirectory(realParent);
+                createDirectoryAlias(externalRoot, aliasParent, realParent);
+                assertTrue(Files.isSameFile(aliasParent, realParent));
+                assertNotEquals(aliasMissing, realMissing,
+                    "the regression requires genuinely different lexical include and VFS event paths");
+                assertEquals(realParent, aliasParent.toRealPath());
+                assertFalse(Files.exists(aliasMissing));
+                // Refresh only the existing canonical directory. Neither spelling
+                // of the missing leaf is refreshed before native traversal.
+                VirtualFile realDirectory = EdtTestUtil.runInEdtAndGet(() ->
+                    LocalFileSystem.getInstance().refreshAndFindFileByNioFile(realParent));
+                assertNotNull(realDirectory);
+                assertEquals(realParent, Path.of(realDirectory.getPath()));
+                EdtTestUtil.runInEdtAndWait(() -> {
+                    assertNull(LocalFileSystem.getInstance().findFileByNioFile(aliasMissing));
+                    assertNull(LocalFileSystem.getInstance().findFileByNioFile(realMissing));
+                });
+                fixture.writePath(fixture.entry, "#include \"" + aliasMissing.toString().replace('\\', '/')
+                    + "\"\n#include \"known-first.vas\"\nvoid main() { included(); }\n");
+                var aliasFailed = fixture.build();
+                assertFalse(aliasFailed.success());
+                assertTrue(aliasFailed.status().contains("load"), aliasFailed.status());
+                assertFalse(aliasFailed.items().isEmpty(), "the failed native load must publish diagnostics to invalidate");
+                var aliasIncomplete = fixture.service.dependencies(fixture.manifest.toString(), "good");
+                assertTrue(aliasIncomplete.containsAll(incomplete), "a second partial traversal must retain prior observations");
+                assertTrue(aliasIncomplete.contains(aliasMissing), "retain the compiler's original missing include identity");
+                assertTrue(aliasIncomplete.contains(realMissing), "watch the canonical missing candidate without requiring it to exist");
+                EdtTestUtil.runInEdtAndWait(() -> {
+                    assertNull(LocalFileSystem.getInstance().findFileByNioFile(aliasMissing));
+                    assertNull(LocalFileSystem.getInstance().findFileByNioFile(realMissing));
+                });
+
+                int launchesBeforeSibling = fixture.launches.size();
+                int selectionsBeforeSibling = fixture.selections.get();
+                int publicationsBeforeSibling = fixture.outcomes.size();
+                Path sibling = realParent.resolve("unrelated.vas");
+                assertFalse(Files.exists(sibling));
+                assertNull(EdtTestUtil.runInEdtAndGet(() -> LocalFileSystem.getInstance().findFileByNioFile(sibling)));
+                fixture.writePath(sibling, "void unrelatedExternalSibling() {}\n");
+                assertNotNull(EdtTestUtil.runInEdtAndGet(() -> LocalFileSystem.getInstance().findFileByNioFile(sibling)),
+                    "the unrelated creation must actually reach VFS");
+                quietEdt();
+                assertSame(aliasFailed, fixture.service.latest(), "watching a missing candidate must not watch every sibling");
+                assertEquals(publicationsBeforeSibling, fixture.outcomes.size());
+                assertEquals(launchesBeforeSibling, fixture.launches.size());
+                assertEquals(selectionsBeforeSibling, fixture.selections.get());
+
+                // Refresh-created events bypass the broad .vas mutation rule.
+                // An explicit VirtualFile.createChildData would falsely pass the
+                // old code even when the canonical missing candidate was unwatched.
+                assertInvalidatesWithoutExecution(fixture, aliasFailed,
+                    () -> fixture.writePath(realMissing, "void externalIncluded() {}\n"),
+                    "creation through the real path must clear old missing-include diagnostics");
+                assertTrue(Files.isSameFile(aliasMissing, realMissing));
+                assertArrayEquals(successfulOutput, Files.readAllBytes(fixture.goodOutput));
+                Files.delete(realMissing);
+                fixture.refresh(realMissing);
+                assertFalse(Files.exists(aliasMissing));
+
+                var beforeRename = fixture.build();
+                assertFalse(beforeRename.success());
+                assertTrue(beforeRename.status().contains("load"), beforeRename.status());
+                assertFalse(beforeRename.items().isEmpty());
+                assertTrue(fixture.service.dependencies(fixture.manifest.toString(), "good").containsAll(aliasIncomplete));
+                assertInvalidatesWithoutExecution(fixture, beforeRename,
+                    () -> EdtTestUtil.runInEdtAndWait(() -> WriteAction.run(() -> realDirectory.rename(fixture, "renamed-parent"))),
+                    "renaming the canonical ancestor of a missing alias must invalidate retained partial diagnostics");
+                assertFalse(Files.exists(realParent));
+                assertTrue(Files.exists(externalRoot.resolve("renamed-parent")));
+                EdtTestUtil.runInEdtAndWait(() -> WriteAction.run(() -> realDirectory.rename(fixture, "real-parent")));
+                assertTrue(Files.isSameFile(aliasParent, realParent));
+
+                var beforeDelete = fixture.build();
+                assertFalse(beforeDelete.success());
+                assertTrue(beforeDelete.status().contains("load"), beforeDelete.status());
+                assertFalse(beforeDelete.items().isEmpty());
+                assertTrue(fixture.service.dependencies(fixture.manifest.toString(), "good").containsAll(aliasIncomplete));
+                assertInvalidatesWithoutExecution(fixture, beforeDelete,
+                    () -> EdtTestUtil.runInEdtAndWait(() -> WriteAction.run(() -> realDirectory.delete(fixture))),
+                    "deleting the canonical ancestor of a missing alias must invalidate retained partial diagnostics");
+                assertFalse(realDirectory.isValid());
+                assertFalse(Files.exists(realParent));
+                assertArrayEquals(successfulOutput, Files.readAllBytes(fixture.goodOutput));
+                assertTrue(fixture.service.dependencies(fixture.manifest.toString(), "other-host").isEmpty());
+            } finally {
+                EdtTestUtil.runInEdtAndWait(fixture.service::cancel);
+                // Remove the junction/symlink itself before walking the temporary
+                // root, including when its target was renamed or deleted.
+                Files.deleteIfExists(aliasParent);
+                assertFalse(Files.exists(aliasParent, LinkOption.NOFOLLOW_LINKS));
+                try (var paths = Files.walk(externalRoot)) {
+                    for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
+                }
+                fixture.refresh(externalRoot);
+                assertFalse(Files.exists(externalRoot));
+            }
         }
         passed("retainsDependenciesAfterPartialTraversal");
     }
@@ -1137,6 +1241,55 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
         // native compiler is delayed or replaced to manufacture race evidence.
         Thread.sleep(200);
         EdtTestUtil.runInEdtAndWait(() -> { });
+    }
+
+    private static void createDirectoryAlias(Path root, Path alias, Path target) throws Exception {
+        assertFalse(ApplicationManager.getApplication().isDispatchThread());
+        if (System.getProperty("os.name").startsWith("Windows")) {
+            // mklink /J is the supported Windows directory-junction operation.
+            // Keep the entire command constant; paths are supplied only as cwd.
+            // This avoids symlink privilege requirements and shell path escaping.
+            assertEquals(root.resolve("alias-parent"), alias);
+            assertEquals(root.resolve("real-parent"), target);
+            Process process = new ProcessBuilder("cmd.exe", "/d", "/v:off", "/c", "mklink /J alias-parent real-parent")
+                .directory(root.toFile()).redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .redirectError(ProcessBuilder.Redirect.DISCARD).start();
+            try {
+                assertTrue(process.waitFor(10, TimeUnit.SECONDS), "directory-junction setup timed out");
+                assertEquals(0, process.exitValue(), "the mandatory alias fixture must create a Windows directory junction");
+            } finally {
+                if (process.isAlive()) {
+                    process.destroyForcibly();
+                    assertTrue(process.waitFor(5, TimeUnit.SECONDS), "directory-junction setup process did not terminate");
+                }
+            }
+        } else {
+            Files.createSymbolicLink(alias, target);
+        }
+        assertTrue(Files.isDirectory(alias), "directory alias setup must succeed; this required case cannot skip");
+    }
+
+    private static void assertInvalidatesWithoutExecution(Fixture fixture, VasProjectBuildService.Outcome completed,
+                                                          NativeCase mutation, String message) throws Exception {
+        assertFalse(ApplicationManager.getApplication().isDispatchThread());
+        assertSame(completed, fixture.service.latest());
+        int launches = fixture.launches.size();
+        int selections = fixture.selections.get();
+        int publications = fixture.outcomes.size();
+        mutation.run();
+        await(() -> {
+            var latest = fixture.service.latest();
+            return latest != null && latest != completed && latest.generation() == completed.generation()
+                && !latest.success() && latest.items().isEmpty()
+                && fixture.outcomes.stream().anyMatch(shown -> shown == latest);
+        }, message);
+        quietEdt();
+        assertEquals(completed.generation(), fixture.service.latest().generation());
+        assertFalse(fixture.service.latest().success());
+        assertTrue(fixture.service.latest().items().isEmpty());
+        assertEquals(launches, fixture.launches.size(), "input events must not automatically execute project tools");
+        assertEquals(selections, fixture.selections.get());
+        assertEquals(publications + 1, fixture.outcomes.size(), "before/after events must publish one invalidation");
     }
 
     private static final class Fixture implements AutoCloseable {

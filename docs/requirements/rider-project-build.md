@@ -26,6 +26,11 @@ indexing, editing, or saving settings must not invoke project tools.
   verified Java path; never silently omit that source from saved-input validation
 - Keep dependency observations scoped by manifest + unit; incomplete discovery
   retains previous observations and never becomes an empty authoritative graph
+- Missing include candidates retain event-only canonical watch aliases, computed
+  off the EDT from the nearest existing ancestor plus the unchanged missing
+  suffix. Creation or ancestor changes through that alias invalidate stale results;
+  unrelated creations must neither invalidate them nor launch a tool. Protocol
+  section identities and saved-input snapshots keep their original paths
 
 ## Acceptance
 
@@ -41,3 +46,6 @@ ran or wrote bytecode, and prove that an unrelated dirty `.txt` document does no
 block the clean-input control. CI must fail when required native cases are
 missing, skipped or fail. Linux JVM/compiler checks do not count
 as a native Rider host run; disclose unavailable verification explicitly.
+The partial-traversal case also exercises a missing external include through a
+directory alias: real-path refresh creation, unrelated creation, and canonical
+ancestor rename/delete, retaining earlier dependencies across failed builds.

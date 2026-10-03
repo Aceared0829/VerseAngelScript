@@ -99,6 +99,9 @@ UTF-16 点位，保留 tab、Unicode、BOM 和 CRLF 差异。未知/零位置、
 未保存别名会阻止编译；不会自动保存。取消、重新发起请求、项目释放、信任/工具设置变化、
 输入变化都会取消进程或拒绝旧结果。取消后不会将晚到结果显示为成功。文件改动不会自动重建。
 依赖按 manifest + unit 独立记录，失败或不完整遍历保留之前的观察；只有当前完整遍历可以替换。
+缺失 include 也会在后台根据最近存在的父目录保留规范路径别名，并附上原缺失后缀，
+仅用于文件事件关联。经目录别名创建缺失文件或变更其父目录会清除旧结果；无关文件创建不会
+自动编译。编译器 section 与输入快照仍使用原始身份。
 
 客户端限制：descriptor 16 MiB、单条报告 1 MiB、报告总计 64 MiB/100,000 条事件、
 每个输入 16 MiB、输入快照总计 64 MiB/4096 个文件。描述超时 30 秒、构建超时 120 秒；
@@ -108,7 +111,7 @@ stderr 单独读取，保留前 16 KiB、总量限制 4 MiB。保存文件构建
 
 ### 验证边界
 
-`VasProjectProtocolTest`、`VasProjectProcessTest`、`VasProjectInputsTest` 覆盖纯 JVM
+`VasProjectProtocolTest`、`VasProjectProcessTest`、`VasProjectInputsTest`、`VasProjectWatchAliasTest` 覆盖纯 JVM
 协议、真实子进程取消/限流、UTF-8 点位与快照。`VAS_TEST_COMPILER` 指向本次源码编译的
 原生编译器时，`VasProjectProtocolCompilerTest` 验证真实协议往返。
 
@@ -125,6 +128,9 @@ UTF-8，避免 `java.exe` launcher 的系统 ANSI 代码页转换丢失中文或
 不完整依赖保留、缺少 manifest 无回退。首次遍历 include 的硬链接别名已在非 `.vas` 编辑器中
 修改但未保存时，必须拒绝发布成功或诊断；此时编译器可能已经执行并产生字节码，测试不假设
 进程尚未启动。清除该别名的脏状态后，无关的脏 `.txt` 文档不应阻止构建。
+不完整依赖案例使用 Windows 目录 junction（其他平台使用目录符号链接），验证经别名引用的
+缺失外部 include 在真实路径创建、父目录重命名/删除后清除旧诊断，而无关同级文件创建
+不会清除结果或启动工具。别名建立失败会使必需案例失败；缺失文件不会预先刷新到 VFS。
 另覆盖构建完成后撤销信任/更改工具设置、
 依赖父目录重命名/删除、只清除一次过期结果，以及 `.vas` 后缀产物不会使自己的构建失效。
 宿主中的取消案例覆盖选择/排队阶段；已运行进程及其
