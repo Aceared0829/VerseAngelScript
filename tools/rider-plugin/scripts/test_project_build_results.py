@@ -87,6 +87,16 @@ class ProjectBuildEvidenceTests(unittest.TestCase):
                     suite.set("tests", str(len(suite.findall("testcase"))))
                     self.rejected(suite, "required native project build case")
 
+    def test_first_traversal_dirty_physical_alias_case_is_mandatory(self):
+        required = "rejectsDirtyPhysicalAliasOnFirstIncludeTraversal"
+        self.assertIn(required, EXPECTED)
+        suite, cases = self.report()
+        case = next(case for case in cases if case.get("name") == required + "()")
+        suite.remove(case)
+        suite.set("tests", str(len(EXPECTED) - 1))
+        suite.find("system-out").text = "\n".join(line for line in AUDIT if line != PREFIX + "PASS case=" + required)
+        self.rejected(suite, "required native project build case")
+
     def test_skipped_disabled_failed_and_errored_cases_fail_without_leaking(self):
         for tag in ("skipped", "disabled", "failure", "error"):
             with self.subTest(tag=tag):

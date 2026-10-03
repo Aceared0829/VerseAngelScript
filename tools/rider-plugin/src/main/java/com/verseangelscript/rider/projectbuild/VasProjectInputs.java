@@ -7,6 +7,7 @@ import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.security.MessageDigest;
@@ -17,6 +18,20 @@ import java.util.Arrays;
 public final class VasProjectInputs {
     private static final int LIMIT = 16 * 1024 * 1024;
     private VasProjectInputs() {}
+
+    /** An escaped display path is not a filesystem identity or a verified input. */
+    public static Path resolveObservedPath(String cwd, VasProjectProtocol.Identity identity) throws IOException {
+        if (!identity.bindable())
+            throw new IOException("Compiler reported a source path that cannot be verified. Use valid Unicode source filenames and build again.");
+        try {
+            Path value = Path.of(identity.display());
+            Path resolved = (value.isAbsolute() ? value : Path.of(cwd).resolve(value)).normalize();
+            if (!resolved.isAbsolute()) throw new IOException("Compiler reported a source path without a verifiable absolute identity.");
+            return resolved;
+        } catch (InvalidPathException exception) {
+            throw new IOException("Compiler reported a source path that this system cannot verify.", exception);
+        }
+    }
 
     public record Snapshot(Path path, String stamp, byte[] digest, String text, int byteLength) {
         public String editorText() {

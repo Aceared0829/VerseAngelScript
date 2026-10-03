@@ -1,11 +1,35 @@
 package com.verseangelscript.rider.projectbuild;
 
 import org.junit.Test;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import static org.junit.Assert.*;
 
 public final class VasProjectInputsTest {
+    @Test public void resolvesVerifiedObservedIdentitiesBeforeSnapshotAndAliasChecks() {
+        Path root = Path.of(".").toAbsolutePath().normalize();
+        Path source = root.resolve("src/文😀.vas");
+        try {
+            assertEquals(source, VasProjectInputs.resolveObservedPath(root.toString(),
+                new VasProjectProtocol.Identity("src/unused/../文😀.vas", null)));
+            assertEquals(source, VasProjectInputs.resolveObservedPath(root.toString(),
+                new VasProjectProtocol.Identity(source.toString(), null)));
+        } catch (IOException exception) { throw new AssertionError(exception); }
+    }
+    @Test public void rejectsUnverifiableObservedIdentitiesRatherThanDroppingDependencies() {
+        String root = Path.of(".").toAbsolutePath().toString();
+        for (var identity : new VasProjectProtocol.Identity[] {
+            new VasProjectProtocol.Identity("shared-\\xff.vas", "7368617265642dff2e766173"),
+            new VasProjectProtocol.Identity("", null),
+            new VasProjectProtocol.Identity("shared\0.vas", null)
+        }) assertThrows(IOException.class, () -> VasProjectInputs.resolveObservedPath(root, identity));
+    }
+    @Test public void rejectsObservedRelativePathWithoutVerifiableWorkingDirectory() {
+        var identity = new VasProjectProtocol.Identity("shared.vas", null);
+        assertThrows(IOException.class, () -> VasProjectInputs.resolveObservedPath("relative-root", identity));
+        assertThrows(IOException.class, () -> VasProjectInputs.resolveObservedPath("invalid\0root", identity));
+    }
     @Test public void mapsExactBytePointsWithoutInventingRanges() {
         String source = "void main() {\n\t/*漢字😀*/\tmissing();\n}";
         assertEquals(source.indexOf("missing"), VasProjectInputs.offset(source, 2, 17));

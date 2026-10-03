@@ -14,6 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.Assert.*;
 
@@ -95,6 +96,45 @@ public final class VasProjectProtocolCompilerTest {
         assertEquals(prefix.getBytes(StandardCharsets.UTF_8).length + 1, diagnostic.column());
         assertTrue(report.invalidUtf8Sources().isEmpty());
         assertFalse(Files.exists(root.resolve("out")));
+    }
+
+    @Test public void firstTraversalStreamsHardLinkedIncludeIdentity() throws Exception {
+        write("src/shared.txt", "void shared() {}\n");
+        Path editorPath = root.resolve("src/shared.txt");
+        Path includePath = root.resolve("src/shared.vas");
+        Files.createLink(includePath, editorPath);
+        assertNotEquals(includePath, editorPath);
+        assertTrue(Files.isSameFile(includePath, editorPath));
+        write("src/main.vas", "#include \"shared.vas\"\nvoid main() { shared(); }\n");
+        var descriptor = describe();
+        var unit = descriptor.units().getFirst();
+        var report = new VasProjectProtocol.Report(descriptor, unit);
+        AtomicBoolean observedAlias = new AtomicBoolean();
+        AtomicBoolean loadedAlias = new AtomicBoolean();
+        var response = VasProjectProcess.run(compiler,
+            List.of("--report=jsonl", "--project", manifest.toString(), "--unit", unit.id()), unrelatedCwd,
+            30_000, VasProjectProtocol.MAX_REPORT_BYTES, () -> { }, line -> {
+                report.acceptLine(line);
+                // Consume the same per-event API as the service, without needing a
+                // prior dependency graph. Actual dirty-editor rejection is covered
+                // by the mandatory native Rider host case, not this protocol test.
+                var observation = report.lastObserved();
+                if (observation == null || !observation.bindable()) return;
+                Path observed = Path.of(observation.display());
+                if (!observed.isAbsolute()) observed = Path.of(report.cwd()).resolve(observed);
+                try {
+                    if (Files.isSameFile(editorPath, observed)) {
+                        observedAlias.set(true);
+                        if (report.lastObservationLoaded()) loadedAlias.set(true);
+                    }
+                } catch (IOException exception) { throw new AssertionError(exception); }
+            });
+        report.finish(response.exitCode());
+        assertTrue(report.success());
+        assertTrue(report.dependenciesComplete());
+        assertTrue("The first build must expose the include identity before publication", observedAlias.get());
+        assertTrue("The native loaded-section identity must retain its physical alias", loadedAlias.get());
+        assertEquals(Set.of(identity(root.resolve("src/main.vas")), identity(includePath)), report.observedPaths());
     }
 
     @Test public void legacyDescriptorAndBuildWarnWithoutRewritingOrExecutingMetadata() throws Exception {

@@ -225,9 +225,10 @@ public final class VasProjectBuildService implements Disposable {
 
     private void observe(Session session, VasProjectProtocol.Report report) {
         var observed = report.lastObserved();
-        if (observed != null && observed.bindable()) {
-            Path path = resolve(report.cwd(), observed.display());
-            if (path == null) return;
+        if (observed != null) {
+            final Path path;
+            try { path = VasProjectInputs.resolveObservedPath(report.cwd(), observed); }
+            catch (IOException exception) { throw new IllegalStateException(exception.getMessage(), exception); }
             session.observed.add(path);
             if (!session.inputs.containsKey(path)) {
                 try {

@@ -17,6 +17,7 @@ EXPECTED = frozenset({
     "navigatesExternalIncludeOnFirstVfsDiscovery",
     "preservesLegacyWarningsAndLiteralUnicodeMetacharacterPaths",
     "rejectsDirtyEntryManifestHostAndKnownInclude",
+    "rejectsDirtyPhysicalAliasOnFirstIncludeTraversal",
     "retainsDependenciesAfterPartialTraversal",
     "blocksUntrustedAndPassiveProjectExecution",
     "cancelsSelectionAndSuppressesSupersededResults",

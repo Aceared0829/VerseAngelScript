@@ -323,6 +323,87 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
     }
 
     @Test
+    void rejectsDirtyPhysicalAliasOnFirstIncludeTraversal() throws Exception {
+        try (Fixture fixture = fixture()) {
+            String savedShared = "void included() {}\n";
+            Path sharedText = fixture.write("src/shared.txt", savedShared);
+            Path sharedVas = sharedText.resolveSibling("shared.vas");
+            // A hardlink is supported by the native Windows/NTFS CI filesystem
+            // without the elevated privileges sometimes required for symlinks.
+            // Failure to create it fails this mandatory case; there is no skip.
+            Files.createLink(sharedVas, sharedText);
+            fixture.refresh(sharedVas);
+            assertTrue(Files.isSameFile(sharedText, sharedVas));
+            Path main = fixture.write("src/main.vas", "#include \"shared.vas\"\nvoid main() { included(); hostCall(); }\n");
+            JsonObject definition = new JsonObject();
+            definition.addProperty("schemaVersion", 1);
+            JsonArray units = new JsonArray();
+            JsonObject unit = fixture.unit("good", fixture.goodConfig, fixture.goodOutput);
+            unit.addProperty("entry", fixture.relative(main));
+            units.add(unit);
+            definition.add("compilationUnits", units);
+            fixture.writePath(fixture.manifest, definition.toString());
+            String savedUnrelated = "Unrelated saved text\n";
+            Path unrelatedText = fixture.write("notes/unrelated.txt", savedUnrelated);
+            fixture.open(sharedText);
+            Document aliasDocument = fixture.document(sharedText);
+            Document unrelatedDocument = fixture.document(unrelatedText);
+            try {
+                fixture.replace(aliasDocument, savedShared + "void unsavedOnly() { missingDirtyBufferSymbol(); }\n");
+                fixture.replace(unrelatedDocument, savedUnrelated + "Unrelated unsaved edit\n");
+                assertTrue(EdtTestUtil.runInEdtAndGet(() -> FileDocumentManager.getInstance().isDocumentUnsaved(aliasDocument)));
+                assertTrue(EdtTestUtil.runInEdtAndGet(() -> FileDocumentManager.getInstance().isDocumentUnsaved(unrelatedDocument)));
+                assertEquals(savedShared, Files.readString(sharedVas, StandardCharsets.UTF_8),
+                    "native compilation would otherwise succeed against the saved hardlink bytes");
+                assertTrue(Files.isSameFile(sharedText, sharedVas));
+                assertNull(fixture.service.latest(), "the physical alias must already be dirty before the first action");
+                assertTrue(fixture.launches.isEmpty());
+                assertTrue(fixture.service.dependencies(fixture.manifest.toString(), "good").isEmpty(),
+                    "this include must be unknown in the prior dependency graph");
+
+                var rejected = fixture.build();
+                assertFalse(rejected.success());
+                assertTrue(rejected.status().toLowerCase(java.util.Locale.ROOT).contains("save"), rejected.status());
+                assertTrue(rejected.status().contains("shared.txt"), "the rejection must identify the dirty physical alias");
+                assertTrue(rejected.items().isEmpty());
+                assertEquals(1, fixture.buildArguments().size(), "the real compiler must discover the previously unknown include");
+                assertTrue(fixture.service.dependencies(fixture.manifest.toString(), "good").contains(sharedVas),
+                    "first-traversal observations must survive the dirty-alias rejection");
+                quietEdt();
+                assertSame(rejected, fixture.service.latest());
+                assertTrue(fixture.outcomes.stream().allMatch(outcome -> !outcome.success() && outcome.items().isEmpty()),
+                    "dirty aliases must suppress every success and diagnostic publication, including late queued outcomes");
+                // The compiler may already have written bytecode before the final
+                // saved-input guard rejects publication. Do not require its absence.
+                assertTrue(EdtTestUtil.runInEdtAndGet(() -> FileDocumentManager.getInstance().isDocumentUnsaved(aliasDocument)),
+                    "the action must not save the dirty alias implicitly");
+                assertEquals(savedShared, Files.readString(sharedText, StandardCharsets.UTF_8));
+
+                // Reload only the alias without saving/replacing its inode. The
+                // unrelated .txt document deliberately remains dirty for the control.
+                EdtTestUtil.runInEdtAndWait(() -> FileDocumentManager.getInstance().reloadFromDisk(aliasDocument));
+                assertFalse(EdtTestUtil.runInEdtAndGet(() -> FileDocumentManager.getInstance().isDocumentUnsaved(aliasDocument)));
+                assertTrue(Files.isSameFile(sharedText, sharedVas));
+                assertTrue(EdtTestUtil.runInEdtAndGet(() -> FileDocumentManager.getInstance().isDocumentUnsaved(unrelatedDocument)));
+                var control = fixture.build();
+                assertTrue(control.success(), control.status());
+                assertEquals(rejected.generation() + 1, control.generation());
+                assertEquals(2, fixture.buildArguments().size());
+                assertTrue(Files.size(fixture.goodOutput) > 0);
+                assertTrue(EdtTestUtil.runInEdtAndGet(() -> FileDocumentManager.getInstance().isDocumentUnsaved(unrelatedDocument)),
+                    "unrelated dirty .txt documents neither block compilation nor get saved implicitly");
+                assertEquals(savedUnrelated, Files.readString(unrelatedText, StandardCharsets.UTF_8));
+            } finally {
+                EdtTestUtil.runInEdtAndWait(() -> {
+                    FileDocumentManager.getInstance().reloadFromDisk(aliasDocument);
+                    FileDocumentManager.getInstance().reloadFromDisk(unrelatedDocument);
+                });
+            }
+        }
+        passed("rejectsDirtyPhysicalAliasOnFirstIncludeTraversal");
+    }
+
+    @Test
     void retainsDependenciesAfterPartialTraversal() throws Exception {
         try (Fixture fixture = fixture()) {
             Path first = fixture.write("src/known-first.vas", "#include \"nested/known-second.vas\"\n");

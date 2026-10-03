@@ -22,6 +22,8 @@ indexing, editing, or saving settings must not invoke project tools.
   results on input, compiler setting, or trust changes
 - Show project diagnostics separately, with precise byte-to-UTF-16 locations
   only when the source snapshot and native identity are verified
+- Reject result publication when an observed source identity cannot map to a
+  verified Java path; never silently omit that source from saved-input validation
 - Keep dependency observations scoped by manifest + unit; incomplete discovery
   retains previous observations and never becomes an empty authoritative graph
 
@@ -31,6 +33,11 @@ Pure JVM tests cover malformed/oversized/unsupported protocols, diagnostics,
 process limits/cancellation and dependency lifecycle. Real Rider Build 262 tests
 must exercise the registered action, actual compiler, explicit selection,
 legacy manifest, Unicode/metacharacter paths, dirty/trust/cancellation/stale
-results, and navigation independently of active editor. CI must fail when required
-native cases are missing, skipped or fail. Linux JVM/compiler checks do not count
+results, and navigation independently of active editor. The sixteen required host
+cases include a first-traversal include whose physical hardlink alias is already
+dirty in a non-`.vas` editor before any build or prior dependency observation.
+That case must reject success/diagnostic publication even if the compiler already
+ran or wrote bytecode, and prove that an unrelated dirty `.txt` document does not
+block the clean-input control. CI must fail when required native cases are
+missing, skipped or fail. Linux JVM/compiler checks do not count
 as a native Rider host run; disclose unavailable verification explicitly.
