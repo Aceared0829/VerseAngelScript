@@ -37,8 +37,10 @@ jobs:
       - name: Install extension test dependencies
         working-directory: tools/vscode-extension
         run: npm ci
-      - name: Unit and real TextMate tests
+      - name: Unit and real TextMate/native project tests
         working-directory: tools/vscode-extension
+        env:
+          VAS_TEST_COMPILER: ${{ github.workspace }}/out/vscode-test/${{ runner.os == 'Windows' && 'Release/vasbuild.exe' || 'vasbuild' }}
         run: npm test
       - name: Package VSIX
         working-directory: tools/vscode-extension
