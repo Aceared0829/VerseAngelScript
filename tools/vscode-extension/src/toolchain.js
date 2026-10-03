@@ -46,4 +46,7 @@ function createPlan({ trusted, operation, root, file, settings }, paths = path) 
   return { executable, args: [config, source, output], cwd: paths.dirname(source), source, config, output, outputRoot };
 }
 
-module.exports = { contains, resolvePath, createPlan };
+// Filesystem matching is conservative on Windows; compiler identity keys remain untouched.
+function sameFileName(first, second, paths = path) { return paths.relative(first, second) === ''; }
+
+module.exports = { contains, resolvePath, createPlan, sameFileName };
