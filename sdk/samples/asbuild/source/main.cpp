@@ -382,7 +382,7 @@ int CompileScript(asIScriptEngine *engine, const char *scriptFile, vas::BuildRep
 	if( report ) report->phase = "load";
 	vas::ScriptBuilder builder;
 	IncludeContext context = {engine, report, &sections};
-	builder.SetSectionLoadedCallback(SectionLoaded, &context);
+	builder.SetSectionLoadedCallback(SectionLoaded, &context, report != 0);
 	r = builder.StartNewModule(engine, "build");
 	if( r < 0 ) return -1;
 	builder.SetIncludeCallback(VasIncludeCallback, &context);

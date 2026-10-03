@@ -65,7 +65,7 @@ int main(int argc, char **argv)
 	observation.expected = std::string("/* before\0after */\r\n", 20) +
 		"#if NEVER_DEFINED\ninvalid source removed by preprocessing\n#endif\nint value() { return 7; }\n";
 	Write(argv[1], observation.expected);
-	builder.SetSectionLoadedCallback(Loaded, &observation);
+	builder.SetSectionLoadedCallback(Loaded, &observation, true);
 	Check(builder.StartNewModule(engine, "digest-test") >= 0, "Cannot start actual module");
 	Check(builder.AddSectionFromFile(argv[1]) == 1, "Cannot load actual source");
 	Check(observation.calls == 1 && observation.observed == observation.expected, "Callback lost original loaded bytes");
