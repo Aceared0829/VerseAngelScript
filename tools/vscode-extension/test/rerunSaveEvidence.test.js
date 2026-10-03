@@ -120,6 +120,19 @@ test('rerun audit bounds receipts and reports failed stable reads without dangli
   } finally { await bounded.evidence.dispose(); }
 });
 
+test('an admitted receipt unlocks notification waiting but cannot bypass wrong saved bytes', async () => {
+  let notified;
+  const state = fixture(async () => ({ ...state.snapshot, digest: 'wrong saved content' }));
+  state.evidence.onReceipt = event => { notified = event; };
+  try {
+    state.will(); state.event();
+    assert.equal(notified, state.evidence.events[0]);
+    assert.equal(notified.snapshot, undefined, 'notification admission is distinct from completed content proof');
+    state.saved(); await state.evidence.settle();
+    assert.throws(() => state.evidence.verify(state.proof, state.snapshot), /expected saved bytes/);
+  } finally { await state.evidence.dispose(); }
+});
+
 async function deadline(promise, label) {
   let timer;
   try { return await Promise.race([promise, new Promise((_, reject) => {
@@ -146,13 +159,14 @@ for (const mode of ['early entry', 'early include alias', 'late entry']) {
       ] }));
       const input = mode.includes('alias') ? alias : entry, section = mode.includes('alias') ? include : entry;
       const nextText = (await fs.readFile(input, 'utf8')) + `// this saved version ${mode}\n`;
-      evidence = new RerunSaveEvidence({ files: [input, await fs.realpath(input)], version: 2, text: nextText, before: await readVersion(input) });
       let order = 0, notify;
       const received = new Promise(resolve => { notify = resolve; });
+      evidence = new RerunSaveEvidence({ files: [input, await fs.realpath(input)], version: 2, text: nextText,
+        before: await readVersion(input), onReceipt: notify });
       watcher = await readyDirectoryWatch(root, (kind, name) => {
         if (!name || !sameFileName(path.join(root, name), input)) return;
         const event = { order: ++order, kind: kind === 'rename' ? 'create' : 'change', path: input };
-        evidence.observed(event); notify(event);
+        evidence.observed(event);
       });
       assert.equal(evidence.events.length, 0, 'independent readiness receipts cannot count as source notifications');
       assert.equal(evidence.will, undefined, 'the readiness gate must precede this save window');

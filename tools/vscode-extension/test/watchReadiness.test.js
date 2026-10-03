@@ -99,6 +99,46 @@ test('sentinel readiness alone never satisfies a selected-source saved notificat
   } finally { ready.close(); await evidence.dispose(); }
 });
 
+for (const history of ['target before sentinel', 'target after sentinel in same batch', 'target after readiness before willSave']) {
+  test(`historical ${history} cannot resolve the selected-save notification wait`, async () => {
+    let callback, order = 0, delivered = false, notify, reads = 0;
+    const received = new Promise(resolve => { notify = event => { delivered = true; resolve(event); }; });
+    const evidence = new RerunSaveEvidence({ files: [target], version: 2, text: 'void main() {}\n// new\n',
+      before: { kind: 'readable', digest: 'old' }, onReceipt: notify,
+      async read() { reads++; return { kind: 'readable', dev: '1', ino: '2',
+        digest: evidence.expected.digest, byteLength: evidence.expected.byteLength }; } });
+    const emitter = new EventEmitter(); emitter.close = () => {};
+    const ready = await readyDirectoryWatch(root, (kind, name) => {
+      if (name === path.basename(target)) evidence.observed({ order: ++order,
+        kind: kind === 'rename' ? 'create' : 'change', path: target });
+    }, {
+      createWatcher(directory, receive) { callback = receive; return emitter; },
+      async writeProbe(file) {
+        if (history === 'target before sentinel') callback('rename', path.basename(target));
+        callback('rename', path.basename(file));
+        if (history === 'target after sentinel in same batch') callback('rename', path.basename(target));
+      }
+    });
+    try {
+      if (history === 'target after readiness before willSave') callback('rename', path.basename(target));
+      evidence.willSave({ order: ++order, version: 2, dirty: true, digest: evidence.expected.documentDigest });
+      evidence.didSave({ order: ++order, version: 2, dirty: false, digest: evidence.expected.documentDigest });
+      await Promise.resolve();
+      assert.equal(delivered, false, 'readiness history must leave the target wait unresolved');
+      assert.equal(evidence.events.length, 0);
+      assert.equal(reads, 0, 'didSave must not promote historical raw events into observations');
+      assert.throws(() => evidence.verify(undefined, undefined), /actual scoped notification/);
+      callback('change', path.basename(target));
+      const receipt = await received;
+      assert.ok(receipt.order > evidence.will.order);
+      assert.equal(evidence.events.length, 1);
+      assert.equal(receipt, evidence.events[0], 'the wait resolves with the admitted record, never an independent raw event');
+      await evidence.settle();
+      assert.equal(evidence.currentNotifications().length, 1);
+    } finally { ready.close(); await evidence.dispose(); }
+  });
+}
+
 test('readiness deadline aborts and drains its outstanding write', async () => {
   let writeFinished = false;
   const state = setup(({ options }) => new Promise((_, reject) => {

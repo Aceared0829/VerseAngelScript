@@ -10,7 +10,7 @@ const { documentDigest, readVersion } = require('../src/projectVersions');
 // A receipt inside this willSave epoch must observe the exact saved version;
 // it is not evidence that the OS attached this callback to a particular write.
 class RerunSaveEvidence {
-  constructor({ files, version, text, before, read = readVersion }) {
+  constructor({ files, version, text, before, read = readVersion, onReceipt }) {
     const bytes = Buffer.from(text, 'utf8');
     assert.ok(bytes.length <= 64 * 1024, 'rerun audit fixture must remain small');
     this.expected = { version, documentDigest: documentDigest(text), byteLength: bytes.length,
@@ -18,7 +18,7 @@ class RerunSaveEvidence {
     assert.ok(this.expected.documentDigest, 'rerun text must be valid Unicode');
     assert.equal(before.kind, 'readable');
     assert.notEqual(before.digest, this.expected.digest, 'this rerun must save changed bytes, not a no-op');
-    this.files = files; this.read = read;
+    this.files = files; this.read = read; this.onReceipt = onReceipt;
     this.events = []; this.pending = new Set(); this.cancel = { cancelled: false };
     this.budget = { bytes: 0 }; // readVersion bounds each read and the aggregate.
   }
@@ -45,6 +45,9 @@ class RerunSaveEvidence {
     const receipt = { ...event };
     this.events.push(receipt);
     if (this.saved) this.capture(receipt);
+    // The native fixture's notification wait must share this admission gate.
+    // A raw callback during watcher readiness is not this save's receipt.
+    this.onReceipt?.(receipt);
   }
   capture(receipt) {
     // An early callback may precede completion of the physical write. Wait for
