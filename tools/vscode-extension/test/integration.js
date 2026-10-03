@@ -9,7 +9,7 @@ const vscode = require('vscode');
 // wrappers never replace compiler output, exit status, tasks, or VS Code APIs.
 const childProcess = require('node:child_process');
 const processCalls = [];
-let auditSequence = 0, processAudit;
+let auditSequence = 0, processAudit, fileAudit;
 for (const method of ['spawn', 'execFile']) {
   const original = childProcess[method];
   childProcess[method] = function(executable, args, options, ...rest) {
@@ -41,6 +41,32 @@ vscode.CustomExecution = class extends OriginalCustomExecution {
     });
   }
 };
+
+// Observe notifications on the extension's actual watchers. This neither
+// substitutes a separate watcher nor changes the production event callbacks.
+const originalWatcher = vscode.workspace.createFileSystemWatcher;
+vscode.workspace.createFileSystemWatcher = function(...args) {
+  const watcher = originalWatcher.apply(this, args);
+  watcher.onDidCreate(uri => fileAudit?.('create', uri));
+  watcher.onDidChange(uri => fileAudit?.('change', uri));
+  watcher.onDidDelete(uri => fileAudit?.('delete', uri));
+  return watcher;
+};
+
+let lastStage = 'initializing';
+function stage(value) { lastStage = value; console.log(`VAS_TEST_STAGE:${process.env.VAS_TEST_MODE}:${value}`); }
+async function bounded(promise, label, milliseconds = 15000) {
+  let timer;
+  try {
+    return await Promise.race([promise, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Timed out: ${label}; last stage: ${lastStage}`)), milliseconds);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+function execute(command, ...args) {
+  stage(`command: ${command}`);
+  return bounded(vscode.commands.executeCommand(command, ...args), command);
+}
 
 const manifestUri = folder => vscode.Uri.joinPath(folder.uri, 'vas-project.json');
 const nativeCalls = from => processCalls.slice(from).filter(call => call.executable === process.env.VAS_TEST_COMPILER);
@@ -95,20 +121,20 @@ async function withPickers(actions, start) {
       // Wait on that RPC rather than guessing how quickly the workbench paints.
       await eventually(() => focused !== undefined, 'the real project picker to gain focus');
       assert.equal(label(focused), label(values[0]), 'picker must initially focus the first offered item');
-      if (action.cancel) await vscode.commands.executeCommand('workbench.action.closeQuickOpen');
+      if (action.cancel) await execute('workbench.action.closeQuickOpen');
       else {
         for (let count = 0; count < index; count++) {
-          await vscode.commands.executeCommand('workbench.action.quickOpenSelectNext');
+          await execute('workbench.action.quickOpenSelectNext');
           await eventually(() => label(focused) === label(values[count + 1]), 'picker navigation to move focus');
         }
-        await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+        await execute('workbench.action.acceptSelectedQuickOpenItem');
       }
       const selected = await shown;
       if (action.cancel) assert.equal(selected, undefined);
       else assert.equal(label(selected), action.label, 'the real picker must return the requested choice');
     })().catch(async error => {
       pickerError = error;
-      await vscode.commands.executeCommand('workbench.action.closeQuickOpen');
+      await execute('workbench.action.closeQuickOpen');
     }));
     return shown;
   };
@@ -117,7 +143,7 @@ async function withPickers(actions, start) {
     const result = await Promise.race([start(), new Promise((_, reject) => {
       timer = setTimeout(() => reject(new Error('Timed out driving the project Quick Pick UI')), 15000);
     })]);
-    await Promise.all(interactions);
+    await bounded(Promise.all(interactions), 'complete picker interactions');
     if (pickerError) throw pickerError;
     assert.equal(pending.length, 0,
       `the command must display every required root/unit picker; remaining actions: ${JSON.stringify(pending)}; errors shown: ${JSON.stringify(errors)}`);
@@ -129,16 +155,16 @@ async function withPickers(actions, start) {
     clearTimeout(timer);
     vscode.window.showQuickPick = original;
     vscode.window.showErrorMessage = originalError;
-    await vscode.commands.executeCommand('workbench.action.closeQuickOpen');
+    await execute('workbench.action.closeQuickOpen');
   }
 }
 
 async function projectCommand(actions) {
-  return (await withPickers(actions, () => vscode.commands.executeCommand('vas.buildProject'))).result;
+  return (await withPickers(actions, () => execute('vas.buildProject'))).result;
 }
 
 async function projectTask(folder, id) {
-  const tasks = await vscode.tasks.fetchTasks({ type: 'vas' });
+  const tasks = await bounded(vscode.tasks.fetchTasks({ type: 'vas' }), 'fetch VAS tasks');
   const task = tasks.find(item => item.definition.operation === 'buildProject' && item.definition.unit === id &&
     item.scope?.uri?.toString() === folder.uri.toString());
   assert.ok(task, `tasks.json must resolve project unit ${id} in its own workspace root`);
@@ -187,26 +213,23 @@ async function singleRootProjectTests(folder) {
   await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(
     vscode.Uri.joinPath(folder.uri, fixture.projectPaths.source, 'library 文😀.vas')));
   assert.equal(await taskExit(() => projectCommand([{ label: unit.id }]), 'single-root project command'), 0);
-  const current = await fs.readFile(output);
-  assert.ok(current.length > 0);
-  await fs.rm(path.join(folder.uri.fsPath, fixture.projectPaths.output), { recursive: true, force: true });
-
-  const legacy = { name: 'Legacy 工程😀', entry: unit.entry, builderConfig: unit.hostApi.config,
-    bytecodeOutput: unit.output, builder: fixture.trap, runner: fixture.trap };
-  // Observe the real watcher notification before starting another selection.
-  // Otherwise a late disk-edit event can correctly invalidate that selection.
-  const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(folder, 'vas-project.json'));
-  let changed = false;
-  const listener = watcher.onDidChange(() => { changed = true; });
-  try {
-    await fs.writeFile(manifestUri(folder).fsPath, JSON.stringify(legacy));
-    await eventually(() => changed, 'legacy manifest filesystem notification');
-  } finally { listener.dispose(); watcher.dispose(); }
-  assert.equal(await taskExit(() => projectCommand([{ label: 'main' }]), 'legacy project command'), 0);
-  assert.deepEqual(await fs.readFile(output), current, 'legacy normalization and versioned project builds must be byte-for-byte equivalent');
+  assert.ok((await fs.readFile(output)).length > 0);
   await assertNoTrap(folder);
-  await fs.rm(path.join(folder.uri.fsPath, fixture.projectPaths.output), { recursive: true, force: true });
-  console.log('PASS: real single-root/one-unit picker, cancellation without artifacts, active include, legacy/versioned native bytecode equivalence and manifest tool traps');
+  console.log('PASS: real single-root/one-unit picker, cancellation without artifacts, active include and versioned bytecode');
+}
+
+async function legacyProjectTests(folder) {
+  const fixture = await fixtureFor(folder), unit = fixture.manifest.compilationUnits[0];
+  const output = path.join(folder.uri.fsPath, unit.output);
+  const reference = await fs.readFile(path.join(folder.uri.fsPath, 'versioned-bytecode-reference.bin'));
+  assert.ok(reference.length > 0, 'prior isolated v1 session must have produced real bytecode');
+  await missing(output);
+  await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(
+    vscode.Uri.joinPath(folder.uri, fixture.projectPaths.source, 'library 文😀.vas')));
+  assert.equal(await taskExit(() => projectCommand([{ label: 'main' }]), 'legacy project command'), 0);
+  assert.deepEqual(await fs.readFile(output), reference, 'same-source legacy and v1 builds must be byte-for-byte equivalent');
+  await assertNoTrap(folder);
+  console.log('PASS: isolated legacy conversion, same-source/config native v1 bytecode equivalence and manifest tool traps');
 }
 
 async function dirtyIncludeAliasTests(folder, fixture) {
@@ -293,6 +316,16 @@ async function dirtyIncludeAliasTests(folder, fixture) {
 
   assert.equal(await document.save(), true);
   assert.equal(document.isDirty, false);
+  console.log('PASS: hardlink first discovery, same-Task repeat rejection, per-unit isolation and explicit alias save');
+}
+
+async function savedIncludeAliasTests(folder, fixture) {
+  const alias = fixture.includeAlias, unit = fixture.manifest.compilationUnits.find(item => item.id === alias.unit);
+  const uri = relative => vscode.Uri.joinPath(folder.uri, relative);
+  const document = await vscode.workspace.openTextDocument(uri(alias.alias));
+  assert.equal(document.isDirty, false);
+  assert.match(document.getText(), /dirty physical include alias/, 'the preceding session must have explicitly saved this same alias');
+  await missing(uri(unit.output).fsPath);
   const notes = await vscode.workspace.openTextDocument(uri(alias.unrelated));
   await replaceText(notes, notes.getText() + 'Still unrelated and unsaved\n');
   assert.equal(await projectTaskExit(folder, alias.unit), 0, 'saving the alias must allow a genuine successful build');
@@ -304,13 +337,50 @@ async function dirtyIncludeAliasTests(folder, fixture) {
   assert.equal(notes.isDirty, true, 'a dirty unrelated .txt must not block or be silently saved by the build');
   assert.equal(await notes.save(), true);
 
+  console.log('PASS: saved alias builds and publishes its compiler-owned warning while unrelated text remains dirty');
+}
+
+async function userRerunTests(folder, fixture, inputKind = 'entry') {
+  const alias = fixture.includeAlias, uri = relative => vscode.Uri.joinPath(folder.uri, relative);
+  assert.equal(await projectTaskExit(folder, alias.unit), 0, 'establish the real last task in this fresh host');
   // Exercise the real user rerun command, not a refetched API Task. VS Code
   // 1.96.4 Rerun Last Task saves editors itself even with saveBeforeRun=never.
   // Other hosts must still satisfy the invariant: a dirty participating input
   // cannot finish green; a host save is an observed transition, not a retry.
-  const entry = await vscode.workspace.openTextDocument(uri(alias.entry));
+  const inputFile = inputKind === 'include-alias' ? alias.rerunAlias : alias.entry;
+  assert.ok(inputFile, 'the rerun input must be explicitly present in the fixture');
+  const entry = await vscode.workspace.openTextDocument(uri(inputFile));
+  let cachedTask;
+  if (inputKind === 'include-alias') {
+    assert.equal(entry.languageId, 'plaintext');
+    const [included, editor] = await Promise.all([alias.include, inputFile].map(file => fs.stat(uri(file).fsPath, { bigint: true })));
+    assert.notEqual(included.ino, 0n);
+    assert.equal(included.dev, editor.dev); assert.equal(included.ino, editor.ino, 'hot-cache recovery must exercise a real include hardlink');
+    cachedTask = await projectTask(folder, alias.unit);
+  }
+  const entryPaths = [entry.uri.fsPath, await fs.realpath(entry.uri.fsPath)];
+  const fileEvents = [], diagnosticEvents = [];
+  const { sameFileName } = require('../src/toolchain');
+  fileAudit = (kind, file) => {
+    if (fileEvents.length < 64 && entryPaths.some(input => sameFileName(input, file.fsPath))) {
+      fileEvents.push({ order: ++auditSequence, kind, path: file.fsPath });
+    }
+  };
+  const diagnosticListener = vscode.languages.onDidChangeDiagnostics(event => {
+    if (diagnosticEvents.length < 64 && event.uris.some(file => file.toString() === uri(alias.include).toString())) {
+      diagnosticEvents.push({ order: ++auditSequence,
+        warnings: vscode.languages.getDiagnostics(uri(alias.include)).filter(item => item.severity === vscode.DiagnosticSeverity.Warning).length });
+    }
+  });
   await vscode.window.showTextDocument(entry);
-  await replaceText(entry, entry.getText() + '// user rerun entry edit\n');
+  await replaceText(entry, entry.getText() + '// user rerun input edit\n');
+  if (inputKind === 'include-alias') {
+    const from = processCalls.length;
+    assert.notEqual(await taskExit(() => vscode.tasks.executeTask(cachedTask), 'retained include alias before user recovery'), 0);
+    assert.equal(buildCalls(from).length, 0, 'the retained unit graph must reject the dirty alias before compilation');
+    assert.equal(entry.isDirty, true);
+    assert.equal(vscode.languages.getDiagnostics(uri(alias.include)).length, 0);
+  }
   const rerunSaved = [];
   const rerunSaveListener = vscode.workspace.onDidSaveTextDocument(item => {
     if (item.uri.toString() === entry.uri.toString()) rerunSaved.push({ order: ++auditSequence, version: item.version, dirty: item.isDirty });
@@ -324,11 +394,11 @@ async function dirtyIncludeAliasTests(folder, fixture) {
   });
   try {
     const code = await taskExit(async () => {
-      await vscode.commands.executeCommand('workbench.action.tasks.reRunTask');
+      await execute('workbench.action.tasks.reRunTask');
       await eventually(() => rerunExecution !== undefined, 'the real Rerun Last Task to start the selected unit');
       return rerunExecution;
     }, 'user Rerun Last Task');
-    const audit = { code, dirty: entry.isDirty, saved: rerunSaved,
+    const audit = { inputKind, code, dirty: entry.isDirty, saved: rerunSaved, fileEvents, diagnosticEvents,
       processes: nativeCalls(rerunStart).map(call => ({ order: call.order, args: call.args, shell: call.options?.shell, editorState: call.editorState })),
       executions: customExecutions.slice(rerunCustom) };
     console.log('VAS user-rerun evidence:', JSON.stringify(audit));
@@ -346,10 +416,20 @@ async function dirtyIncludeAliasTests(folder, fixture) {
       assert.ok(builds[0].editorState.saves > 0 && rerunSaved.some(event => event.order < builds[0].order),
         'the observed workbench save must precede the native --project spawn');
       assert.ok(builds[0].order < customExecutions[rerunCustom].closeEvents[0].order, 'native spawn must precede successful PTY close');
+      try {
+        await eventually(() => fileEvents.length > 0, 'the saved participating input notification on the extension actual watcher');
+        assert.ok(vscode.languages.getDiagnostics(uri(alias.include)).some(item => item.severity === vscode.DiagnosticSeverity.Warning),
+          'save → native build → actual filesystem notification must retain current included-file diagnostics');
+      } catch (error) {
+        console.error('VAS saved-rerun diagnostic evidence:', JSON.stringify(audit));
+        throw error;
+      }
+      if (inputKind === 'include-alias') assert.equal(vscode.languages.getDiagnostics(entry.uri).length, 0, 'physical alias recovery must not rebind compiler diagnostics');
+      console.log('VAS saved-rerun diagnostic evidence:', JSON.stringify(audit));
     }
-  } finally { processAudit = undefined; rerunListener.dispose(); rerunSaveListener.dispose(); }
+  } finally { processAudit = undefined; fileAudit = undefined; diagnosticListener.dispose(); rerunListener.dispose(); rerunSaveListener.dispose(); }
   if (entry.isDirty) assert.equal(await entry.save(), true);
-  console.log('PASS: hardlink include guards, same-Task fresh PTY/rejection, per-unit isolation, explicit save, and real user rerun saved-input invariant');
+  console.log('PASS: real user Rerun Last Task preserves saved-input and event-order invariants');
 }
 
 async function projectTests(folder, second) {
@@ -357,8 +437,13 @@ async function projectTests(folder, second) {
   const units = fixture.manifest.compilationUnits;
   const rootPick = { label: folder.name };
   const taskDiscoveryStart = processCalls.length;
+  for (const workspace of [folder, second]) await missing(path.join(workspace.uri.fsPath, '.vas'));
+  const mixedTasks = await bounded(vscode.tasks.fetchTasks({ type: 'vas' }), 'enumerate mixed Current/Project tasks');
+  assert.ok(mixedTasks.some(task => task.definition.operation === 'build'), 'Current task must coexist with project tasks');
+  assert.ok(mixedTasks.some(task => task.definition.operation === 'buildProject'), 'Project task must coexist with Current tasks');
   const unknownUnitTask = await projectTask(folder, 'unknown-unit');
-  assert.equal(nativeCalls(taskDiscoveryStart).length, 0, 'task enumeration and resolution must not launch project discovery');
+  assert.equal(nativeCalls(taskDiscoveryStart).length, 0, 'mixed task enumeration/resolution must not launch any compiler or descriptor');
+  for (const workspace of [folder, second]) await missing(path.join(workspace.uri.fsPath, '.vas'), 'Current-task output directory during mixed enumeration');
   const uri = name => vscode.Uri.joinPath(folder.uri, fixture.projectPaths.source, name);
   await blockedProject([{ cancel: true }], 'cancelling the workspace picker');
   await blockedProject([rootPick, { cancel: true }], 'cancelling the multi-unit picker', { descriptorAllowed: true });
@@ -440,8 +525,6 @@ async function projectTests(folder, second) {
   await replaceText(manifest, manifestText);
   assert.equal(await manifest.save(), true);
 
-  await dirtyIncludeAliasTests(folder, fixture);
-
   // Persisted malformed JSON and unknown schema versions are rejected by the
   // authoritative native descriptor; no build or output directory is created.
   for (const workspace of [folder, second]) {
@@ -461,14 +544,11 @@ async function projectTests(folder, second) {
   assert.equal(await manifest.save(), true);
   await assertNoTrap(folder);
   await assertNoTrap(second);
-  // Keep current-file outputs until project selection finishes: deleting them
-  // earlier sends late filesystem events into the next project's freshness
-  // checks. Also remove directories prepared while resolving preserved tasks.
-  for (const workspace of [folder, second]) await fs.rm(path.join(workspace.uri.fsPath, '.vas'), { recursive: true, force: true });
   console.log('PASS: explicit real multi-root/multi-unit picks, Unicode/metacharacter argv, configured project tasks, native warnings/include/config diagnostics, same-entry config isolation, dirty source/config/manifest rejection, invalid/cancel no-artifact behavior');
 }
 
 async function eventually(check, description) {
+  stage(`waiting: ${description}`);
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline) {
     if (await check()) return;
@@ -481,28 +561,37 @@ async function eventually(check, description) {
 }
 
 async function taskExit(start, label) {
-  const ended = new Map(), finished = new Set();
+  stage(`task start: ${label}`);
+  const ended = new Map(), finished = new Set(), started = new Set();
+  const startListener = vscode.tasks.onDidStartTask(event => started.add(event.execution));
   // VS Code 1.96.4 terminalTaskSystem forwards CustomExecution PTY close codes
   // as ProcessEnded, then End. Require both and a real numeric exit code.
   const taskListener = vscode.tasks.onDidEndTask(event => finished.add(event.execution));
   const listener = vscode.tasks.onDidEndTaskProcess(event => ended.set(event.execution, event.exitCode));
   try {
-    const execution = await start();
+    const execution = await bounded(Promise.resolve().then(start), `${label} task start`);
     assert.ok(execution, `${label} must start a task`);
     await eventually(() => ended.has(execution) && finished.has(execution), `${label} process and task exit`);
     const code = ended.get(execution);
     assert.ok(Number.isInteger(code), `${label} must report the real numeric exit code, got ${code}`);
     return code;
-  } finally { listener.dispose(); taskListener.dispose(); }
+  } catch (error) {
+    for (const execution of started) {
+      if (execution.task.definition.type === 'vas') { try { execution.terminate(); } catch { /* The failed test still propagates. */ } }
+    }
+    throw error;
+  } finally { listener.dispose(); taskListener.dispose(); startListener.dispose(); }
 }
 
-const commandExit = command => taskExit(() => vscode.commands.executeCommand(command), command);
+const commandExit = command => taskExit(() => execute(command), command);
 
 async function run() {
   const folder = vscode.workspace.workspaceFolders[0];
   const root = folder.uri.fsPath;
   const uri = name => vscode.Uri.file(path.join(root, 'src', name));
-  const initialUri = process.env.VAS_TEST_MODE === 'single-root' ?
+  const mode = process.env.VAS_TEST_MODE;
+  stage(`session ${mode}: activate`);
+  const initialUri = ['single-root', 'legacy'].includes(mode) ?
     vscode.Uri.joinPath(folder.uri, (await fixtureFor(folder)).projectPaths.source, 'main 文😀.vas') : uri('main 文😀.vas');
   const document = await vscode.workspace.openTextDocument(initialUri);
   await vscode.window.showTextDocument(document);
@@ -512,7 +601,7 @@ async function run() {
   const activationStart = processCalls.length;
   await extension.activate();
   assert.equal(nativeCalls(activationStart).length, 0, 'extension activation must never describe or compile a project');
-  const commands = await vscode.commands.getCommands(true);
+  const commands = await bounded(vscode.commands.getCommands(true), 'list registered commands');
   assert.ok(commands.includes('vas.buildCurrentFile'));
   assert.ok(commands.includes('vas.runCurrentFile'));
   assert.ok(commands.includes('vas.buildProject'));
@@ -523,13 +612,13 @@ async function run() {
     let started = 0;
     const listener = vscode.tasks.onDidStartTask(() => started++);
     try {
-      assert.equal(await vscode.commands.executeCommand('vas.buildCurrentFile'), undefined);
-      assert.equal(await vscode.commands.executeCommand('vas.runCurrentFile'), undefined);
+      assert.equal(await execute('vas.buildCurrentFile'), undefined);
+      assert.equal(await execute('vas.runCurrentFile'), undefined);
       const from = processCalls.length;
-      assert.equal(await vscode.commands.executeCommand('vas.buildProject'), undefined);
-      const tasks = await vscode.tasks.fetchTasks({ type: 'vas' });
-      assert.ok(!tasks.some(task => task.definition.operation === 'buildProject' && task.execution),
-        'Restricted Mode must not resolve an executable project task');
+      assert.equal(await execute('vas.buildProject'), undefined);
+      // fetchTasks itself requests Workspace Trust in VS Code. Do not grant or
+      // bypass it in a Restricted Mode test; observe actual executions instead.
+      assert.equal(vscode.tasks.taskExecutions.length, 0, 'Restricted Mode must have no executable VAS task running');
       assert.equal(nativeCalls(from).length, 0, 'Restricted Mode must not invoke even project discovery');
       for (const workspace of vscode.workspace.workspaceFolders) {
         await assertNoTrap(workspace);
@@ -545,15 +634,19 @@ async function run() {
   assert.equal(vscode.workspace.isTrusted, true);
   assert.ok(process.env.VAS_TEST_COMPILER && process.env.VAS_TEST_RUNNER, 'Set VAS_TEST_COMPILER and VAS_TEST_RUNNER to freshly built tools.');
   const config = vscode.workspace.getConfiguration('vas', folder.uri);
-  await config.update('compilerPath', process.env.VAS_TEST_COMPILER, vscode.ConfigurationTarget.Global);
-  await config.update('runnerPath', process.env.VAS_TEST_RUNNER, vscode.ConfigurationTarget.Global);
-  if (process.env.VAS_TEST_MODE === 'single-root') {
-    await singleRootProjectTests(folder);
-    return;
-  }
+  assert.equal(config.inspect('compilerPath').globalValue, process.env.VAS_TEST_COMPILER);
+  assert.equal(config.inspect('runnerPath').globalValue, process.env.VAS_TEST_RUNNER);
+  const second = vscode.workspace.workspaceFolders[1];
+  if (mode === 'single-root') return singleRootProjectTests(folder);
+  if (mode === 'legacy') return legacyProjectTests(folder);
+  if (mode === 'project') return projectTests(folder, second);
+  if (mode === 'alias-dirty') return dirtyIncludeAliasTests(folder, await fixtureFor(folder));
+  if (mode === 'alias-saved') return savedIncludeAliasTests(folder, await fixtureFor(folder));
+  if (mode === 'user-rerun-alias') return userRerunTests(folder, await fixtureFor(folder), 'include-alias');
+  if (mode === 'user-rerun') return userRerunTests(folder, await fixtureFor(folder));
+  assert.equal(mode, 'current', 'every trusted mode must select a concrete isolated test scenario');
   await config.update('configFile', 'config 文😀/api 接口😀.txt', vscode.ConfigurationTarget.WorkspaceFolder);
   await config.update('outputDirectory', '.vas/build 出力😀', vscode.ConfigurationTarget.WorkspaceFolder);
-  const second = vscode.workspace.workspaceFolders[1];
   const secondConfig = vscode.workspace.getConfiguration('vas', second.uri);
   await secondConfig.update('configFile', 'config 二😀/second api 二😀.txt', vscode.ConfigurationTarget.WorkspaceFolder);
   await secondConfig.update('outputDirectory', '.vas/second 二😀', vscode.ConfigurationTarget.WorkspaceFolder);
@@ -570,7 +663,7 @@ async function run() {
   assert.ok((await fs.stat(path.join(outputDirectory, 'main 文😀.vasbc'))).size > 0);
   assert.equal(await commandExit('vas.runCurrentFile'), 0);
 
-  const configured = (await vscode.tasks.fetchTasks({ type: 'vas' })).find(task => task.name === 'Fixture build');
+  const configured = (await bounded(vscode.tasks.fetchTasks({ type: 'vas' }), 'fetch VAS tasks')).find(task => task.name === 'Fixture build');
   assert.ok(configured, 'tasks.json provider must resolve the configured build');
   assert.equal(await taskExit(() => vscode.tasks.executeTask(configured), 'configured VAS task'), 0);
 
@@ -589,7 +682,7 @@ async function run() {
   let started = 0;
   const listener = vscode.tasks.onDidStartTask(() => started++);
   try {
-    assert.equal(await vscode.commands.executeCommand('vas.buildCurrentFile'), undefined);
+    assert.equal(await execute('vas.buildCurrentFile'), undefined);
     assert.equal(started, 0, 'dirty include must block compiler execution');
   } finally { listener.dispose(); }
   assert.equal(await included.save(), true);
@@ -627,7 +720,9 @@ async function run() {
   assert.equal(await commandExit('vas.buildCurrentFile'), 0);
   await eventually(() => vscode.languages.getDiagnostics(uri('shared 文😀.vas')).length === 0, 'stale diagnostics to clear after a clean build');
   console.log('PASS: native Unicode/space build/run paths, exact bytecode names, errors/warnings, UTF-16 include positions, multi-root configuration, per-entry isolation and edit invalidation');
-  await projectTests(folder, second);
 }
 
-module.exports = { run };
+module.exports = { run: async () => {
+  try { await run(); stage('complete'); }
+  catch (error) { stage(`failed: ${error.message}`); throw error; }
+} };

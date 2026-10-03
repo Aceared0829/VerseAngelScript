@@ -126,7 +126,11 @@ project task 必须显式指定根 manifest 与大小写敏感的 unit；枚举/
 
 `npm test` 覆盖实际 TextMate/Oniguruma 分词、任务参数与路径、Workspace Trust（包括任务实际启动时复查）、未保存文件、输出目录安全、真实 Node 子进程管道/退出/取消、分片 UTF-8 解码、UTF-16 列转换、诊断隔离及过期结果防护。设置 `VAS_TEST_COMPILER` 时还使用真实 `vasbuild` 验证 descriptor、v1/legacy 项目构建、Unicode/BOM include、配置错误、新鲜度与无产物失败；CI 的 unit 步骤和宿主步骤都设置刚构建的工具。
 
-原生 Extension Host 测试要求已构建的工具，执行真实 build/run、Problems 精确 URI/UTF-16 位置、入口隔离和编辑后的错误消除，并分别启动多根可信、单根可信和真正不可信工作区，覆盖真实 Quick Pick、明确单元选择、取消、配置隔离、工程工具陷阱和 dirty 输入：
+原生 Extension Host 测试要求已构建的工具，执行真实 build/run、Problems 精确 URI/UTF-16 位置、入口隔离和编辑后的错误消除。Current、多根工程、脏/已保存 include 别名、真实 Rerun、单根 v1、legacy 和 Restricted Mode 使用独立宿主/profile；场景之间的 manifest 转换与输出清理只在宿主退出后进行。v1/legacy 仍使用同一批源文件/config，并逐字节比较真实编译产物。
+
+Rerun 场景保留同一宿主中的编辑→实际宿主保存→原生构建，并记录保存、扩展实际 watcher 通知、任务关闭和诊断事件；收到保存文件的真实通知后仍检查当前警告。会话隔离不替代该保存后构建的验收。单会话上限 180 秒，任务启动/命令与发现请求有 15 秒上限；超时明确失败并报告最后阶段，只清理该测试创建的进程树，不跳过用例。
+
+所有模式仍覆盖真实 Quick Pick、明确单元选择、取消、配置隔离、工程工具陷阱和 dirty 输入：
 
 ```sh
 VAS_TEST_COMPILER=/absolute/path/to/vasbuild \
