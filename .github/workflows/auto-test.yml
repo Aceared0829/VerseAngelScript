@@ -146,17 +146,20 @@ jobs:
     - name: validate Rider project build evidence parser
       shell: powershell
       run: python -B -m unittest discover -s tools/rider-plugin/scripts -p test_project_build_results.py
-    - name: build compiler for Rider diagnostic regression tests
+    - name: build native tools for Rider regression tests
       shell: powershell
       run: |
         $build = Join-Path $env:RUNNER_TEMP 'vas-rider-compiler'
-        cmake -S $env:GITHUB_WORKSPACE -B $build
+        cmake -S $env:GITHUB_WORKSPACE -B $build -DBUILD_TESTING=ON
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        cmake --build $build --config Release --target vasbuild --parallel 4
+        cmake --build $build --config Release --target vasbuild vas_rider_argv_fixture --parallel 4
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         $compiler = Join-Path $build 'Release/vasbuild.exe'
         if (-not (Test-Path $compiler)) { throw 'Missing Rider test compiler' }
+        $argvFixture = Join-Path $build 'Release/vas_rider_argv_fixture.exe'
+        if (-not (Test-Path $argvFixture)) { throw 'Missing Rider native argument fixture' }
         "VAS_TEST_COMPILER=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        "VAS_TEST_ARGV_FIXTURE=$argvFixture" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
     - name: set up Java 25
       uses: actions/setup-java@v4
       with:

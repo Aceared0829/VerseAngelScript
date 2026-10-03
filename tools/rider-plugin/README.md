@@ -112,6 +112,13 @@ stderr 单独读取，保留前 16 KiB、总量限制 4 MiB。保存文件构建
 协议、真实子进程取消/限流、UTF-8 点位与快照。`VAS_TEST_COMPILER` 指向本次源码编译的
 原生编译器时，`VasProjectProtocolCompilerTest` 验证真实协议往返。
 
+参数保真测试还要求 `VAS_TEST_ARGV_FIXTURE` 指向本次源码编译的
+`vas_rider_argv_fixture`。配置 CMake 时启用 `BUILD_TESTING=ON`，然后显式构建该目标；
+它不会进入默认构建或插件安装包。Windows 使用 `wmain` 直接接收宽字符 argv，再严格转为
+UTF-8，避免 `java.exe` launcher 的系统 ANSI 代码页转换丢失中文或 emoji。测试仍逐字节
+验证非 ASCII、引号、反斜杠和参数数量；缺少 fixture 会失败，不会跳过。进程取消、限流与
+子孙进程测试继续使用独立的 JVM helper。CI 会构建并设置两个原生测试工具的路径。
+
 `VasRiderProjectBuildIntegrationTest` 在真实 Rider Build 262 Solution Host 中通过注册动作
 调用真实编译器，覆盖显式单元、不同 host、嵌套诊断和实际编辑器导航、旧格式与特殊路径、
 脏输入、被动事件不执行工具、未信任项目、选择取消/排队请求替换、选择后的输入/工具/信任变化、

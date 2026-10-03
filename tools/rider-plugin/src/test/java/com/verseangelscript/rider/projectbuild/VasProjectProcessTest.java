@@ -26,7 +26,7 @@ import java.util.function.Consumer;
 import static org.junit.Assert.*;
 import static org.junit.Assume.assumeFalse;
 
-/** Portable integration checks using the native JVM and a Java child, never a shell. */
+/** Real process checks using an isolated JVM child and a native wide-argv receiver, never a shell. */
 public final class VasProjectProcessTest {
     @Rule
     public final TemporaryFolder temporary = new TemporaryFolder();
@@ -124,7 +124,7 @@ public final class VasProjectProcessTest {
     @Test
     public void passesArgumentsWithoutAShellAndKeepsStderrSeparate() throws Exception {
         String argument = "space ; $(echo injected) & | > < \" quote 漢字";
-        VasProjectProcess.Result result = run("arguments", OUTPUT_LIMIT, null, () -> {}, argument);
+        VasProjectProcess.Result result = runArgvFixture("arguments", argument);
         assertEquals(argument + "\n", utf8(result.stdout()));
         assertEquals("diagnostic 漢字😀\n", result.stderr());
         assertEquals(7, result.exitCode());
@@ -174,8 +174,7 @@ public final class VasProjectProcessTest {
                 System.setProperty(property, Boolean.toString(legacy));
                 List<String> arguments = nativeArguments().stream()
                     .filter(argument -> legacy || !hasSurroundingQuotes(argument)).toList();
-                VasProjectProcess.Result result = run("argument-list", OUTPUT_LIMIT, null, () -> {},
-                    arguments.toArray(String[]::new));
+                VasProjectProcess.Result result = runArgvFixture("argument-list", arguments.toArray(String[]::new));
                 StringBuilder expected = new StringBuilder().append(arguments.size()).append('\n');
                 for (String argument : arguments) {
                     expected.append(java.util.Base64.getEncoder()
@@ -187,7 +186,7 @@ public final class VasProjectProcessTest {
                 if (isWindows() && !legacy) {
                     // Verify the actual launch path rejects the known JDK limitation,
                     // rather than publishing success for a changed argument.
-                    expectIOException(() -> run("argument-list", OUTPUT_LIMIT, null, () -> {}, "\"quoted\""));
+                    expectIOException(() -> runArgvFixture("argument-list", "\"quoted\""));
                 }
             }
         } finally {
@@ -433,6 +432,21 @@ public final class VasProjectProcessTest {
     private VasProjectProcess.Result run(String mode, long limit, Consumer<byte[]> sink,
                                          Runnable guard, String... extra) throws Exception {
         return runWithTimeout(mode, TEST_TIMEOUT_MILLIS, limit, sink, guard, extra);
+    }
+
+    private VasProjectProcess.Result runArgvFixture(String mode, String... arguments) throws Exception {
+        // Windows java.exe converts its UTF-16 command line through CP_ACP before
+        // Java main(), losing characters absent from that code page. The test-only
+        // native receiver uses wmain and reports received argv as exact UTF-8 bytes.
+        // See OpenJDK25 src/java.base/share/native/launcher/main.c, lines 74-88.
+        String configured = System.getenv("VAS_TEST_ARGV_FIXTURE");
+        assertNotNull("Build vas_rider_argv_fixture and set VAS_TEST_ARGV_FIXTURE; these checks must not skip", configured);
+        Path executable = VasProjectProcess.validateNativeCompiler(configured);
+        List<String> args = new ArrayList<>(arguments.length + 1);
+        args.add(mode);
+        args.addAll(List.of(arguments));
+        return VasProjectProcess.run(executable, args, temporary.getRoot().toPath(),
+            TEST_TIMEOUT_MILLIS, OUTPUT_LIMIT, () -> {}, null);
     }
 
     private VasProjectProcess.Result runWithTimeout(String mode, long timeoutMillis, long limit,
