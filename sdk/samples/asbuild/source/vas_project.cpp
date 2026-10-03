@@ -87,9 +87,12 @@ bool AbsoluteIdentity(const char *filename, std::string &result)
 	std::replace(result.begin(), result.end(), '\\', '/');
 	std::string prefix;
 	size_t begin = 0, protectedParts = 0;
+	#ifdef _WIN32
 	if( result.compare(0, 2, "//") == 0 ) { prefix = "//"; begin = 2; protectedParts = 2; }
 	else if( result.size() >= 3 && result[1] == ':' && result[2] == '/' ) { prefix = result.substr(0, 3); begin = 3; }
-	else if( result[0] == '/' ) { prefix = "/"; begin = 1; }
+	else
+#endif
+	if( result[0] == '/' ) { prefix = "/"; begin = 1; }
 	else return false;
 	std::vector<std::string> parts;
 	while( begin <= result.size() )

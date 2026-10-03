@@ -29,6 +29,20 @@ set(workspace "${original_workspace}")
 run_report(ON output ON --project "project 文😀/./src/../vas-project.json" --unit main)
 expect_project_start("${project_file}" main OFF)
 
+# POSIX repeated root separators must not acquire Windows UNC server/share
+# semantics. A valid CLI path containing '..' must select the same manifest.
+if(UNIX)
+	string(REGEX MATCH "^/[^/]+" first_component "${project_file}")
+	foreach(prefix IN ITEMS "/" "//")
+		set(alias "${prefix}${first_component}/..${project_file}")
+		run_descriptor(ON "${alias}")
+		expect_json("${descriptor}" "${project_file}" project)
+		run_report(ON output ON --project "${alias}" --unit main)
+		expect_project_start("${project_file}" main OFF)
+		expect_json("${record_1}" "${project_root}/src/main.vas" entry)
+	endforeach()
+endif()
+
 # Shell metacharacters are ordinary portable filename characters. No shell or
 # environment substitution is involved in either JSON paths or argv transport.
 set(meta "文😀 space $dollar ; & (group) `tick`")
