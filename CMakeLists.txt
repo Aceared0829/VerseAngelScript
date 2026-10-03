@@ -32,6 +32,7 @@ endif()
 
 add_executable(vasbuild
 	sdk/samples/asbuild/source/main.cpp
+	sdk/samples/asbuild/source/vas_project.cpp
 	sdk/add_on/scriptbuilder/scriptbuilder.cpp
 	sdk/add_on/scripthelper/scripthelper.cpp
 )
@@ -78,6 +79,14 @@ if(MINGW)
 endif()
 
 if(BUILD_TESTING)
+	foreach(case descriptor validation build safety includes)
+		add_test(NAME vasbuild_project_${case}
+			COMMAND ${CMAKE_COMMAND}
+				"-DVASBUILD=$<TARGET_FILE:vasbuild>"
+				"-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/project-${case}"
+				-P "${CMAKE_CURRENT_SOURCE_DIR}/tests/vasbuild/assert_project_${case}.cmake")
+		set_tests_properties(vasbuild_project_${case} PROPERTIES TIMEOUT 60)
+	endforeach()
 	# Parse each physical JSONL record independently with CMake's JSON parser.
 	# This keeps conformance tests native on MSVC, MinGW, Linux and macOS.
 	set(VAS_JSONL_CASES arguments diagnostics includes paths io)

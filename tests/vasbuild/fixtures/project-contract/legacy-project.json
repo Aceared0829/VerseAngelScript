@@ -1,0 +1,8 @@
+{
+  "name": "Legacy contract 文😀",
+  "entry": "src/main.vas",
+  "builderConfig": "host/default.txt",
+  "bytecodeOutput": "build/legacy.vasbc",
+  "builder": "ignored legacy tool command ; & $(must-not-run)",
+  "runner": "ignored legacy runner command ; & $(must-not-run)"
+}

@@ -1,0 +1,2 @@
+// Host declarations are compilation-only; no implementation is executed.
+func "void hostCall()"

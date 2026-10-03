@@ -1,0 +1,2 @@
+// Deliberately incompatible with main.vas to test per-unit host selection.
+func "void anotherHostCall()"

@@ -2,13 +2,20 @@
 
 `vasbuild --report=jsonl <host-interface config> <entry.vas> <bytecode output>`
 
-The optional flag must be the first argument and must be followed by exactly the
-three positional arguments. It selects one UTF-8 JSON Lines stream on stdout.
+For the positional form above, the optional flag must be the first argument and
+must be followed by exactly the three positional arguments. It selects one UTF-8
+JSON Lines stream on stdout. The explicit project form is also supported:
+
+`vasbuild --report=jsonl --project <manifest> --unit <id>`
+
+Its manifest, descriptor, selection, and safety rules are documented in
+[the native project contract](vas-project.md).
+
 Without that exact first flag, the existing command line, text diagnostics,
-stdout/stderr routing and tolerance of trailing arguments are unchanged. Report
-mode does not interpret `vas-project.json`, add include paths/defines, or change
-which source files the compiler sees. The config describes host API declarations;
-it is not a project file and does not provide runnable implementations.
+stdout/stderr routing and tolerance of trailing arguments are unchanged. Positional
+report mode does not search for or interpret `vas-project.json`. Neither form adds include
+paths/defines or replaces the native source loader. The config describes host API
+declarations; it is not a project file and does not provide runnable implementations.
 
 ## Framing and completion
 
@@ -68,6 +75,13 @@ ordinary file for bytecode and a pipe for the report.
 Additional fields: `compiler: "vasbuild"`, `compilerVersion` (the linked
 AngelScript library version), `cwd`, `config`, `entry`, `output`,
 `positionEncoding: "utf-8-bytes"`, `positionBase: 1`.
+
+Project-mode starts additionally contain `project` (absolute manifest identity or
+null), `projectSchemaVersion` (`1` for validated v1, otherwise null), `unit` (the
+explicit requested ID or null), and `legacyProject` (boolean). Selected project
+config/entry/output paths exactly match the descriptor: absolute, lexically
+normalized, forward slashes on every platform. The following positional path
+details still apply to the original three-argument form.
 
 Paths describe this invocation, not a workspace-wide project. `cwd` is the actual
 native working directory; other paths are absolute. Missing, empty or unresolvable
