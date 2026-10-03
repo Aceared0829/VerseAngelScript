@@ -232,3 +232,21 @@ test('continuous events during freshness rechecks stop at the explicit stabiliza
   assert.equal(checks, 8);
   await state.observations.settle();
 }));
+
+test('filesystem classification waits for already-received compiler proof admission before treating a loaded include as unknown', async () => fixture(async state => {
+  const { createHash } = require('node:crypto');
+  const { plan, token } = await state.register();
+  const include = path.join(state.root, 'first-loaded.vas'), bytes = Buffer.from('int Shared() { return 1; }\n');
+  await fs.writeFile(include, bytes);
+  await state.dependencies.observe(plan, { key: 'exact-include-identity', file: include });
+  let release;
+  plan.sourceProofRevision = 1;
+  const pending = new Promise(resolve => { release = resolve; }).then(() => plan.inputVersions.admitLoaded(include,
+    { version: 1, algorithm: 'sha256', byteLength: bytes.length, digest: createHash('sha256').update(bytes).digest('hex') }));
+  plan.waitForSourceProofs = () => pending;
+  state.observations.changed(include);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(state.diagnostics.current(token), true);
+  release(); await state.observations.settle();
+  assert.equal(state.diagnostics.current(token), true);
+}));

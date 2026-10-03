@@ -74,12 +74,17 @@ class ProjectInputObservations {
       for (let attempt = 0; attempt < 8; attempt++) {
         const epoch = this.epoch, live = this.live();
         if (!live.length) { this.invalidate(); break; }
+        const proofRevisions = live.map(item => item.plan.sourceProofRevision);
         let version, failed;
-        try { version = await this.read(event.file, this.cancel, budget); }
+        try {
+          for (const item of live) if (item.plan.waitForSourceProofs) await item.plan.waitForSourceProofs();
+          version = await this.read(event.file, this.cancel, budget);
+        }
         catch (error) { failed = error; }
         if (this.cancel.cancelled) return;
         const current = this.live();
-        if (epoch !== this.epoch || live.length !== current.length || live.some((item, index) => item !== current[index])) {
+        if (epoch !== this.epoch || live.length !== current.length || live.some((item, index) =>
+          item !== current[index] || item.plan.sourceProofRevision !== proofRevisions[index])) {
           if (attempt === 7) this.invalidate();
           continue;
         }

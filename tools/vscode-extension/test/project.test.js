@@ -101,7 +101,7 @@ test('real native descriptor and project builds preserve unit/config, Unicode/BO
     assert.ok(missing.diagnostics.some(record => record.file.endsWith('missing.txt') && record.column === 0));
     assert.notEqual(plan.key, second.key);
     await fs.writeFile(path.join(root, 'shared 文😀.vas'), 'int Broken() { return 1; }\n');
-    const success = await run(plan);
+    const success = await run(await projectPlan(request, selected, context));
     assert.equal(success.code, 0, success.output.join(''));
     assert.ok((await fs.stat(plan.output)).size > 0);
     await fs.appendFile(config, '\n// changed\n');
@@ -214,10 +214,14 @@ test('real native success cannot bless changed pre-compile entry/include bytes w
     await fs.writeFile(source, '#include "shared.vas"\nvoid main() {}\n');
     await fs.writeFile(included, 'int Shared() { int value; return value; }\n');
     const request = projectRequest({ project: 'vas-project.json', unit: 'main' }, context.folder, process.env.VAS_TEST_COMPILER);
-    const initial = await projectPlan(request, undefined, context), first = await run(initial);
+    const initial = await projectPlan(request, undefined, context);
+    assert.equal(initial.inputVersions.lookup(included, await readVersion(included)).length, 0, 'include is unknown before the compiler runs');
+    const first = await run(initial);
     assert.equal(first.code, 0, first.output.join(''));
-    assert.equal(initial.inputVersions.lookup(included, await readVersion(included)).length, 0,
-      'first-seen compiler sections must not acquire post-hoc baselines under any proven physical alias');
+    const hasProof = first.report.sourceProofs.size > 0;
+    if (process.env.VAS_TEST_REQUIRE_SOURCE_PROOFS === '1') assert.equal(hasProof, true, 'the current native compiler must provide loaded-source proofs');
+    assert.equal(initial.inputVersions.lookup(included, await readVersion(included)).length > 0, hasProof,
+      'only an actual compiler proof can admit a first-seen section after compilation');
     context.dependencies.update(initial, first.report, true);
     for (const input of [source, included]) {
       const plan = await projectPlan(request, undefined, context);
@@ -228,7 +232,8 @@ test('real native success cannot bless changed pre-compile entry/include bytes w
         'the baseline must preserve an exact compiler input name rather than normalizing the fixture path');
       await fs.appendFile(input, '// modification after pre-compile capture\n');
       const result = await run(plan);
-      assert.equal(result.code, 0, result.output.join(''));
+      if (hasProof) assert.notEqual(result.code, 0, 'proof admission must reject bytes different from the pre-compile baseline');
+      else assert.equal(result.code, 0, result.output.join(''));
       await assert.rejects(plan.checkFresh(), /input changed/, 'exit 0 cannot retroactively update the baseline');
     }
     const plan = await projectPlan(request, undefined, context), result = await run(plan);

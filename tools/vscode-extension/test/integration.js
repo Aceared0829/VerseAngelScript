@@ -410,6 +410,24 @@ async function savedIncludeAliasTests(folder, fixture) {
     assert.ok((await fs.stat(uri(unit.output).fsPath)).size > 0);
     await eventually(() => vscode.languages.getDiagnostics(uri(alias.include)).some(item =>
       item.severity === vscode.DiagnosticSeverity.Warning), 'the saved include warning under its compiler-owned .vas identity');
+    const loaded = nativeCalls(from).flatMap(call => call.report || []).filter(record => record.type === 'section_loaded');
+    const proven = loaded.length > 0 && loaded.every(record => record.sourceDigestVersion === 1 && record.sourceDigestAlgorithm === 'sha256');
+    if (process.env.VAS_TEST_REQUIRE_SOURCE_PROOFS === '1') assert.equal(proven, true, 'this CI build must use the real proof-producing compiler');
+    if (proven) {
+      // Force a real, late OS notification after successful publication. This
+      // does not retry compilation or rely on the host delaying a save event.
+      const included = uri(alias.include).fsPath, real = await fs.realpath(included), afterOrder = auditSequence;
+      const stat = await fs.stat(included);
+      await fs.utimes(included, stat.atime, new Date(stat.mtimeMs + 2000));
+      const { sameFileName } = require('../src/toolchain');
+      await eventually(() => fileEvents.some(event => event.order > afterOrder && event.kind === 'change' &&
+        [included, real].some(file => sameFileName(file, event.path))), 'a real post-publication include notification');
+      assert.ok(lastInputObservations);
+      await bounded(lastInputObservations.settle(), 'validate the late include notification using native loaded-byte proof');
+      assert.ok(vscode.languages.getDiagnostics(uri(alias.include)).some(item => item.severity === vscode.DiagnosticSeverity.Warning),
+        'a verified same-byte include notification must preserve the compiler-owned warning');
+      assert.equal(buildCalls(from).length, 1, 'late notification proof must not trigger a retry or rebuild');
+    }
     assert.equal(vscode.languages.getDiagnostics(document.uri).length, 0,
       'physical safety checks must not rewrite compiler diagnostic paths to the .txt editor alias');
     assert.equal(notes.isDirty, true, 'a dirty unrelated .txt must not block or be silently saved by the build');

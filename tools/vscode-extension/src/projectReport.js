@@ -13,6 +13,18 @@ const nullablePath = value => value === null || string(value);
 const integer = Number.isSafeInteger;
 function requireValue(condition, message) { if (!condition) throw new Error(`Invalid VAS report: ${message}`); }
 
+const sourceProofFields = ['sourceDigestVersion', 'sourceDigestAlgorithm', 'sourceByteLength', 'sourceDigest'];
+function sourceProof(record) {
+  if (!sourceProofFields.some(field => Object.hasOwn(record, field))) return undefined;
+  requireValue(integer(record.sourceDigestVersion) && record.sourceDigestVersion >= 1, 'invalid source digest version');
+  // A future digest format provides no evidence understood by this client.
+  if (record.sourceDigestVersion > 1) return undefined;
+  requireValue(sourceProofFields.every(field => Object.hasOwn(record, field) && !record.invalidUtf8Fields.includes(field)) &&
+    record.sourceDigestAlgorithm === 'sha256' && integer(record.sourceByteLength) && record.sourceByteLength >= 0 &&
+    typeof record.sourceDigest === 'string' && /^[0-9a-f]{64}$/.test(record.sourceDigest), 'invalid source digest proof');
+  return Object.freeze({ version: 1, algorithm: 'sha256', byteLength: record.sourceByteLength, digest: record.sourceDigest });
+}
+
 // Keep exact compiler identities. A lossy display string is never a filesystem path.
 function identity(record, field) {
   if (record[field] === null) return undefined;
@@ -31,6 +43,8 @@ class ProjectReport {
     this.sequence = 0;
     this.attempts = new Set();
     this.observed = new Map();
+    this.sourceProofs = new Map();
+    this.loadedSections = new Set();
     this.invalidSources = new Set();
   }
   write(chunk) {
@@ -87,6 +101,16 @@ class ProjectReport {
         const item = identity(record, 'section');
         this.observed.set(item.key, item);
         if (item.file === undefined) throw new Error('Loaded source path has invalid UTF-8; saved input aliases cannot be verified.');
+        const proof = sourceProof(record);
+        if (this.loadedSections.has(item.key)) {
+          const previous = this.sourceProofs.get(item.key);
+          requireValue(Boolean(previous) === Boolean(proof), 'inconsistent source proof coverage for loaded section');
+          requireValue(!proof || (previous.byteLength === proof.byteLength && previous.digest === proof.digest),
+            'conflicting source proof for loaded section');
+        } else {
+          this.loadedSections.add(item.key);
+          if (proof) this.sourceProofs.set(item.key, proof);
+        }
         if (!record.utf8Valid) this.invalidSources.add(item.key);
         break;
       }
@@ -144,10 +168,18 @@ class ProjectBuildProcess {
       if (this.cancelled || this.finished) return;
       if (record.type === 'section_loaded' || record.type === 'include_attempt') {
         const item = identity(record, record.type === 'section_loaded' ? 'section' : 'resolved');
+        if (record.type === 'section_loaded') {
+          const proof = this.report.sourceProofs.get(item.key);
+          if (proof) item.sourceProof = proof;
+        }
         // Register the participating path before asynchronous realpath/watch
         // work, so completion freshness cannot miss an already dirty alias.
-        if (item?.file) plan.observeInput?.(item.file);
+        const admission = item?.file ? Promise.resolve(plan.observeInput?.(item.file, item.sourceProof)) : undefined;
+        // A later admission can reject while an earlier observation is pending.
+        // Keep that rejection handled now; the ordered chain below still fails.
+        admission?.catch(() => {});
         if (item) this.observationWork = this.observationWork.then(async () => {
+          await admission;
           if (!this.cancelled && !this.report.error) await callbacks.observe?.(item);
         }).catch(error => {
           this.report.error ||= error;
@@ -216,7 +248,8 @@ class ProjectDependencies {
   constructor(onFiles = () => {}) { this.entries = new Map(); this.onFiles = onFiles; }
   async observe(plan, item) {
     if (!this.entries.has(plan.key)) this.update(plan, { observed: new Map() }, false);
-    this.entries.get(plan.key).observed.set(item.key, item);
+    // Compiler byte evidence belongs only to this invocation, never the graph.
+    this.entries.get(plan.key).observed.set(item.key, { key: item.key, file: item.file });
     if (item.file) {
       this.onFiles([item.file]);
       const physical = await fs.realpath(item.file).catch(() => undefined);

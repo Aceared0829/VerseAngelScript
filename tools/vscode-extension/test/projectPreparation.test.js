@@ -36,6 +36,7 @@ async function fixture(run) {
   let starts = 0;
   async function execute({ beforeCapture, afterCapture, afterLaunch } = {}) {
     let mutation = Promise.resolve();
+    let report;
     const output = [];
     const terminal = createProjectTerminal({ vscode, diagnostics, dependencies, observations, done() {},
       prepare: async cancel => {
@@ -45,7 +46,7 @@ async function fixture(run) {
         return plan;
       },
       createProcess(plan, callbacks) {
-        const native = new ProjectBuildProcess(plan, { ...callbacks, complete: async (...args) => { await mutation; return callbacks.complete(...args); } });
+        const native = new ProjectBuildProcess(plan, { ...callbacks, complete: async (...args) => { report = args[1]; await mutation; return callbacks.complete(...args); } });
         const start = native.start.bind(native);
         native.start = () => { starts++; start(); mutation = Promise.resolve(afterLaunch?.(plan)); };
         return native;
@@ -54,7 +55,7 @@ async function fixture(run) {
     terminal.onDidWrite(text => output.push(text));
     const closed = new Promise(resolve => terminal.onDidClose(resolve));
     terminal.open();
-    return { code: await closed, output: output.join('') };
+    return { code: await closed, output: output.join(''), report };
   }
   try {
     await fs.writeFile(project, JSON.stringify({ schemaVersion: 1, compilationUnits: [
@@ -161,7 +162,7 @@ test('a silent known-input change during a clean-editor identity probe is checke
     } finally { fs.stat = original; }
   }));
 
-test('after native launch a real known-input write still discards diagnostics, while first-seen late include events remain conservative',
+test('native known-input writes discard diagnostics and first-seen late events require actual compiler version proof',
   { skip: !process.env.VAS_TEST_COMPILER }, async () => {
     await fixture(async state => {
       assert.equal((await state.execute()).code, 0);
@@ -175,9 +176,11 @@ test('after native launch a real known-input write still discards diagnostics, w
       const result = await state.execute();
       assert.equal(result.code, 0, result.output);
       assert.ok(state.collections.some(collection => collection.entries.length));
+      const proven = result.report.sourceProofs.size > 0;
+      if (process.env.VAS_TEST_REQUIRE_SOURCE_PROOFS === '1') assert.equal(proven, true);
       state.observations.changed(state.include);
       await state.observations.settle();
-      assert.ok(state.collections.every(collection => collection.entries.length === 0),
-        'an unchanged first-seen include still has no pre-compile version; a late event cannot be blessed post hoc');
+      assert.equal(state.collections.some(collection => collection.entries.length > 0), proven,
+        'only compiler-loaded byte evidence can preserve a first-seen include after a late notification');
     });
   });

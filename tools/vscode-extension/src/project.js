@@ -240,14 +240,30 @@ async function projectPlan(request, selected, { vscode, folder, cancel, dependen
   // Keep exact compiler paths here; physical identity is checked only when
   // comparing these participating inputs with dirty editor documents.
   const observedInputs = new Set();
-  plan.observeInput = file => observedInputs.add(file);
   const inputs = () => [...new Set([plan.config, plan.source,
     ...(dependencies?.inputFiles(plan.key) || []), ...observedInputs])];
   // Only known inputs can acquire a pre-compile baseline. A section first
   // learned from the compiler has already been read; never bless its contents
   // by adding a post-hoc hash to this invocation's immutable snapshot.
   plan.inputVersions = await captureVersions([plan.project, ...inputs()], cancel);
+  let sourceProofWork = Promise.resolve();
+  plan.sourceProofRevision = 0;
+  plan.observeInput = (file, proof) => {
+    observedInputs.add(file);
+    if (!proof) return;
+    plan.sourceProofRevision++;
+    sourceProofWork = sourceProofWork.then(() => plan.inputVersions.admitLoaded(file, proof, cancel));
+    // The process and observation barriers await this same promise. Attach a
+    // rejection observer immediately so queued admissions cannot go unhandled.
+    sourceProofWork.catch(() => {});
+    return sourceProofWork;
+  };
+  plan.waitForSourceProofs = async () => {
+    let pending;
+    do { pending = sourceProofWork; await pending; } while (pending !== sourceProofWork);
+  };
   plan.checkFresh = async () => {
+    await plan.waitForSourceProofs();
     await requireProjectReady(vscode, folder, request.project, inputs(), cancel);
     if (compilerPath(vscode.workspace.getConfiguration('vas', folder.uri)) !== plan.executable ||
       await fingerprint(request.project, 1024 * 1024, cancel) !== snapshot.manifestFingerprint || await fingerprint(plan.config, 16 * 1024 * 1024, cancel) !== configFingerprint) {

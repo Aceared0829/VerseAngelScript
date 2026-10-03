@@ -6,6 +6,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
+const { createHash } = require('node:crypto');
 const { ProjectReport, ProjectBuildProcess, ProjectDependencies, diagnosticRecord, identity } = require('../src/projectReport');
 const root = path.join(os.tmpdir(), 'Project 文😀;$(trap)');
 const plan = { executable: '/sdk/vasbuild', cwd: root, project: path.join(root, 'vas-project.json'), unit: 'main',
@@ -16,6 +17,11 @@ const start = () => base('start', 1, { compiler: 'vasbuild', compilerVersion: 't
   cwd: plan.cwd, project: plan.project, unit: plan.unit, entry: plan.source, config: plan.config, output: plan.output,
   projectSchemaVersion: 1, legacyProject: false });
 const result = (seq, success = true, dependenciesComplete = true) => base('result', seq, { success, phase: 'output', dependenciesComplete });
+const proofFields = (bytes = Buffer.from('void main() {}')) => ({ sourceDigestVersion: 1, sourceDigestAlgorithm: 'sha256',
+  sourceByteLength: bytes.length, sourceDigest: createHash('sha256').update(bytes).digest('hex') });
+const proofValue = fields => ({ version: fields.sourceDigestVersion, algorithm: fields.sourceDigestAlgorithm,
+  byteLength: fields.sourceByteLength, digest: fields.sourceDigest });
+const loaded = (seq, fields = {}, section = plan.source) => base('section_loaded', seq, { section, utf8Valid: true, ...fields });
 const line = record => Buffer.from(JSON.stringify(record) + '\n');
 function feed(records, code = 0) { const report = new ProjectReport(plan); for (const record of records) report.write(line(record)); return { report, code: report.end(code) }; }
 
@@ -30,6 +36,73 @@ test('strict report accepts split UTF-8 framing, actual include context and exit
   assert.equal(report.observed.size, 2);
   assert.deepEqual(observed, ['start', 'section_loaded', 'include_attempt', 'include_result', 'result']);
   assert.equal(feed([start(), result(2, false)], 7).code, 7);
+});
+
+test('loaded source proofs retain exact byte metadata separately from path observations', () => {
+  for (const bytes of [Buffer.alloc(0), Buffer.from('void main() {}'),
+    Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('one\r\ntwo\0'), Buffer.from([0xff, 0xfe])])]) {
+    const fields = proofFields(bytes);
+    const { report, code } = feed([start(), loaded(2, { ...fields, utf8Valid: false }), result(3)]);
+    const key = JSON.stringify(['text', plan.source]);
+    assert.equal(code, 0);
+    assert.deepEqual(report.sourceProofs.get(key), proofValue(fields));
+    assert.deepEqual(report.observed.get(key), { key, file: plan.source });
+    assert.ok(report.invalidSources.has(key), 'source encoding validity stays independent of byte proof');
+  }
+  assert.equal(feed([start(), loaded(2, { ...proofFields(), sourceByteLength: Number.MAX_SAFE_INTEGER }), result(3)]).code, 0);
+});
+
+test('old and future source digest formats remain usable without source proof evidence', () => {
+  for (const fields of [{}, { sourceDigestVersion: 2 }, { ...proofFields(), sourceDigestVersion: 100 },
+    { sourceDigestVersion: 2, sourceDigestAlgorithm: 'future', sourceByteLength: 'unknown', sourceDigest: {} }]) {
+    const { report, code } = feed([start(), loaded(2, fields), result(3)]);
+    assert.equal(code, 0);
+    assert.equal(report.sourceProofs.size, 0);
+    assert.equal(report.observed.size, 1);
+  }
+  const first = feed([start(), loaded(2, proofFields()), result(3)]).report;
+  const second = feed([start(), loaded(2), result(3)]).report;
+  assert.equal(first.sourceProofs.size, 1);
+  assert.equal(second.sourceProofs.size, 0, 'proofs cannot carry over to another invocation');
+});
+
+test('known source proof fields must be complete, exact and well typed', () => {
+  const valid = proofFields();
+  const malformed = [];
+  for (const field of Object.keys(valid)) {
+    const partial = { ...valid }; delete partial[field]; malformed.push(partial);
+    malformed.push({ [field]: valid[field] });
+  }
+  for (const sourceDigestVersion of [null, 0, -1, 1.5, 2.5, '1', Number.MAX_SAFE_INTEGER + 1]) malformed.push({ ...valid, sourceDigestVersion });
+  for (const sourceDigestAlgorithm of [null, 1, 'SHA256', 'sha-256', 'sha256\0']) malformed.push({ ...valid, sourceDigestAlgorithm });
+  for (const sourceByteLength of [null, -1, 1.5, '14', Number.MAX_SAFE_INTEGER + 1, NaN, Infinity]) malformed.push({ ...valid, sourceByteLength });
+  for (const sourceDigest of [null, 1, '', 'a'.repeat(63), 'a'.repeat(65), 'A'.repeat(64), 'g'.repeat(64), 'a'.repeat(64) + '\n']) malformed.push({ ...valid, sourceDigest });
+  malformed.push({ ...valid, invalidUtf8Fields: ['sourceDigest'], rawBytes: { sourceDigest: 'ff' } });
+  malformed.push({ ...valid, invalidUtf8Fields: ['sourceDigestAlgorithm'], rawBytes: { sourceDigestAlgorithm: 'ff' } });
+  for (const fields of malformed) {
+    const { report, code } = feed([start(), loaded(2, fields), result(3)]);
+    assert.equal(code, 1, JSON.stringify(fields));
+    assert.match(report.error.message, /source digest/);
+  }
+});
+
+test('repeated exact loaded identities cannot replace source proof or change coverage', () => {
+  const known = proofFields(), future = { sourceDigestVersion: 2 };
+  const changes = [[known, { ...known, sourceDigest: 'a'.repeat(64) }], [known, { ...known, sourceByteLength: known.sourceByteLength + 1 }],
+    [known, {}], [{}, known], [known, future], [future, known]];
+  for (const [first, second] of changes) {
+    const { report, code } = feed([start(), loaded(2, first), loaded(3, second), result(4)]);
+    assert.equal(code, 1);
+    assert.match(report.error.message, /source proof/);
+    assert.deepEqual(report.sourceProofs.get(JSON.stringify(['text', plan.source])), first === known ? proofValue(known) : undefined);
+  }
+  for (const [first, second] of [[known, known], [{}, {}], [future, {}], [{}, future]]) {
+    assert.equal(feed([start(), loaded(2, first), loaded(3, second), result(4)]).code, 0);
+  }
+  const { report, code } = feed([start(), loaded(2, known, '/Case.vas'),
+    loaded(3, proofFields(Buffer.from('different')), '/case.vas'), result(4)]);
+  assert.equal(code, 0);
+  assert.equal(report.sourceProofs.size, 2, 'case-distinct compiler identities remain independent');
 });
 
 test('unsupported versions, malformed/framing/truncation, wrong identities and exit mismatches fail closed', () => {
@@ -100,18 +173,99 @@ test('complete observations replace; partial/load failure unions and keys separa
   assert.ok(deps.relevant(plan.config)); assert.ok(deps.relevant('/three.vas')); assert.equal(deps.relevant('/two.vas'), false);
 });
 
-function processFixture() {
+function processFixture(callbacks = {}, invocation = plan) {
   const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
   child.kill = () => { child.kills = (child.kills || 0) + 1; return true; };
   const output = [], diagnostics = [];
   let controller, spawnOptions;
   const ended = new Promise(resolve => {
-    controller = new ProjectBuildProcess(plan, { output: text => output.push(text), diagnostic: value => diagnostics.push(value), complete: resolve },
+    controller = new ProjectBuildProcess(invocation, { output: text => output.push(text), diagnostic: value => diagnostics.push(value), ...callbacks, complete: resolve },
       (executable, args, options) => { assert.equal(executable, plan.executable); spawnOptions = options; return child; });
     controller.start();
   });
   return { child, controller, output, diagnostics, ended, spawnOptions };
 }
+
+test('only loaded known proofs reach observation callbacks and dependency graphs keep path-only context', async () => {
+  const fields = proofFields(), observations = [], registrations = [], deps = new ProjectDependencies();
+  const oldFile = path.join(root, 'old.vas'), futureFile = path.join(root, 'future.vas');
+  const f = processFixture({ observe: async item => { observations.push(item); await deps.observe(plan, item); } },
+    { ...plan, observeInput: (file, proof) => registrations.push({ file, proof }) });
+  f.child.stdout.end(Buffer.concat([start(), loaded(2, fields),
+    base('include_attempt', 3, { from: plan.source, requested: 'main.vas', resolved: plan.source, ...fields }),
+    base('include_result', 4, { attemptSeq: 3, status: 'skipped' }), loaded(5, {}, oldFile),
+    loaded(6, { ...fields, sourceDigestVersion: 2 }, futureFile), result(7)].map(line)));
+  f.child.stderr.end(); f.child.emit('close', 0);
+  assert.equal(await f.ended, 0);
+  assert.deepEqual(observations.map(item => item.sourceProof), [proofValue(fields), undefined, undefined, undefined]);
+  assert.deepEqual(registrations, [{ file: plan.source, proof: proofValue(fields) }, { file: plan.source, proof: undefined },
+    { file: oldFile, proof: undefined }, { file: futureFile, proof: undefined }]);
+  for (const observed of [f.controller.report.observed, deps.entries.get(plan.key).observed]) {
+    assert.equal(observed.size, 3);
+    for (const item of observed.values()) assert.deepEqual(Object.keys(item).sort(), ['file', 'key']);
+  }
+});
+
+test('source proof admission is registered synchronously and awaited before observation and completion', async () => {
+  const fields = proofFields(), phases = [];
+  let releaseAdmission, releaseObservation, completed = false;
+  const f = processFixture({ observe: async item => {
+    assert.deepEqual(item.sourceProof, proofValue(fields));
+    phases.push('observing'); await new Promise(resolve => { releaseObservation = resolve; });
+  } }, { ...plan, observeInput: (file, proof) => {
+    assert.equal(file, plan.source); assert.deepEqual(proof, proofValue(fields)); phases.push('admitting');
+    return new Promise(resolve => { releaseAdmission = resolve; });
+  } });
+  f.ended.then(() => { completed = true; });
+  f.child.stdout.end(Buffer.concat([start(), loaded(2, fields), result(3)].map(line)));
+  assert.deepEqual(phases, ['admitting']);
+  f.child.stderr.end(); f.child.emit('close', 0);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(phases, ['admitting']); assert.equal(completed, false);
+  releaseAdmission(); await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(phases, ['admitting', 'observing']); assert.equal(completed, false);
+  releaseObservation(); assert.equal(await f.ended, 0);
+});
+
+test('pending source proof admission cannot bypass cancellation, rejected evidence or complete-report validation', async () => {
+  for (const mode of ['cancel', 'reject', 'truncated']) {
+    let release, reject, completed = false;
+    const observations = [];
+    const f = processFixture({ observe: item => observations.push(item) }, { ...plan,
+      observeInput: () => new Promise((resolve, fail) => { release = resolve; reject = fail; }) });
+    f.ended.then(() => { completed = true; });
+    f.child.stdout.end(Buffer.concat([start(), loaded(2, proofFields()), ...(mode === 'truncated' ? [] : [result(3)])].map(line)));
+    if (mode === 'cancel') f.controller.terminate();
+    f.child.stderr.end(); f.child.emit('close', 0);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(completed, false); assert.equal(observations.length, 0);
+    if (mode === 'reject') reject(new Error('Loaded source bytes do not match compiler proof'));
+    else release();
+    assert.equal(await f.ended, mode === 'cancel' ? 130 : 1);
+    if (mode === 'reject') { assert.equal(observations.length, 0); assert.match(f.controller.report.error.message, /bytes do not match/); }
+    if (mode === 'truncated') assert.match(f.controller.report.error.message, /truncated report/);
+  }
+});
+
+test('later source proof rejection stays handled while earlier observation is pending', async () => {
+  let release, calls = 0;
+  const f = processFixture({ observe: () => new Promise(resolve => { release = resolve; }) }, { ...plan,
+    observeInput: () => ++calls === 1 ? undefined : Promise.reject(new Error('Later proof failed')) });
+  f.child.stdout.end(Buffer.concat([start(), loaded(2, proofFields()),
+    loaded(3, proofFields(), path.join(root, 'another.vas')), result(4)].map(line)));
+  f.child.stderr.end(); f.child.emit('close', 0);
+  await new Promise(resolve => setImmediate(resolve));
+  release(); assert.equal(await f.ended, 1);
+  assert.match(f.controller.report.error.message, /Later proof failed/);
+});
+
+test('asynchronous observation rejection still invalidates proof-bearing report', async () => {
+  const f = processFixture({ observe: async () => { throw new Error('Watch verification failed'); } });
+  f.child.stdout.end(Buffer.concat([start(), loaded(2, proofFields()), result(3)].map(line)));
+  f.child.stderr.end(); f.child.emit('close', 0);
+  assert.equal(await f.ended, 1);
+  assert.match(f.controller.report.error.message, /Watch verification failed/);
+});
 
 test('pipe project process never uses shell and does not infer success from valid-looking stderr', async () => {
   const f = processFixture();
@@ -183,21 +337,22 @@ test('valid-looking complete report followed by transport error is marked invali
 
 test('participating input registration precedes asynchronous observation and completion waits for it', async () => {
   const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => true;
-  const files = [], phases = [];
+  const files = [], phases = [], observations = [], fields = proofFields();
   let release, completed = false;
   const invocation = { ...plan, observeInput: file => files.push(file) };
   const ended = new Promise(resolve => {
     const process = new ProjectBuildProcess(invocation, { output() {}, diagnostic() {},
-      observe: async () => { phases.push('observing'); await new Promise(done => { release = done; }); },
+      observe: async item => { observations.push(item); phases.push('observing'); await new Promise(done => { release = done; }); },
       complete: code => { completed = true; resolve(code); } }, () => child);
     process.start();
   });
   const included = path.join(root, 'shared.vas');
-  child.stdout.write(Buffer.concat([line(start()), line(base('section_loaded', 2, { section: included, utf8Valid: true })), line(result(3))]));
+  child.stdout.write(Buffer.concat([line(start()), line(loaded(2, fields, included)), line(result(3))]));
   assert.deepEqual(files, [included], 'input membership is synchronous with validated report parsing');
   child.stdout.end(); child.stderr.end(); child.emit('close', 0);
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(phases, ['observing']); assert.equal(completed, false);
+  assert.deepEqual(observations, [{ key: JSON.stringify(['text', included]), file: included, sourceProof: proofValue(fields) }]);
   release(); assert.equal(await ended, 0);
 });
 
@@ -211,7 +366,7 @@ test('cancellation during asynchronous input observation cannot complete success
     process.start();
   });
   const included = path.join(root, 'shared.vas');
-  child.stdout.write(Buffer.concat([line(start()), line(base('section_loaded', 2, { section: included, utf8Valid: true })), line(result(3))]));
+  child.stdout.write(Buffer.concat([line(start()), line(loaded(2, proofFields(), included)), line(result(3))]));
   await new Promise(resolve => setImmediate(resolve));
   process.terminate(); child.stdout.end(); child.stderr.end(); child.emit('close', 0);
   release(); assert.equal(await ended, 130); assert.deepEqual(files, [included]);
@@ -238,4 +393,13 @@ test('an actually loaded raw-byte path fails saved-input verification and retain
   assert.equal(report.end(0), 1);
   assert.match(report.error.message, /saved input aliases cannot be verified/);
   assert.ok(report.observed.has(JSON.stringify(['bytes', '2f726177ff2e766173'])));
+});
+
+test('valid source proof never gives a raw-byte loaded path URI authority', () => {
+  const { report, code } = feed([start(), loaded(2, { ...proofFields(), invalidUtf8Fields: ['section'],
+    rawBytes: { section: '2f726177ff2e766173' } }, '/display�.vas'), result(3)]);
+  assert.equal(code, 1);
+  assert.match(report.error.message, /saved input aliases cannot be verified/);
+  assert.ok(report.observed.has(JSON.stringify(['bytes', '2f726177ff2e766173'])));
+  assert.equal(report.sourceProofs.size, 0);
 });

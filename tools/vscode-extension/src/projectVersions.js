@@ -74,7 +74,7 @@ async function readVersion(file, cancel, budget = { bytes: 0 }) {
     if (version(before) !== version(after) || version(before) !== version(pathnameAfter) ||
       key(realpath) !== key(realpathAfter) || BigInt(bytes) !== before.size) throw changed(file);
     return Object.freeze({ file, kind: 'readable', realpath, dev: before.dev.toString(), ino: before.ino.toString(),
-      digest: binary.digest('hex'), documentDigest: utf8Valid ? document.digest('hex') : undefined });
+      byteLength: bytes, digest: binary.digest('hex'), documentDigest: utf8Valid ? document.digest('hex') : undefined });
   } catch (error) {
     ready(cancel);
     if (unreadableCodes.has(error.code)) return Object.freeze({ file, kind: 'unreadable', state: error.code });
@@ -98,6 +98,7 @@ async function captureVersions(files, cancel) {
     if (unique.size > MAX_FILES) throw new Error(`VAS inputs exceed the ${MAX_FILES} file validation limit.`);
   }
   const records = [], names = new Map(), physical = new Map(), budget = { bytes: 0 };
+  const loadedBudget = { bytes: 0 };
   function add(map, name, record) {
     const previous = map.get(name) || [];
     if (previous.some(item => !sameVersion(item, record, true) &&
@@ -142,6 +143,35 @@ async function captureVersions(files, cancel) {
   };
   return Object.freeze({
     match, lookup, matches, related,
+    async admitLoaded(file, proof, cancel) {
+      ready(cancel);
+      if (!validPath(file) || proof?.version !== 1 || proof.algorithm !== 'sha256' ||
+        !Number.isSafeInteger(proof.byteLength) || proof.byteLength < 0 || typeof proof.digest !== 'string' || !/^[0-9a-f]{64}$/.test(proof.digest)) {
+        throw new Error('Invalid compiler-loaded source version proof.');
+      }
+      if (proof.byteLength > MAX_FILE_BYTES) throw new Error(`VAS input exceeds the ${MAX_FILE_BYTES} byte validation limit: ${file}`);
+      const existing = names.get(key(file));
+      if (existing) {
+        // Never replace a pre-compile baseline with a newer compiler read.
+        if (existing.some(record => record.kind !== 'readable' || record.digest !== proof.digest || record.byteLength !== proof.byteLength)) throw changed(file);
+        return;
+      }
+      if (records.length >= MAX_FILES) throw new Error(`VAS inputs exceed the ${MAX_FILES} file validation limit.`);
+      const actual = await readVersion(file, cancel, loadedBudget);
+      ready(cancel);
+      if (actual.kind !== 'readable' || actual.digest !== proof.digest || actual.byteLength !== proof.byteLength) {
+        throw new Error(`VAS source no longer matches the bytes loaded by the compiler. Build Project again: ${file}`);
+      }
+      const prior = lookup(file, actual);
+      if (prior.length && !matches(file, actual)) throw changed(file);
+      // Content is attested by the compiler's original load. Physical identity
+      // is local evidence established by this matching stable read, not a claim
+      // about the native handle or same-byte replacements before admission.
+      records.push(actual);
+      for (const name of [file, actual.realpath]) add(names, key(name), actual);
+      const id = physicalKey(actual);
+      if (id) add(physical, id, actual);
+    },
     async check(file, cancel, expectedDocumentDigest, budget) {
       ready(cancel);
       if (!validPath(file)) return false;
