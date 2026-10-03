@@ -181,7 +181,7 @@ test('real project rejects newly discovered dirty include aliases, remembers inp
   });
 
 test('actual POSIX invalid-byte include path fails closed without replacing prior dependencies',
-  { skip: !process.env.VAS_TEST_COMPILER || process.platform === 'win32' }, async () => {
+  { skip: !process.env.VAS_TEST_COMPILER || process.platform === 'win32' }, async context => {
     const { projectPlan, projectRequest } = require('../src/project');
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vas-raw-include-'));
     const folder = { uri: { scheme: 'file', fsPath: root } }, project = path.join(root, 'vas-project.json');
@@ -190,7 +190,12 @@ test('actual POSIX invalid-byte include path fails closed without replacing prio
       const include = Buffer.concat([Buffer.from('raw-'), Buffer.from([0xff]), Buffer.from('.vas')]);
       await fs.writeFile(path.join(root, 'main.vas'), Buffer.concat([Buffer.from('#include "'), include, Buffer.from('"\nvoid main() { Shared(); }\n')]));
       await fs.writeFile(path.join(root, 'shared.txt'), 'int Shared() { return 1; }\n');
-      await fs.link(path.join(root, 'shared.txt'), Buffer.concat([Buffer.from(root + '/'), include]));
+      try { await fs.link(path.join(root, 'shared.txt'), Buffer.concat([Buffer.from(root + '/'), include])); }
+      catch (error) {
+        if (error.code !== 'EILSEQ') throw error;
+        context.skip('Filesystem rejects non-UTF-8 filenames (EILSEQ); synthetic rawBytes rejection remains mandatory.');
+        return;
+      }
       await fs.writeFile(project, JSON.stringify({ schemaVersion: 1, compilationUnits: [
         { id: 'main', entry: 'main.vas', hostApi: { config: 'api.txt' }, output: 'out/main.vasbc' }
       ] }));
