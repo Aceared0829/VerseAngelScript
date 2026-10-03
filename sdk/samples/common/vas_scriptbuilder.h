@@ -4,6 +4,11 @@
 #include "../../add_on/scriptbuilder/scriptbuilder.h"
 #include "vas_paths.h"
 #include <limits>
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <sys/stat.h>
+#endif
 
 namespace vas
 {
@@ -33,12 +38,13 @@ inline bool ScriptSectionPath(const char *filename, std::string &section)
 class ScriptBuilder : public CScriptBuilder
 {
 public:
-	typedef void (*SectionLoadedCallback)(const std::string &section, const std::string &code, void *param);
-	ScriptBuilder() : loadedCallback(0), loadedParam(0) {}
-	void SetSectionLoadedCallback(SectionLoadedCallback callback, void *param)
+	typedef void (*SectionLoadedCallback)(const std::string &section, const std::string &code, bool regularFile, void *param);
+	ScriptBuilder() : loadedCallback(0), loadedParam(0), inspectFileType(false) {}
+	void SetSectionLoadedCallback(SectionLoadedCallback callback, void *param, bool inspectType = false)
 	{
 		loadedCallback = callback;
 		loadedParam = param;
+		inspectFileType = inspectType;
 	}
 
 	int AddSectionFromFile(const char *filename)
@@ -56,6 +62,21 @@ public:
 
 		FILE *file = OpenFile(section.c_str(), "rb");
 		if( file == 0 ) return ReportFileError(section, "Failed to open script file '");
+		// Classify the opened handle, not a path that may have been replaced.
+		// Unknown or non-file streams retain load events but provide no digest.
+		// Only report mode requests this probe; ordinary tools keep the original
+		// file I/O path without extra metadata calls.
+		bool regularFile = false;
+		if( inspectFileType )
+		{
+#ifdef _WIN32
+			HANDLE handle = reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(file)));
+			regularFile = GetFileType(handle) == FILE_TYPE_DISK;
+#else
+			struct stat info;
+			regularFile = fstat(fileno(file), &info) == 0 && S_ISREG(info.st_mode);
+#endif
+		}
 
 		std::string code;
 		char buffer[4096];
@@ -77,13 +98,14 @@ public:
 
 		// Report a successful byte read, not acceptance by preprocessing or the
 		// compiler. This remains observable even if a nested include aborts.
-		if( loadedCallback ) loadedCallback(section, code, loadedParam);
+		if( loadedCallback ) loadedCallback(section, code, regularFile, loadedParam);
 		return AddSectionFromMemory(section.c_str(), code.c_str(), static_cast<unsigned int>(code.size()));
 	}
 
 private:
 	SectionLoadedCallback loadedCallback;
 	void *loadedParam;
+	bool inspectFileType;
 	int ReportFileError(const std::string &section, const char *prefix)
 	{
 		std::string message = prefix + section + "'";

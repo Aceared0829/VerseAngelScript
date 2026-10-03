@@ -131,6 +131,56 @@ include whose descendants later fail still has a `section_loaded` record. An emp
 file is loaded too. Repeated/cyclic includes skipped by the builder do not produce
 another load record. No source contents are transmitted.
 
+#### Optional source-content digest, version 1
+
+Newer compilers additionally emit the following four fields together for a
+successful read from a regular file, classified using the actual opened handle:
+
+| Field | Value |
+| --- | --- |
+| `sourceDigestVersion` | integer `1` |
+| `sourceDigestAlgorithm` | `"sha256"` |
+| `sourceByteLength` | nonnegative integer byte count, at most `2147483647` |
+| `sourceDigest` | 64 lowercase hexadecimal digits |
+
+This is SHA-256 of the **original complete loaded byte buffer**. It includes an
+initial BOM, CRLF, invalid UTF-8 and embedded NUL bytes unchanged. It excludes the
+string's synthetic trailing NUL. The digest is calculated from the same buffer
+passed to `AddSectionFromMemory`, with its explicit byte length, before the
+builder copies it and blanks directives, metadata or inactive source. It is not
+a digest of the preprocessed text, decoded editor text, file path or timestamps.
+An empty file has length zero and the standard SHA-256 empty-input digest.
+
+The existing compiler pipeline is unchanged: the builder copies nonempty input
+with its explicit length, including bytes after embedded NUL; its subsequent
+preprocessing and engine parsing still decide which bytes form accepted source.
+The digest does not assert that every byte became executable code. Fully read
+sections retain their digests when preprocessing, descendants or compilation
+later fail. Missing files, failed or oversized reads emit no load event or digest;
+non-regular or unclassifiable handles emit the existing load event without these
+four fields. In-memory sections do not generate native-file load events. Config
+and project-manifest contents are not covered by this source-only digest.
+
+These fields are optional additions to report protocol version 1. Older readers
+continue to ignore them. New consumers should require all four fields with their
+documented types, bounds and format for digest version 1. A partial or malformed
+version-1 group is invalid evidence. Missing fields or an unsupported future
+digest version/algorithm provide no content proof; do not infer a digest from a
+later path read and attribute it to this invocation.
+
+This is **content evidence, not filesystem identity or a freshness guarantee**.
+The compiler never reopens the path to calculate it and does not expose a native
+device/inode or Windows file ID. The section's existing lexical path identity and
+invalid-filename `rawBytes` rules still apply. A consumer may compare a bounded,
+stable read of the current regular file to the reported byte length and digest,
+then track the identity it observed for later replacements or alias checks. That
+identity is the consumer's observation, not proof of the compiler's original file
+handle. Same-byte replacement before the consumer's first matching observation
+is indistinguishable, and files can change after any observation. Concurrent edits
+during the native read may yield a mixed buffer: the digest certifies exactly that
+loaded buffer, not an atomic filesystem snapshot. Dependency completeness and
+invocation completion must still be checked separately.
+
 ### `include_attempt`
 
 Additional fields: `from` (the including normalized section), `requested` (the
