@@ -75,6 +75,11 @@
         "command": "vas.runCurrentFile",
         "title": "VAS: Run Current File",
         "enablement": "isWorkspaceTrusted && editorLangId == vas"
+      },
+      {
+        "command": "vas.buildProject",
+        "title": "VAS: Build Project",
+        "enablement": "isWorkspaceTrusted"
       }
     ],
     "menus": {
@@ -124,21 +129,29 @@
       {
         "type": "vas",
         "required": [
-          "operation",
-          "file"
+          "operation"
         ],
         "properties": {
           "operation": {
             "type": "string",
             "enum": [
               "build",
-              "run"
+              "run",
+              "buildProject"
             ],
-            "description": "Build bytecode or compile and run the saved source with vasrun."
+            "description": "Build or run a saved source, or build an explicit compiler-owned project unit."
           },
           "file": {
             "type": "string",
             "description": "Entry .vas file relative to this task's workspace folder (or an absolute path inside it). Supports ${workspaceFolder}."
+          },
+          "project": {
+            "type": "string",
+            "description": "For buildProject: workspace root vas-project.json (no automatic discovery of nested manifests)."
+          },
+          "unit": {
+            "type": "string",
+            "description": "For buildProject: exact case-sensitive compilation unit id from the compiler descriptor."
           }
         }
       }
