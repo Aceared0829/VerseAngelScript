@@ -63,6 +63,7 @@ jobs:
             tools/visualstudio-extension/TestResults/VS2026.trx
             tools/visualstudio-extension/TestResults/host-instance.json
             tools/visualstudio-extension/TestResults/native-build.json
+            tools/visualstudio-extension/TestResults/production-package.json
             tools/visualstudio-extension/TestResults/core-tests.log
             tools/visualstudio-extension/TestResults/native-security-evidence.json
             tools/visualstudio-extension/TestResults/native-build/Testing/Temporary/LastTest.log

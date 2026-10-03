@@ -33,7 +33,9 @@
     <Reference Include="System.ComponentModel.Composition" />
     <Reference Include="System.Runtime.Remoting" />
     <Reference Include="System.Xml.Linq" />
-    <ProjectReference Include="../../VerseAngelScript.VisualStudio.csproj" ReferenceOutputAssembly="true" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+    <ProjectReference Include="../../VerseAngelScript.VisualStudio.csproj" ReferenceOutputAssembly="false" />
     <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

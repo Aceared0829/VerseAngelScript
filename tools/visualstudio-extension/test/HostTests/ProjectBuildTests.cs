@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.CodeDom.Compiler;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -50,6 +51,7 @@ namespace VerseAngelScript.VisualStudio.Tests
         private const uint BuildCommand = 0x0100, CancelCommand = 0x0101;
         private const string SettingsCollection = "VerseAngelScript/Toolchain";
         private object package;
+        private string packageAssemblySha256;
         private object Coordinator => Member(package, "Coordinator");
         private string Status => Convert.ToString(Member(Coordinator, "Status"));
         private bool Busy => Convert.ToBoolean(Member(Coordinator, "Busy"));
@@ -501,7 +503,45 @@ namespace VerseAngelScript.VisualStudio.Tests
                 Assert.Equal(new[] { "describe", "build" }, fixture.Calls);
                 Assert.False(Directory.Exists(fixture.OutputDirectory));
             }
-            SaveEvidence(nameof(BlockedBuildInputAndCompilerChangesInvalidate), "sourceMutationCancels", "configMutationCancels", "manifestMutationCancels", "compilerSettingCancels", "lateOutputIgnored", "processesReaped");
+            var racing = CreateFixture("concurrent watcher and explicit cancel");
+            racing.CreateControlCompiler(); File.WriteAllText(racing.WaitFile, "wait");
+            await OpenSolutionAsync(racing); ConfigureCompiler(racing.Compiler);
+            var hostProcess = Process.GetCurrentProcess().Id;
+            for (var cycle = 0; cycle < 8; cycle++)
+            {
+                File.Delete(racing.ReleaseFile);
+                await ChooseAndBuildAsync(racing, 0);
+                await WaitForAsync(() => Busy && racing.Calls.Count(call => call == "build") == cycle + 1, "blocked process for concurrent cancel cycle");
+                var mutationStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                var mutation = Task.Run(() =>
+                {
+                    mutationStarted.SetResult(true);
+                    // Actual file changes race native watcher cancellation against
+                    // the UI command; no callback ordering is assumed or forced.
+                    for (var edit = 0; edit < 4; edit++)
+                    {
+                        for (var attempt = 0; ; attempt++)
+                        {
+                            try { File.AppendAllText(racing.Entry, " "); break; }
+                            catch (IOException) when (attempt < 100) { System.Threading.Thread.Sleep(5); }
+                        }
+                    }
+                });
+                await mutationStarted.Task;
+                ExecuteCommand(CancelCommand);
+                await mutation;
+                await WaitForAsync(() => !Busy && racing.NoLiveProcesses(), "concurrent watcher/command cancellation owns and reaps process");
+                File.WriteAllText(racing.ReleaseFile, "late output after concurrent cancellation");
+                await Task.Delay(150);
+                Assert.Equal(hostProcess, Process.GetCurrentProcess().Id);
+                Assert.DoesNotContain("succeeded", Status);
+                Assert.DoesNotContain(ErrorTasks(), item => TaskText(item).Contains("fixture_missing_symbol"));
+                Assert.Equal(cycle + 1, racing.Calls.Count(call => call == "describe"));
+                Assert.Equal(cycle + 1, racing.Calls.Count(call => call == "build"));
+                Assert.Equal((cycle + 1) * 2, racing.Calls.Count);
+                Assert.False(Directory.Exists(racing.OutputDirectory));
+            }
+            SaveEvidence(nameof(BlockedBuildInputAndCompilerChangesInvalidate), "sourceMutationCancels", "configMutationCancels", "manifestMutationCancels", "compilerSettingCancels", "lateOutputIgnored", "processesReaped", "concurrentWatcherCancelSafe");
         }
 
         [IdeFact(MinVersion = VisualStudioVersion.VS18, MaxVersion = VisualStudioVersion.VS18, RootSuffix = "VASIntegration", MaxAttempts = 1)]
@@ -592,11 +632,26 @@ namespace VerseAngelScript.VisualStudio.Tests
         {
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
             Assert.Equal("devenv", Process.GetCurrentProcess().ProcessName);
-            Assert.Equal(18, FileVersionInfo.GetVersionInfo(Process.GetCurrentProcess().MainModule.FileName).FileMajorPart);
+            var hostExe = Path.GetFullPath(Process.GetCurrentProcess().MainModule.FileName);
+            Assert.Equal(18, FileVersionInfo.GetVersionInfo(hostExe).FileMajorPart);
+            Assert.Equal(Path.GetFullPath(Environment.GetEnvironmentVariable("VAS_EXPECTED_DEVENV")), hostExe, ignoreCase: true);
             var shell = (IVsShell)Package.GetGlobalService(typeof(SVsShell));
             var id = new Guid(PackageId);
             ErrorHandler.ThrowOnFailure(shell.LoadPackage(ref id, out var loaded));
             package = loaded;
+            var installedAssembly = package.GetType().Assembly;
+            Assert.Equal("VerseAngelScript", installedAssembly.GetName().Name);
+            var testDirectory = Path.GetDirectoryName(typeof(ProjectBuildTests).Assembly.Location);
+            Assert.False(SamePath(Path.GetDirectoryName(installedAssembly.Location), testDirectory),
+                "The package must load from the installed VSIX, not beside the test harness.");
+            packageAssemblySha256 = Hash(installedAssembly.Location);
+            using (var archive = ZipFile.OpenRead(Path.Combine(testDirectory, "VerseAngelScript.vsix")))
+            {
+                var payload = archive.Entries.Single(entry => entry.FullName == "VerseAngelScript.dll");
+                using (var stream = payload.Open())
+                using (var sha = SHA256.Create())
+                    Assert.Equal(BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "").ToLowerInvariant(), packageAssemblySha256);
+            }
             Assert.NotNull(Coordinator);
             Assert.True(File.Exists(NativeCompiler), "Real CMake-built native compiler is mandatory.");
             var store = Settings();
@@ -911,7 +966,7 @@ namespace VerseAngelScript.VisualStudio.Tests
         {
             using (var sha = SHA256.Create()) return BitConverter.ToString(sha.ComputeHash(File.ReadAllBytes(path))).Replace("-", "").ToLowerInvariant();
         }
-        private static void SaveEvidence(string name, params string[] checks)
+        private void SaveEvidence(string name, params string[] checks)
         {
             var commandLine = (IVsAppCommandLine)Package.GetGlobalService(typeof(SVsAppCommandLine));
             ErrorHandler.ThrowOnFailure(commandLine.GetOption("RootSuffix", out var present, out var suffix));
@@ -922,6 +977,7 @@ namespace VerseAngelScript.VisualStudio.Tests
             File.WriteAllText(path, JsonConvert.SerializeObject(new {
                 testName = name, hostMajor = FileVersionInfo.GetVersionInfo(Process.GetCurrentProcess().MainModule.FileName).FileMajorPart,
                 processName = Process.GetCurrentProcess().ProcessName, rootSuffix = suffix,
+                hostExe = Path.GetFullPath(Process.GetCurrentProcess().MainModule.FileName), packageAssemblySha256,
                 compilerSha256 = Hash(NativeCompiler), checks = checks.ToDictionary(check => check, check => true)
             }, Formatting.Indented), new UTF8Encoding(false));
         }

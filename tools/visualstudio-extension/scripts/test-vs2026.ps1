@@ -71,7 +71,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Production VSIX build failed ($LASTEXITCODE)." }
     $packages = @(Get-ChildItem 'bin/Release' -Filter '*.vsix' -Recurse)
     if ($packages.Count -ne 1) { throw "Expected one production VSIX, found $($packages.Count)." }
-    python 'test/check_package.py' --vsix $packages[0].FullName
+    python 'test/check_package.py' --vsix $packages[0].FullName --write-evidence (Join-Path $ResultsDirectory 'production-package.json')
     if ($LASTEXITCODE -ne 0) { throw 'Production VSIX contract failed.' }
 
     & $msbuild 'test/CoreTests/CoreTests.csproj' /restore /t:Build /p:Configuration=Release /p:TargetFrameworks=net472 /p:TargetFramework=net472 /nologo /verbosity:minimal

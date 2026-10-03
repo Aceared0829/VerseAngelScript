@@ -1,5 +1,6 @@
 """Fail closed on missing, skipped, duplicate or unevidenced native VS18 tests."""
 import json
+import ntpath
 import pathlib
 import re
 import sys
@@ -29,7 +30,7 @@ PROJECT_EVIDENCE = {
     "CanonicalMissingIncludesAndAncestorChangesInvalidate": {"nativeMissingInclude", "canonicalAliasCreate", "ancestorRename", "ancestorDelete"},
     "FirstTraversalDirtyIncludeAliasBlocksPublication": {"firstTraversalObserved", "dirtyTxtHardLinkRejected", "noStalePublication", "unrelatedDirtyAllowed"},
     "MismatchedProofAndTruncatedReportsNeverPublish": {"mismatchedDigestRejected", "truncatedTerminalRejected", "noDiagnosticPublication", "actualProcessCalls"},
-    "BlockedBuildInputAndCompilerChangesInvalidate": {"sourceMutationCancels", "configMutationCancels", "manifestMutationCancels", "compilerSettingCancels", "lateOutputIgnored", "processesReaped"},
+    "BlockedBuildInputAndCompilerChangesInvalidate": {"sourceMutationCancels", "configMutationCancels", "manifestMutationCancels", "compilerSettingCancels", "lateOutputIgnored", "processesReaped", "concurrentWatcherCancelSafe"},
     "DescriptorCancellationReapsProcessBeforeRestart": {"descriptorBlocked", "cancelCommand", "cleanupRetainsOwnership", "repeatIgnoredDuringCleanup", "processReaped", "restartAfterCleanup"},
     "DirtyAliasChangedAfterReadBlocksImmediateBuild": {"descriptorRead", "rdtAliasChanged", "immediateBuildBlocked", "zeroBuildProcesses"},
     "PackageDisposalCancelsRunningBuildAndLateResults": {"nativePackageClose", "processCancelled", "lateResultIgnored", "isolatedHostSuffix"},
@@ -72,12 +73,26 @@ def verify(path):
     for key in ("compilerSha256", "argvFixtureSha256"):
         if not re.fullmatch(r"[a-f0-9]{64}", str(native.get(key, ""))):
             raise ValueError(f"Missing native binary digest: {key}")
+    production = _json(path.parent / "production-package.json")
+    for key in ("packageAssemblySha256", "vsixSha256"):
+        if not re.fullmatch(r"[a-f0-9]{64}", str(production.get(key, ""))):
+            raise ValueError(f"Missing production package digest: {key}")
+    host = _json(path.parent / "host-instance.json")
+    installation = host.get("installationPath", "")
+    if not isinstance(installation, str) or not ntpath.isabs(installation) or str(host.get("installationVersion", "")).split(".")[0] != "18":
+        raise ValueError("Invalid selected native host installation evidence")
+    expected_host = ntpath.normcase(ntpath.normpath(ntpath.join(installation, "Common7", "IDE", "devenv.exe")))
     for name, requirements in sorted(PROJECT_EVIDENCE.items()):
         evidence = _json(path.parent / "project-build" / (name + ".json"))
         expected_suffix = "VASProjectDisposal" if name == "PackageDisposalCancelsRunningBuildAndLateResults" else "VASIntegration"
         if (evidence.get("testName") != name or evidence.get("hostMajor") != 18
                 or evidence.get("processName") != "devenv" or evidence.get("rootSuffix") != expected_suffix):
             raise ValueError(f"Invalid native VS18 evidence identity: {name}")
+        host_exe = evidence.get("hostExe", "")
+        if not isinstance(host_exe, str) or not ntpath.isabs(host_exe) or ntpath.normcase(ntpath.normpath(host_exe)) != expected_host:
+            raise ValueError(f"Selected native host executable evidence mismatch: {name}")
+        if evidence.get("packageAssemblySha256") != production["packageAssemblySha256"]:
+            raise ValueError(f"Installed production package assembly evidence mismatch: {name}")
         if evidence.get("compilerSha256") != native["compilerSha256"]:
             raise ValueError(f"Native compiler evidence mismatch: {name}")
         for requirement in sorted(requirements):

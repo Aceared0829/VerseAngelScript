@@ -1,6 +1,7 @@
 """Exact production VSIX boundary; real VS18 behavior is a separate mandatory gate."""
 import argparse
 import json
+import hashlib
 import pathlib
 import unittest
 import zipfile
@@ -49,7 +50,7 @@ class PackageContract(unittest.TestCase):
             self.assertEqual(packages[name].get("ExcludeAssets"), "runtime")
 
 
-def verify_vsix(path):
+def verify_vsix(path, evidence_path=None):
     with zipfile.ZipFile(path) as archive:
         names = archive.namelist()
         assert len(names) == len(set(names)), "Duplicate VSIX entries"
@@ -79,15 +80,23 @@ def verify_vsix(path):
         # Only container bookkeeping may accompany the intentional payload.
         allowed = set(expected) | BINARY_ALLOWLIST | {"VerseAngelScript.pkgdef", "extension.vsixmanifest", "[Content_Types].xml", "manifest.json", "catalog.json"}
         assert set(names) <= allowed, f"Unexpected VSIX payload: {set(names) - allowed}"
+        evidence = {
+            "packageAssemblySha256": hashlib.sha256(archive.read("VerseAngelScript.dll")).hexdigest(),
+            "newtonsoftAssemblySha256": hashlib.sha256(archive.read("Newtonsoft.Json.dll")).hexdigest(),
+            "vsixSha256": hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest(),
+        }
+    if evidence_path is not None:
+        pathlib.Path(evidence_path).write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
     print(f"Production VSIX exact assembly boundary and canonical byte parity passed: {path}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--vsix", type=pathlib.Path)
+    parser.add_argument("--write-evidence", type=pathlib.Path)
     args = parser.parse_args()
     result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(PackageContract))
     if not result.wasSuccessful():
         raise SystemExit(1)
     if args.vsix:
-        verify_vsix(args.vsix)
+        verify_vsix(args.vsix, args.write_evidence)
