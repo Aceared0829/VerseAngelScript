@@ -48,21 +48,32 @@ class Emitter {
   dispose() { this.listeners.clear(); }
 }
 
-async function fixture(run) {
+async function fixture(run, { canonicalAlias = false } = {}) {
   assert.ok(process.env.VAS_TEST_COMPILER, 'Proof-required tests require an actual VAS_TEST_COMPILER executable');
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vas-native-proof-'));
+  const storage = await fs.mkdtemp(path.join(os.tmpdir(), 'vas-native-proof-'));
+  let root = storage;
+  if (canonicalAlias) {
+    try {
+      const physical = path.join(storage, 'physical'); await fs.mkdir(physical);
+      root = path.join(storage, 'lexical');
+      // A directory junction does not need Windows file-symlink privileges.
+      await fs.symlink(physical, root, process.platform === 'win32' ? 'junction' : 'dir');
+    } catch (error) { await fs.rm(storage, { recursive: true, force: true }); throw error; }
+  }
   const project = path.join(root, 'vas-project.json'), include = path.join(root, 'shared 文😀.vas');
   const bytes = Buffer.from('\ufeff/* 文😀 */\r\nint Shared() { int value; return value; }\r\n');
-  const folder = { uri: { scheme: 'file', fsPath: root } }, collections = [], fileEvents = new Emitter();
+  const folder = { uri: { scheme: 'file', fsPath: root } }, collections = [], fileEvents = new Emitter(), watchPatterns = [];
   const vscode = {
     EventEmitter: Emitter, Uri: { file: fsPath => ({ scheme: 'file', fsPath }) },
     Range: class { constructor(line, character) { this.start = { line, character }; } },
     Diagnostic: class { constructor(range, message, severity) { Object.assign(this, { range, message, severity }); } },
     DiagnosticSeverity: { Error: 0, Warning: 1, Information: 2 },
+    RelativePattern: class { constructor(base, pattern) { Object.assign(this, { base, pattern }); } },
     workspace: {
       isTrusted: true, textDocuments: [], workspaceFolders: [folder],
       getConfiguration: () => ({ inspect: () => ({ globalValue: process.env.VAS_TEST_COMPILER }) }),
-      createFileSystemWatcher() {
+      createFileSystemWatcher(pattern) {
+        watchPatterns.push(pattern);
         return { onDidChange: fileEvents.event, onDidCreate: () => ({ dispose() {} }),
           onDidDelete: () => ({ dispose() {} }), dispose() {} };
       }
@@ -134,7 +145,7 @@ async function fixture(run) {
     build.terminal.open();
     return build;
   }
-  const state = { root, project, include, bytes, vscode, collections, diagnostics, dependencies, observations, start, cleanup,
+  const state = { root, project, include, bytes, vscode, collections, diagnostics, dependencies, observations, start, cleanup, watchPatterns,
     fsChanged: file => fileEvents.fire(vscode.Uri.file(file)) };
   try {
     await fs.writeFile(project, JSON.stringify({ schemaVersion: 1, compilationUnits: [
@@ -171,8 +182,8 @@ async function fixture(run) {
         }
       }
       watchers.dispose(); observations.dispose(); diagnostics.dispose(); fileEvents.dispose();
-      if (quiescent) await fs.rm(root, { recursive: true, force: true });
-      else console.error(`Preserving source-proof fixture because cleanup was not confirmed: ${root}`);
+      if (quiescent) await fs.rm(storage, { recursive: true, force: true });
+      else console.error(`Preserving source-proof fixture because cleanup was not confirmed: ${storage}`);
     }
   }
 }
@@ -235,7 +246,9 @@ function holdColdAdmission(state) {
 }
 
 async function awaitHeldNative(state, build, gate) {
-  await bounded(gate.entered.promise, 'actual loaded-source proof to reach the local admission read');
+  await bounded(Promise.race([gate.entered.promise, build.closed.promise.then(code => {
+    throw new Error(`Task closed ${code} before source-proof admission (native started: ${Boolean(build.child)}, proofs: ${build.proofs.length}):\n${build.output.join('').slice(0, 8192)}`);
+  })]), 'actual loaded-source proof to reach the local admission read');
   assertActualProof(state, build);
   assert.equal(build.plan.inputVersions.match(gate.file), undefined);
   assert.equal(gate.returned, false, 'the local admission read must still be pending');
@@ -326,6 +339,7 @@ test('real cold-include proofs retain mandatory dirty and clean physical-alias c
     state.vscode.workspace.textDocuments.push(document);
     const build = state.start();
     const code = await bounded(build.closed.promise, `${mode}: native task completion`);
+    assert.ok(build.child, `${mode}: native compiler never started:\n${build.output.join('').slice(0, 8192)}`);
     await bounded(build.nativeClosed.promise, `${mode}: native exit`);
     const record = assertActualProof(state, build);
     assertNativeSuccess(build);
@@ -349,3 +363,27 @@ test('real cold-include proofs retain mandatory dirty and clean physical-alias c
     }
   });
 });
+
+test('native proof fixture models canonical-path external watchers before starting its real compiler', nativeProofOptions,
+  async () => fixture(async state => {
+    const canonical = await fs.realpath(state.root);
+    assert.notEqual(state.root, canonical, 'the fixture must force a real lexical/canonical workspace difference');
+    const gate = holdColdAdmission(state), build = state.start({ onProof: gate.onProof });
+    await awaitHeldNative(state, build, gate);
+    assert.ok(state.watchPatterns.some(pattern => pattern instanceof state.vscode.RelativePattern &&
+      pattern.base === canonical && pattern.pattern === '*'), 'actual dependency registration must construct the canonical-directory watcher');
+    gate.release();
+    assert.equal(await bounded(build.closed.promise, 'canonical-path native proof completion'), 0, build.output.join(''));
+    assert.equal(warningEntries(state).length, 1);
+  }, { canonicalAlias: true }));
+
+test('native proof fixture reports an early watcher setup failure instead of waiting for a compiler that never started', nativeProofOptions,
+  async () => fixture(async state => {
+    delete state.vscode.RelativePattern;
+    const gate = holdColdAdmission(state), build = state.start({ onProof: gate.onProof });
+    await assert.rejects(awaitHeldNative(state, build, gate), /Task closed 1 before source-proof admission[\s\S]*vscode\.RelativePattern is not a constructor/);
+    assert.equal(build.child, undefined);
+    assert.equal(build.native, undefined);
+    assert.deepEqual(build.closeCodes, [1]);
+    assert.equal(build.proofs.length, 0);
+  }, { canonicalAlias: true }));
