@@ -133,6 +133,9 @@ async function main() {
         'security.workspace.trust.startupPrompt': 'never',
         'security.workspace.trust.emptyWindow': false,
         'update.mode': 'none', 'telemetry.telemetryLevel': 'off',
+        // Test extension dirty-input guards with deterministic unsaved editors.
+        // The workbench's own save-before-run must not clear the test condition.
+        'task.saveBeforeRun': 'never', 'files.autoSave': 'off',
         'vas.compilerPath': process.env.VAS_TEST_COMPILER,
         'vas.runnerPath': process.env.VAS_TEST_RUNNER
       });

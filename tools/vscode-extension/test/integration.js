@@ -9,13 +9,38 @@ const vscode = require('vscode');
 // wrappers never replace compiler output, exit status, tasks, or VS Code APIs.
 const childProcess = require('node:child_process');
 const processCalls = [];
+let auditSequence = 0, processAudit;
 for (const method of ['spawn', 'execFile']) {
   const original = childProcess[method];
   childProcess[method] = function(executable, args, options, ...rest) {
-    processCalls.push({ method, executable, args: Array.isArray(args) ? [...args] : [], options });
+    const call = { order: ++auditSequence, method, executable, args: Array.isArray(args) ? [...args] : [], options };
+    if (processAudit) call.editorState = processAudit();
+    processCalls.push(call);
     return original.call(this, executable, args, options, ...rest);
   };
 }
+
+// Audit the real CustomExecution lifecycle without replacing its PTY, output,
+// callback result or close code. Task reuse failures need both sides of the API.
+const customExecutions = [];
+const OriginalCustomExecution = vscode.CustomExecution;
+vscode.CustomExecution = class extends OriginalCustomExecution {
+  constructor(callback) {
+    super(async (...args) => {
+      const record = { id: customExecutions.length + 1, definition: args[0], opened: 0, closeRequested: 0, closeCodes: [], closeEvents: [], messages: [] };
+      customExecutions.push(record);
+      const terminal = await callback(...args);
+      terminal.onDidClose(code => { record.closeCodes.push(code); record.closeEvents.push({ order: ++auditSequence, code }); });
+      terminal.onDidWrite(text => {
+        if (record.messages.length < 12 && text.includes('VAS:')) record.messages.push(text.slice(0, 2048));
+      });
+      const open = terminal.open, close = terminal.close;
+      terminal.open = function(...parameters) { record.opened++; return open.apply(this, parameters); };
+      terminal.close = function(...parameters) { record.closeRequested++; return close.apply(this, parameters); };
+      return terminal;
+    });
+  }
+};
 
 const manifestUri = folder => vscode.Uri.joinPath(folder.uri, 'vas-project.json');
 const nativeCalls = from => processCalls.slice(from).filter(call => call.executable === process.env.VAS_TEST_COMPILER);
@@ -198,6 +223,10 @@ async function dirtyIncludeAliasTests(folder, fixture) {
 
   const document = await vscode.workspace.openTextDocument(uri(alias.alias));
   assert.equal(document.languageId, 'plaintext', 'the alias must not be caught by the .vas editor guard');
+  assert.equal(vscode.workspace.getConfiguration('task', folder.uri).get('saveBeforeRun'), 'never');
+  assert.equal(vscode.workspace.getConfiguration('files', folder.uri).get('autoSave'), 'off');
+  // Do not depend on the workbench's delayed opening of dirty hidden documents.
+  await vscode.window.showTextDocument(document);
   await replaceText(document, document.getText() + '// dirty physical include alias\n');
   const task = await projectTask(folder, alias.unit);
   const diagnosticUris = [alias.entry, alias.include, alias.alias, unit.output].map(uri);
@@ -209,21 +238,48 @@ async function dirtyIncludeAliasTests(folder, fixture) {
     }
   };
   const listener = vscode.languages.onDidChangeDiagnostics(recordDiagnostics);
+  const saved = [], willSave = [], taskEvents = [];
+  const saveRequests = vscode.workspace.onWillSaveTextDocument(event => { if (event.document.uri.toString() === document.uri.toString()) willSave.push({ reason: event.reason, version: event.document.version }); });
+  const saves = vscode.workspace.onDidSaveTextDocument(item => { if (item.uri.toString() === document.uri.toString()) saved.push({ version: item.version, dirty: item.isDirty }); });
+  const taskListeners = [
+    vscode.tasks.onDidStartTask(event => taskEvents.push({ event: 'start', name: event.execution.task.name, definition: event.execution.task.definition })),
+    vscode.tasks.onDidEndTaskProcess(event => taskEvents.push({ event: 'processEnd', name: event.execution.task.name, exitCode: event.exitCode })),
+    vscode.tasks.onDidEndTask(event => taskEvents.push({ event: 'end', name: event.execution.task.name }))
+  ];
+  const evidence = (stage, code, from, customFrom, eventsFrom) => {
+    const value = { stage, code, dirty: document.isDirty, closed: document.isClosed, version: document.version,
+      saveBeforeRun: vscode.workspace.getConfiguration('task', folder.uri).get('saveBeforeRun'), saved, willSave,
+      editorTabs: vscode.window.tabGroups.all.flatMap(group => group.tabs).filter(tab => tab.input?.uri?.toString() === document.uri.toString()).length,
+      processes: nativeCalls(from).map(call => ({ args: call.args, shell: call.options?.shell })),
+      executions: customExecutions.slice(customFrom), taskEvents: taskEvents.slice(eventsFrom) };
+    console.log('VAS dirty-alias task evidence:', JSON.stringify(value));
+    return JSON.stringify(value);
+  };
   try {
     // This unit has no previous observations. The real native compiler can read
     // the saved include and even write bytecode before its report identifies the
     // dirty editor alias. The task must still reject success and publication.
-    const firstStart = processCalls.length;
-    assert.notEqual(await taskExit(() => vscode.tasks.executeTask(task), 'first discovery of a dirty include alias'), 0,
-      'a successful saved-disk compile must not report a successful task for a dirty include alias');
+    const firstStart = processCalls.length, firstCustom = customExecutions.length, firstEvents = taskEvents.length;
+    const firstCode = await taskExit(() => vscode.tasks.executeTask(task), 'first discovery of a dirty include alias');
+    assert.notEqual(firstCode, 0, evidence('first-discovery', firstCode, firstStart, firstCustom, firstEvents));
     assert.equal(buildCalls(firstStart).length, 1, 'the first build must discover the include through the real compiler');
     assert.equal(document.isDirty, true, 'include discovery must not save the alias editor');
+    assert.equal(customExecutions.length - firstCustom, 1, 'first execution must create one fresh PTY');
+    assert.equal(customExecutions[firstCustom].opened, 1);
+    assert.deepEqual(customExecutions[firstCustom].closeCodes, [firstCode], 'PTY and task process exit codes must agree');
     recordDiagnostics();
     assert.deepEqual(published, [], 'the rejected first discovery must not publish warning or success diagnostics');
 
-    const repeatStart = processCalls.length;
-    assert.notEqual(await taskExit(() => vscode.tasks.executeTask(task), 'previously observed dirty include alias'), 0);
+    const repeatStart = processCalls.length, repeatCustom = customExecutions.length, repeatEvents = taskEvents.length;
+    const repeatCode = await taskExit(() => vscode.tasks.executeTask(task), 'previously observed dirty include alias');
+    assert.notEqual(repeatCode, 0, evidence('repeat-cached-task', repeatCode, repeatStart, repeatCustom, repeatEvents));
     assert.equal(buildCalls(repeatStart).length, 0, 'retained include observations must block the next native --project launch');
+    assert.equal(document.isDirty, true, 'the repeated API task must retain the unsaved test condition');
+    assert.deepEqual(saved, [], 'saveBeforeRun=never must keep the dirty-input check meaningful');
+    assert.deepEqual(willSave, []);
+    assert.equal(customExecutions.length - repeatCustom, 1, 'the same resolved Task must invoke a fresh CustomExecution callback');
+    assert.equal(customExecutions[repeatCustom].opened, 1);
+    assert.deepEqual(customExecutions[repeatCustom].closeCodes, [repeatCode]);
     recordDiagnostics();
     assert.deepEqual(published, [], 'the rejected repeat must not publish diagnostics');
 
@@ -233,7 +289,7 @@ async function dirtyIncludeAliasTests(folder, fixture) {
     assert.equal(document.isDirty, true, 'an unrelated unit must leave the alias editor dirty');
     recordDiagnostics();
     assert.deepEqual(published, [], 'an unrelated build must not publish the rejected alias unit diagnostics');
-  } finally { listener.dispose(); }
+  } finally { listener.dispose(); saves.dispose(); saveRequests.dispose(); for (const item of taskListeners) item.dispose(); }
 
   assert.equal(await document.save(), true);
   assert.equal(document.isDirty, false);
@@ -247,7 +303,53 @@ async function dirtyIncludeAliasTests(folder, fixture) {
     'physical safety checks must not rewrite compiler diagnostic paths to the .txt editor alias');
   assert.equal(notes.isDirty, true, 'a dirty unrelated .txt must not block or be silently saved by the build');
   assert.equal(await notes.save(), true);
-  console.log('PASS: real hardlink include alias first-discovery rejection, no stale diagnostic publication, pre-launch repeat rejection, per-unit isolation and successful explicit save');
+
+  // Exercise the real user rerun command, not a refetched API Task. VS Code
+  // 1.96.4 Rerun Last Task saves editors itself even with saveBeforeRun=never.
+  // Other hosts must still satisfy the invariant: a dirty participating input
+  // cannot finish green; a host save is an observed transition, not a retry.
+  const entry = await vscode.workspace.openTextDocument(uri(alias.entry));
+  await vscode.window.showTextDocument(entry);
+  await replaceText(entry, entry.getText() + '// user rerun entry edit\n');
+  const rerunSaved = [];
+  const rerunSaveListener = vscode.workspace.onDidSaveTextDocument(item => {
+    if (item.uri.toString() === entry.uri.toString()) rerunSaved.push({ order: ++auditSequence, version: item.version, dirty: item.isDirty });
+  });
+  const rerunStart = processCalls.length, rerunCustom = customExecutions.length;
+  processAudit = () => ({ dirty: entry.isDirty, saves: rerunSaved.length, version: entry.version });
+  let rerunExecution;
+  const rerunListener = vscode.tasks.onDidStartTask(event => {
+    if (event.execution.task.definition.operation === 'buildProject' && event.execution.task.definition.unit === alias.unit &&
+      event.execution.task.scope?.uri?.toString() === folder.uri.toString()) rerunExecution = event.execution;
+  });
+  try {
+    const code = await taskExit(async () => {
+      await vscode.commands.executeCommand('workbench.action.tasks.reRunTask');
+      await eventually(() => rerunExecution !== undefined, 'the real Rerun Last Task to start the selected unit');
+      return rerunExecution;
+    }, 'user Rerun Last Task');
+    const audit = { code, dirty: entry.isDirty, saved: rerunSaved,
+      processes: nativeCalls(rerunStart).map(call => ({ order: call.order, args: call.args, shell: call.options?.shell, editorState: call.editorState })),
+      executions: customExecutions.slice(rerunCustom) };
+    console.log('VAS user-rerun evidence:', JSON.stringify(audit));
+    assert.equal(customExecutions.length - rerunCustom, 1, 'real user rerun must call a fresh CustomExecution');
+    assert.deepEqual(customExecutions[rerunCustom].closeCodes, [code], JSON.stringify(audit));
+    if (entry.isDirty) {
+      assert.notEqual(code, 0, JSON.stringify(audit));
+      assert.equal(buildCalls(rerunStart).length, 0, 'an unsaved rerun must fail before native build');
+    } else {
+      assert.ok(rerunSaved.length, 'clean rerun requires an observed workbench save');
+      assert.equal(code, 0, JSON.stringify(audit));
+      const builds = buildCalls(rerunStart);
+      assert.equal(builds.length, 1, 'a saved user rerun must invoke the actual compiler');
+      assert.equal(builds[0].editorState.dirty, false, 'the entry must already be clean when native compilation starts');
+      assert.ok(builds[0].editorState.saves > 0 && rerunSaved.some(event => event.order < builds[0].order),
+        'the observed workbench save must precede the native --project spawn');
+      assert.ok(builds[0].order < customExecutions[rerunCustom].closeEvents[0].order, 'native spawn must precede successful PTY close');
+    }
+  } finally { processAudit = undefined; rerunListener.dispose(); rerunSaveListener.dispose(); }
+  if (entry.isDirty) assert.equal(await entry.save(), true);
+  console.log('PASS: hardlink include guards, same-Task fresh PTY/rejection, per-unit isolation, explicit save, and real user rerun saved-input invariant');
 }
 
 async function projectTests(folder, second) {
