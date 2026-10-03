@@ -5,7 +5,8 @@ SRCDIR = ../../source
 OBJDIR = obj
 
 SRCNAMES = \
-  main.cpp
+  main.cpp \
+  vas_project.cpp
 
 OBJ = $(addprefix $(OBJDIR)/, $(notdir $(SRCNAMES:.cpp=.o))) obj/scriptbuilder.o obj/scripthelper.o
 BIN = ../../bin/asbuild
@@ -17,6 +18,9 @@ $(BIN): $(OBJ)
 	$(CXX) -o $(BIN) $(OBJ) -static -langelscript -dynamic -lpthread -L ../../../../angelscript/lib
 	@echo -------------------------------------------------------------------
 	@echo Done.
+
+$(OBJDIR)/main.o: $(SRCDIR)/vas_project.h
+$(OBJDIR)/vas_project.o: $(SRCDIR)/vas_project.h ../../vendor/nlohmann/json.hpp
 
 $(OBJDIR)/%.o: $(SRCDIR)/%.cpp
 	$(CXX) $(CXXFLAGS) -o $@ -c $<

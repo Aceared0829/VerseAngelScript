@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "name": "Native contract 文😀",
+  "compilationUnits": [
+    {
+      "id": "main",
+      "entry": "src/main.vas",
+      "hostApi": { "config": "host/default.txt" },
+      "output": "build/main.vasbc"
+    },
+    {
+      "id": "other-host",
+      "entry": "src/main.vas",
+      "hostApi": { "config": "host/alternate.txt" },
+      "output": "build/other.vasbc"
+    }
+  ]
+}
