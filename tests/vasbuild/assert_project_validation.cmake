@@ -158,13 +158,29 @@ foreach(bytes IN ITEMS "128" "192;175" "237;160;128" "244;144;128;128" "194")
 endforeach()
 string(ASCII 1 raw_control)
 run_bad_manifest("{\"name\":\"${raw_control}\"}")
-# The unexpected token starts at physical byte 9: three UTF-8 name bytes cannot
-# turn this into a character-indexed offset. Error positions use byte columns.
-run_bad_manifest("{\n\"文\":?}")
-expect_json("${descriptor}" project_json errors 0 code)
-expect_json("${descriptor}" 2 errors 0 row)
-expect_json("${descriptor}" 7 errors 0 column)
-expect_json("${descriptor}" 9 errors 0 byteOffset)
+# Control the physical newlines explicitly: ordinary file(WRITE) uses the
+# host's text mode. Both encodings must report UTF-8 byte positions, counting
+# CR in the absolute offset while keeping the second-line column unchanged.
+foreach(newline IN ITEMS LF CRLF)
+	file(CONFIGURE OUTPUT "${project_file}" CONTENT "{\n\"文\":?}\n"
+		@ONLY NEWLINE_STYLE "${newline}")
+	file(READ "${project_file}" physical_bytes HEX)
+	if(newline STREQUAL "LF")
+		expect_equal("${physical_bytes}" "7b0a22e69687223a3f7d0a" "LF manifest bytes")
+		set(expected_offset 9)
+	else()
+		expect_equal("${physical_bytes}" "7b0d0a22e69687223a3f7d0d0a" "CRLF manifest bytes")
+		set(expected_offset 10)
+	endif()
+	run_descriptor(OFF "${project_file}")
+	run_report(OFF arguments OFF --project "${project_file}" --unit main)
+	expect_count(section_loaded 0)
+	expect_no_path("${project_root}/build")
+	expect_json("${descriptor}" project_json errors 0 code)
+	expect_json("${descriptor}" 2 errors 0 row)
+	expect_json("${descriptor}" 7 errors 0 column)
+	expect_json("${descriptor}" "${expected_offset}" errors 0 byteOffset)
+endforeach()
 
 # Valid paired escapes decode to the same UTF-8 scalar as a literal spelling.
 file(WRITE "${project_file}" "{\"schemaVersion\":1,\"name\":\"\\uD83D\\uDE00\",\"compilationUnits\":[${valid}]}")
