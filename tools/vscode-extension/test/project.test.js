@@ -178,3 +178,23 @@ test('regular-file fingerprints and source reads are bounded and do not block on
     }
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
+
+test('clean editor state skips dependency identity probes and physical matching is cancellable', async () => {
+  const { requireProjectReady } = require('../src/project');
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vas-ready-probes-'));
+  const folder = { uri: { scheme: 'file', fsPath: root } }, project = path.join(root, 'vas-project.json');
+  const vscode = { workspace: { isTrusted: true, textDocuments: [] } };
+  const stat = fs.stat;
+  try {
+    let probes = 0;
+    fs.stat = async (...args) => { probes++; return stat(...args); };
+    await requireProjectReady(vscode, folder, project, Array.from({ length: 1000 }, (_, index) => path.join(root, `include${index}.vas`)));
+    assert.equal(probes, 0, 'clean editor state must not traverse dependency identities');
+    const dirty = path.join(root, 'notes.txt'); await fs.writeFile(dirty, 'notes');
+    vscode.workspace.textDocuments.push({ isDirty: true, uri: { scheme: 'file', fsPath: dirty } });
+    const token = cancellation();
+    fs.stat = async (...args) => { probes++; token.cancel(); return stat(...args); };
+    await assert.rejects(requireProjectReady(vscode, folder, project, [path.join(root, 'shared.vas')], token), /cancelled/);
+    assert.equal(probes, 1, 'cancellation must stop before probing the include graph');
+  } finally { fs.stat = stat; await fs.rm(root, { recursive: true, force: true }); }
+});

@@ -86,6 +86,7 @@ class ProjectReport {
         requireValue(string(record.section) && typeof record.utf8Valid === 'boolean', 'invalid loaded section');
         const item = identity(record, 'section');
         this.observed.set(item.key, item);
+        if (item.file === undefined) throw new Error('Loaded source path has invalid UTF-8; saved input aliases cannot be verified.');
         if (!record.utf8Valid) this.invalidSources.add(item.key);
         break;
       }
@@ -143,6 +144,9 @@ class ProjectBuildProcess {
       if (this.cancelled || this.finished) return;
       if (record.type === 'section_loaded' || record.type === 'include_attempt') {
         const item = identity(record, record.type === 'section_loaded' ? 'section' : 'resolved');
+        // Register the participating path before asynchronous realpath/watch
+        // work, so completion freshness cannot miss an already dirty alias.
+        if (item?.file) plan.observeInput?.(item.file);
         if (item) this.observationWork = this.observationWork.then(async () => {
           if (!this.cancelled && !this.report.error) await callbacks.observe?.(item);
         }).catch(error => {
@@ -239,6 +243,10 @@ class ProjectDependencies {
       throw error;
     }
     this.entries.set(plan.key, next);
+  }
+  inputFiles(key) {
+    const entry = this.entries.get(key);
+    return entry ? [...new Set([...entry.inputs, ...[...entry.observed.values()].flatMap(item => item.file ? [item.file] : [])])] : [];
   }
   outputOnly(file) {
     return !this.relevant(file) && [...this.entries.values()].some(entry => entry.outputs.some(output => sameFileName(output, file)));

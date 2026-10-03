@@ -112,7 +112,7 @@ function createProjectTask(definition, folder, name, builds, selected) {
   const request = projectRequest(definition, folder, executable);
   const execution = new vscode.CustomExecution(async () => {
     const terminal = createProjectTerminal({ vscode, diagnostics: builds.projectDiagnostics, dependencies: builds.dependencies,
-      prepare: cancel => projectPlan(request, selected, { vscode, folder, cancel }),
+      prepare: cancel => projectPlan(request, selected, { vscode, folder, cancel, dependencies: builds.dependencies }),
       done: () => builds.active.delete(terminal) });
     builds.active.add(terminal);
     return terminal;

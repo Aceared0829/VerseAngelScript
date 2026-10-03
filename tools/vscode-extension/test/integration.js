@@ -171,6 +171,72 @@ async function singleRootProjectTests(folder) {
   console.log('PASS: real single-root/one-unit picker, cancellation without artifacts, active include, legacy/versioned native bytecode equivalence and manifest tool traps');
 }
 
+async function dirtyIncludeAliasTests(folder, fixture) {
+  const alias = fixture.includeAlias;
+  assert.ok(alias, 'the multi-unit fixture must include a dedicated physical-alias unit');
+  const uri = relative => vscode.Uri.joinPath(folder.uri, relative);
+  const unit = fixture.manifest.compilationUnits.find(item => item.id === alias.unit);
+  const [includedStat, aliasStat] = await Promise.all([alias.include, alias.alias].map(relative =>
+    fs.stat(uri(relative).fsPath, { bigint: true })));
+  assert.notEqual(includedStat.ino, 0n, 'the fixture must expose a physical file identity');
+  assert.equal(includedStat.dev, aliasStat.dev);
+  assert.equal(includedStat.ino, aliasStat.ino, 'the included .vas and editor .txt must be hardlinks');
+  await missing(uri(unit.output).fsPath, 'the never-built alias unit output');
+
+  const document = await vscode.workspace.openTextDocument(uri(alias.alias));
+  assert.equal(document.languageId, 'plaintext', 'the alias must not be caught by the .vas editor guard');
+  await replaceText(document, document.getText() + '// dirty physical include alias\n');
+  const task = await projectTask(folder, alias.unit);
+  const diagnosticUris = [alias.entry, alias.include, alias.alias, unit.output].map(uri);
+  const published = [];
+  const recordDiagnostics = () => {
+    for (const file of diagnosticUris) {
+      const diagnostics = vscode.languages.getDiagnostics(file);
+      if (diagnostics.length) published.push({ file: file.toString(), messages: diagnostics.map(item => item.message) });
+    }
+  };
+  const listener = vscode.languages.onDidChangeDiagnostics(recordDiagnostics);
+  try {
+    // This unit has no previous observations. The real native compiler can read
+    // the saved include and even write bytecode before its report identifies the
+    // dirty editor alias. The task must still reject success and publication.
+    const firstStart = processCalls.length;
+    assert.notEqual(await taskExit(() => vscode.tasks.executeTask(task), 'first discovery of a dirty include alias'), 0,
+      'a successful saved-disk compile must not report a successful task for a dirty include alias');
+    assert.equal(buildCalls(firstStart).length, 1, 'the first build must discover the include through the real compiler');
+    assert.equal(document.isDirty, true, 'include discovery must not save the alias editor');
+    recordDiagnostics();
+    assert.deepEqual(published, [], 'the rejected first discovery must not publish warning or success diagnostics');
+
+    const repeatStart = processCalls.length;
+    assert.notEqual(await taskExit(() => vscode.tasks.executeTask(task), 'previously observed dirty include alias'), 0);
+    assert.equal(buildCalls(repeatStart).length, 0, 'retained include observations must block the next native --project launch');
+    recordDiagnostics();
+    assert.deepEqual(published, [], 'the rejected repeat must not publish diagnostics');
+
+    // Observations belong to their compilation unit. This dirty alias is not an
+    // input to main-unit, so it cannot become a workspace-wide .txt build ban.
+    assert.equal(await projectTaskExit(folder, 'main-unit'), 0);
+    assert.equal(document.isDirty, true, 'an unrelated unit must leave the alias editor dirty');
+    recordDiagnostics();
+    assert.deepEqual(published, [], 'an unrelated build must not publish the rejected alias unit diagnostics');
+  } finally { listener.dispose(); }
+
+  assert.equal(await document.save(), true);
+  assert.equal(document.isDirty, false);
+  const notes = await vscode.workspace.openTextDocument(uri(alias.unrelated));
+  await replaceText(notes, notes.getText() + 'Still unrelated and unsaved\n');
+  assert.equal(await projectTaskExit(folder, alias.unit), 0, 'saving the alias must allow a genuine successful build');
+  assert.ok((await fs.stat(uri(unit.output).fsPath)).size > 0);
+  await eventually(() => vscode.languages.getDiagnostics(uri(alias.include)).some(item =>
+    item.severity === vscode.DiagnosticSeverity.Warning), 'the saved include warning under its compiler-owned .vas identity');
+  assert.equal(vscode.languages.getDiagnostics(document.uri).length, 0,
+    'physical safety checks must not rewrite compiler diagnostic paths to the .txt editor alias');
+  assert.equal(notes.isDirty, true, 'a dirty unrelated .txt must not block or be silently saved by the build');
+  assert.equal(await notes.save(), true);
+  console.log('PASS: real hardlink include alias first-discovery rejection, no stale diagnostic publication, pre-launch repeat rejection, per-unit isolation and successful explicit save');
+}
+
 async function projectTests(folder, second) {
   const fixture = await fixtureFor(folder), other = await fixtureFor(second);
   const units = fixture.manifest.compilationUnits;
@@ -258,6 +324,8 @@ async function projectTests(folder, second) {
   await blockedProject([rootPick], 'dirty project manifest');
   await replaceText(manifest, manifestText);
   assert.equal(await manifest.save(), true);
+
+  await dirtyIncludeAliasTests(folder, fixture);
 
   // Persisted malformed JSON and unknown schema versions are rejected by the
   // authoritative native descriptor; no build or output directory is created.

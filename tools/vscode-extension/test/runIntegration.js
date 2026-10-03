@@ -21,6 +21,11 @@ async function createProjectFixture(root, single = false) {
   const source = name => `${projectPaths.source}/${name}`;
   const config = name => `${projectPaths.config}/${name}`;
   const output = name => `${projectPaths.output}/${name} 出力😀 $&;.vasbc`;
+  const includeAlias = single ? undefined : {
+    unit: 'included-file-alias', entry: source('alias entry 文😀.vas'),
+    include: source('alias include 文😀.vas'), alias: source('alias include 文😀.txt'),
+    unrelated: source('unrelated notes 文😀.txt')
+  };
   const files = {
     [source('main 文😀.vas')]: '#include "library 文😀.vas"\nvoid main() { int result = LibraryValue(); }\n',
     [source('library 文😀.vas')]: 'int LibraryValue() { return 42; }\n',
@@ -32,7 +37,15 @@ async function createProjectFixture(root, single = false) {
     [config('host 文😀.txt')]: 'func "int HostOnly()"\n',
     [config('invalid 文😀.txt')]: 'func "nonsense invalid syntax"\n'
   };
+  if (includeAlias) Object.assign(files, {
+    [includeAlias.entry]: '#include "alias include 文😀.vas"\nvoid main() { int result = AliasValue(); }\n',
+    [includeAlias.alias]: 'int AliasValue() { int value; int copy = value; return 42; }\n',
+    [includeAlias.unrelated]: 'Unrelated project notes\n'
+  });
   for (const [name, content] of Object.entries(files)) await fs.writeFile(path.join(root, name), content);
+  // Hardlinks exercise physical identity on Windows without symlink privileges.
+  // Never skip this regression or silently replace the alias with a copied file.
+  if (includeAlias) await fs.link(path.join(root, includeAlias.alias), path.join(root, includeAlias.include));
   // The manifest's historical tool fields must never be discovered or invoked.
   // The process audit in the Extension Host also catches a failed spawn attempt,
   // including Windows refusing to launch a batch file without a shell.
@@ -55,10 +68,13 @@ async function createProjectFixture(root, single = false) {
     unit('host-present', 'host 文😀.vas', 'host 文😀.txt'),
     unit('invalid-config', 'main 文😀.vas', 'invalid 文😀.txt')
   ];
+  // Append only: existing tests intentionally select the first/main and second/warning units.
+  if (includeAlias) compilationUnits.push({ id: includeAlias.unit, entry: includeAlias.entry,
+    hostApi: { config: config('empty 文😀.txt') }, output: output(includeAlias.unit) });
   const manifest = { schemaVersion: 1, name: 'Project 工程😀 $&;', compilationUnits };
   await writeJson(path.join(root, 'vas-project.json'), manifest);
-  await writeJson(path.join(root, 'integration-project-fixture.json'), { projectPaths, trap, manifest });
-  return { projectPaths, trap, manifest };
+  await writeJson(path.join(root, 'integration-project-fixture.json'), { projectPaths, trap, manifest, includeAlias });
+  return { projectPaths, trap, manifest, includeAlias };
 }
 
 function launch(executable, args, mode) {

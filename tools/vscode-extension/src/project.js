@@ -156,43 +156,61 @@ async function readSourceText(file, cancel, limit = 16 * 1024 * 1024) {
   return undefined;
 }
 
-async function requireProjectReady(vscode, folder, project, configs = []) {
-  if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace before building a VAS project.');
-  const dirty = vscode.workspace.textDocuments.find(document => document.isDirty && document.uri.scheme === 'file' &&
-    (document.uri.fsPath.toLowerCase().endsWith('.vas') || sameFileName(document.uri.fsPath, project) ||
-      configs.some(config => sameFileName(document.uri.fsPath, config))));
-  if (dirty) throw new Error(`Save the VAS project input before building: ${dirty.uri.fsPath}`);
-  // A dirty editor may name a symlink/hardlink target rather than the compiler's
-  // lexical config identity. Compare physical identity only for safety checks.
-  const inputs = await Promise.all([project, ...configs].map(async file => {
-    try { const stat = await fs.stat(file, { bigint: true }); return { dev: stat.dev, ino: stat.ino, real: await fs.realpath(file) }; }
-    catch { return undefined; }
-  }));
-  for (const document of vscode.workspace.textDocuments) {
-    if (!document.isDirty || document.uri.scheme !== 'file') continue;
-    let alias;
-    try {
-      const stat = await fs.stat(document.uri.fsPath, { bigint: true }), real = await fs.realpath(document.uri.fsPath);
-      alias = inputs.some(input => input && (sameFileName(input.real, real) ||
-        (stat.ino !== 0n && input.dev === stat.dev && input.ino === stat.ino)));
-    } catch { /* Direct lexical checks above still cover missing unsaved inputs. */ }
-    if (alias) throw new Error(`Save the VAS project input before building: ${document.uri.fsPath}`);
+async function requireProjectReady(vscode, folder, project, configs = [], cancel) {
+  function ready() {
+    if (cancel?.cancelled) throw new Error('Project selection cancelled.');
+    if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace before building a VAS project.');
+    if (folder.uri.scheme !== 'file' || !contains(folder.uri.fsPath, project)) throw new Error('Open a filesystem workspace folder for Build Project.');
   }
-  if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace before building a VAS project.');
-  if (folder.uri.scheme !== 'file' || !contains(folder.uri.fsPath, project)) throw new Error('Open a filesystem workspace folder for Build Project.');
+  ready();
+  const dirty = vscode.workspace.textDocuments.filter(document => document.isDirty && document.uri.scheme === 'file');
+  // Most builds have no dirty editors. Do not stat/realpath an entire include
+  // graph when there is no unsaved document to compare it with.
+  if (!dirty.length) return;
+  const files = [...new Set([project, ...configs])];
+  for (const document of dirty) {
+    if (document.uri.fsPath.toLowerCase().endsWith('.vas') || files.some(file => sameFileName(document.uri.fsPath, file))) {
+      throw new Error(`Save the VAS project input before building: ${document.uri.fsPath}`);
+    }
+  }
+  async function physical(file) {
+    ready();
+    try {
+      const stat = await fs.stat(file, { bigint: true });
+      ready();
+      const real = await fs.realpath(file);
+      return { dev: stat.dev, ino: stat.ino, real };
+    } catch (error) { ready(); return undefined; }
+  }
+  // A dirty editor may name a symlink or hardlink target. Only these dirty
+  // documents require physical matching. Sequential probes bound concurrency
+  // and cancellation is checked between every filesystem operation.
+  const identities = [];
+  for (const document of dirty) {
+    const identity = await physical(document.uri.fsPath);
+    if (identity) identities.push({ ...identity, document });
+  }
+  if (identities.length) for (const file of files) {
+    const input = await physical(file);
+    if (!input) continue;
+    const alias = identities.find(item => sameFileName(input.real, item.real) ||
+      (item.ino !== 0n && input.dev === item.dev && input.ino === item.ino));
+    if (alias) throw new Error(`Save the VAS project input before building: ${alias.document.uri.fsPath}`);
+  }
+  ready();
 }
 
 async function snapshotDescriptor({ vscode, folder, project, executable, cancel }) {
-  await requireProjectReady(vscode, folder, project);
+  await requireProjectReady(vscode, folder, project, [], cancel);
   const before = await fingerprint(project, 1024 * 1024, cancel);
   if (before.startsWith('unreadable:')) throw new Error(`VAS project manifest is not a file: ${project}`);
   if (!(await fs.stat(executable)).isFile()) throw new Error(`VAS compiler is not a file: ${executable}`);
-  await requireProjectReady(vscode, folder, project);
+  await requireProjectReady(vscode, folder, project, [], cancel);
   const descriptor = await describeProject(executable, project, cancel);
   if (!sameFileName(descriptor.project, project) || !sameFileName(descriptor.projectRoot, folder.uri.fsPath)) {
     throw new Error('The compiler described a different VAS project.');
   }
-  await requireProjectReady(vscode, folder, project, descriptor.compilationUnits.flatMap(unit => [unit.hostApi.config, unit.entry]));
+  await requireProjectReady(vscode, folder, project, descriptor.compilationUnits.flatMap(unit => [unit.hostApi.config, unit.entry]), cancel);
   if (before !== await fingerprint(project, 1024 * 1024, cancel)) throw new Error('VAS manifest changed during selection. Build Project again.');
   const configVersions = new Map();
   for (const unit of descriptor.compilationUnits) {
@@ -201,7 +219,7 @@ async function snapshotDescriptor({ vscode, folder, project, executable, cancel 
   return { descriptor, manifestFingerprint: before, configVersions };
 }
 
-async function projectPlan(request, selected, { vscode, folder, cancel }) {
+async function projectPlan(request, selected, { vscode, folder, cancel, dependencies }) {
   if (compilerPath(vscode.workspace.getConfiguration('vas', folder.uri)) !== request.executable) throw new Error('VAS compiler setting changed. Build Project again.');
   const snapshot = await snapshotDescriptor({ vscode, folder, project: request.project, executable: request.executable, cancel });
   const { descriptor } = snapshot;
@@ -212,19 +230,25 @@ async function projectPlan(request, selected, { vscode, folder, cancel }) {
   }
   if (selected && selected.configVersions.get(unit.hostApi.config) !== await fileVersion(unit.hostApi.config)) throw new Error('VAS host configuration changed after selection. Build Project again.');
   const configFingerprint = await fingerprint(unit.hostApi.config, 16 * 1024 * 1024, cancel);
-  await requireProjectReady(vscode, folder, request.project, [unit.hostApi.config, unit.entry]);
+  await requireProjectReady(vscode, folder, request.project, [unit.hostApi.config, unit.entry], cancel);
   const plan = { executable: request.executable, project: descriptor.project, source: unit.entry, config: unit.hostApi.config,
     output: unit.output, unit: unit.id, cwd: descriptor.projectRoot, projectSchemaVersion: descriptor.projectSchemaVersion,
     legacyProject: descriptor.legacyProject, key: JSON.stringify([descriptor.project, unit.id]),
     args: ['--report=jsonl', '--project', request.project, '--unit', unit.id] };
   plan.watchInputs = await Promise.all([plan.project, plan.source, plan.config].map(file => fs.realpath(file).catch(() => file)));
+  // Keep exact compiler paths here; physical identity is checked only when
+  // comparing these participating inputs with dirty editor documents.
+  const observedInputs = new Set();
+  plan.observeInput = file => observedInputs.add(file);
+  const inputs = () => [...new Set([plan.config, plan.source,
+    ...(dependencies?.inputFiles(plan.key) || []), ...observedInputs])];
   plan.checkFresh = async () => {
-    await requireProjectReady(vscode, folder, request.project, [plan.config, plan.source]);
+    await requireProjectReady(vscode, folder, request.project, inputs(), cancel);
     if (compilerPath(vscode.workspace.getConfiguration('vas', folder.uri)) !== plan.executable ||
       await fingerprint(request.project, 1024 * 1024, cancel) !== snapshot.manifestFingerprint || await fingerprint(plan.config, 16 * 1024 * 1024, cancel) !== configFingerprint) {
       throw new Error('VAS manifest, host configuration or compiler setting changed. Build Project again.');
     }
-    await requireProjectReady(vscode, folder, request.project, [plan.config, plan.source]);
+    await requireProjectReady(vscode, folder, request.project, inputs(), cancel);
   };
   await plan.checkFresh();
   return plan;

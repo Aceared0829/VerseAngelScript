@@ -132,3 +132,83 @@ test('file-level nonregular output diagnostics never wait for file contents', { 
     assert.equal(state.collections[0].entries[0][1][0].range.start.character, 0);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
+
+test('real project rejects newly discovered dirty include aliases, remembers inputs, and permits unrelated dirty documents',
+  { skip: !process.env.VAS_TEST_COMPILER }, async () => {
+    const { projectPlan, projectRequest } = require('../src/project');
+    const { ProjectBuildProcess } = require('../src/projectReport');
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vas-dirty-include-alias-'));
+    const folder = { uri: { scheme: 'file', fsPath: root } }, project = path.join(root, 'vas-project.json');
+    try {
+      await fs.writeFile(path.join(root, 'api.txt'), '// empty interface\n');
+      await fs.writeFile(path.join(root, 'main.vas'), '#include "shared.vas"\nvoid main() { Shared(); }\n');
+      await fs.writeFile(path.join(root, 'shared.txt'), 'int Shared() { return 1; }\n');
+      await fs.link(path.join(root, 'shared.txt'), path.join(root, 'shared.vas'));
+      await fs.writeFile(path.join(root, 'unrelated.txt'), 'unrelated notes');
+      await fs.writeFile(project, JSON.stringify({ schemaVersion: 1, compilationUnits: [
+        { id: 'main', entry: 'main.vas', hostApi: { config: 'api.txt' }, output: 'out/main.vasbc' }
+      ] }));
+      const dirty = { isDirty: true, uri: { scheme: 'file', fsPath: path.join(root, 'shared.txt') } };
+      const host = { ...vscode, workspace: { isTrusted: true, textDocuments: [dirty],
+        getConfiguration: () => ({ inspect: () => ({ globalValue: process.env.VAS_TEST_COMPILER }) }) } };
+      const state = store(), request = projectRequest({ project: 'vas-project.json', unit: 'main' }, folder, process.env.VAS_TEST_COMPILER);
+      let starts = 0;
+      async function execute() {
+        const output = [];
+        const terminal = createProjectTerminal({ vscode: host, ...state, done() {},
+          prepare: cancel => projectPlan(request, undefined, { vscode: host, folder, cancel, dependencies: state.dependencies }),
+          createProcess: (plan, callbacks) => { starts++; return new ProjectBuildProcess(plan, callbacks); } });
+        terminal.onDidWrite(text => output.push(text));
+        const closed = new Promise(resolve => terminal.onDidClose(resolve));
+        terminal.open();
+        return { code: await closed, output: output.join('') };
+      }
+      const first = await execute();
+      assert.equal(starts, 1, 'first native build discovers the previously unknown include');
+      assert.equal(first.code, 1, first.output);
+      assert.match(first.output, /Save the VAS project input.*shared\.txt/);
+      assert.doesNotMatch(first.output, /VAS: Built project unit/);
+      assert.ok(state.collections.every(collection => collection.entries.length === 0), 'dirty-alias result must not publish diagnostics');
+      assert.ok(state.dependencies.inputFiles(JSON.stringify([project.replaceAll('\\', '/'), 'main'])).some(file => file.endsWith('shared.vas')));
+      const second = await execute();
+      assert.equal(second.code, 1); assert.equal(starts, 1, 'previous observation blocks compilation while alias remains dirty');
+      dirty.isDirty = false;
+      host.workspace.textDocuments.push({ isDirty: true, uri: { scheme: 'file', fsPath: path.join(root, 'unrelated.txt') } });
+      const saved = await execute();
+      assert.equal(saved.code, 0, saved.output); assert.equal(starts, 2);
+      assert.match(saved.output, /VAS: Built project unit main/);
+    } finally { await fs.rm(root, { recursive: true, force: true }); }
+  });
+
+test('actual POSIX invalid-byte include path fails closed without replacing prior dependencies',
+  { skip: !process.env.VAS_TEST_COMPILER || process.platform === 'win32' }, async () => {
+    const { projectPlan, projectRequest } = require('../src/project');
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vas-raw-include-'));
+    const folder = { uri: { scheme: 'file', fsPath: root } }, project = path.join(root, 'vas-project.json');
+    try {
+      await fs.writeFile(path.join(root, 'api.txt'), '// empty interface\n');
+      const include = Buffer.concat([Buffer.from('raw-'), Buffer.from([0xff]), Buffer.from('.vas')]);
+      await fs.writeFile(path.join(root, 'main.vas'), Buffer.concat([Buffer.from('#include "'), include, Buffer.from('"\nvoid main() { Shared(); }\n')]));
+      await fs.writeFile(path.join(root, 'shared.txt'), 'int Shared() { return 1; }\n');
+      await fs.link(path.join(root, 'shared.txt'), Buffer.concat([Buffer.from(root + '/'), include]));
+      await fs.writeFile(project, JSON.stringify({ schemaVersion: 1, compilationUnits: [
+        { id: 'main', entry: 'main.vas', hostApi: { config: 'api.txt' }, output: 'out/main.vasbc' }
+      ] }));
+      const host = { ...vscode, workspace: { isTrusted: true, textDocuments: [],
+        getConfiguration: () => ({ inspect: () => ({ globalValue: process.env.VAS_TEST_COMPILER }) }) } };
+      const state = store(), request = projectRequest({ project: 'vas-project.json', unit: 'main' }, folder, process.env.VAS_TEST_COMPILER);
+      const plan = await projectPlan(request, undefined, { vscode: host, folder, dependencies: state.dependencies });
+      state.dependencies.update(plan, { observed: new Map([['previous', { file: path.join(root, 'previous.vas') }]]) }, true);
+      const output = [];
+      const terminal = createProjectTerminal({ vscode: host, ...state, done() {}, prepare: async () => plan });
+      terminal.onDidWrite(text => output.push(text));
+      const closed = new Promise(resolve => terminal.onDidClose(resolve));
+      terminal.open();
+      assert.equal(await closed, 1);
+      assert.match(output.join(''), /saved input aliases cannot be verified/);
+      assert.doesNotMatch(output.join(''), /VAS: Built project unit/);
+      assert.ok(state.dependencies.entries.get(plan.key).observed.has('previous'));
+      assert.ok([...state.dependencies.entries.get(plan.key).observed.keys()].some(key => key.startsWith('["bytes"')));
+      assert.ok(state.collections.every(collection => collection.entries.length === 0));
+    } finally { await fs.rm(root, { recursive: true, force: true }); }
+  });

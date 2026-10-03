@@ -58,10 +58,10 @@ test('raw byte identities remain distinct/non-bindable, section case and literal
   const report = new ProjectReport(plan); report.write(line(start()));
   const loaded = (seq, raw) => base('section_loaded', seq, { section: '/display�.vas', utf8Valid: true,
     invalidUtf8Fields: ['section'], rawBytes: { section: raw } });
-  report.write(line(loaded(2, 'ff'))); report.write(line(loaded(3, 'fe')));
-  report.write(line(base('section_loaded', 4, { section: '/display�.vas', utf8Valid: true })));
-  report.write(line(base('section_loaded', 5, { section: '/Display�.vas', utf8Valid: true })));
-  assert.equal(report.observed.size, 4);
+  assert.notEqual(identity(loaded(2, 'ff'), 'section').key, identity(loaded(3, 'fe'), 'section').key);
+  report.write(line(base('section_loaded', 2, { section: '/display�.vas', utf8Valid: true })));
+  report.write(line(base('section_loaded', 3, { section: '/Display�.vas', utf8Valid: true })));
+  assert.equal(report.observed.size, 2);
   assert.equal(identity(loaded(2, 'ff'), 'section').file, undefined);
   const diagnostic = base('diagnostic', 6, { severity: 'error', section: '/display�.vas', row: 1, column: 1, message: 'bad',
     invalidUtf8Fields: ['section'], rawBytes: { section: 'ff' } });
@@ -178,4 +178,63 @@ test('valid-looking complete report followed by transport error is marked invali
   f.child.stdout.end(); f.child.stderr.end(); f.child.emit('close', 0);
   assert.equal(await f.ended, 1);
   assert.match(f.controller.report.error.message, /transport broken/);
+});
+
+test('participating input registration precedes asynchronous observation and completion waits for it', async () => {
+  const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => true;
+  const files = [], phases = [];
+  let release, completed = false;
+  const invocation = { ...plan, observeInput: file => files.push(file) };
+  const ended = new Promise(resolve => {
+    const process = new ProjectBuildProcess(invocation, { output() {}, diagnostic() {},
+      observe: async () => { phases.push('observing'); await new Promise(done => { release = done; }); },
+      complete: code => { completed = true; resolve(code); } }, () => child);
+    process.start();
+  });
+  const included = path.join(root, 'shared.vas');
+  child.stdout.write(Buffer.concat([line(start()), line(base('section_loaded', 2, { section: included, utf8Valid: true })), line(result(3))]));
+  assert.deepEqual(files, [included], 'input membership is synchronous with validated report parsing');
+  child.stdout.end(); child.stderr.end(); child.emit('close', 0);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(phases, ['observing']); assert.equal(completed, false);
+  release(); assert.equal(await ended, 0);
+});
+
+test('cancellation during asynchronous input observation cannot complete successfully', async () => {
+  const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => true;
+  const files = [];
+  let release, process;
+  const ended = new Promise(resolve => {
+    process = new ProjectBuildProcess({ ...plan, observeInput: file => files.push(file) }, { output() {}, diagnostic() {},
+      observe: () => new Promise(done => { release = done; }), complete: resolve }, () => child);
+    process.start();
+  });
+  const included = path.join(root, 'shared.vas');
+  child.stdout.write(Buffer.concat([line(start()), line(base('section_loaded', 2, { section: included, utf8Valid: true })), line(result(3))]));
+  await new Promise(resolve => setImmediate(resolve));
+  process.terminate(); child.stdout.end(); child.stderr.end(); child.emit('close', 0);
+  release(); assert.equal(await ended, 130); assert.deepEqual(files, [included]);
+});
+
+test('saved-input validation follows current dependency graph, not retained watch-only aliases', () => {
+  const deps = new ProjectDependencies();
+  deps.update(plan, { observed: new Map([['old', { file: '/old/include.vas' }]]) }, true);
+  deps.entries.get(plan.key).aliases.add('/old/include.txt');
+  assert.ok(deps.inputFiles(plan.key).includes('/old/include.vas'));
+  deps.update(plan, { observed: new Map([['new', { file: '/new/include.vas' }]]) }, true);
+  assert.equal(deps.inputFiles(plan.key).includes('/old/include.vas'), false);
+  assert.equal(deps.inputFiles(plan.key).includes('/old/include.txt'), false);
+  assert.ok(deps.inputFiles(plan.key).includes('/new/include.vas'));
+});
+
+
+test('an actually loaded raw-byte path fails saved-input verification and retains its lossless partial identity', () => {
+  const report = new ProjectReport(plan);
+  report.write(line(start()));
+  report.write(line(base('section_loaded', 2, { section: '/display�.vas', utf8Valid: true,
+    invalidUtf8Fields: ['section'], rawBytes: { section: '2f726177ff2e766173' } })));
+  report.write(line(result(3)));
+  assert.equal(report.end(0), 1);
+  assert.match(report.error.message, /saved input aliases cannot be verified/);
+  assert.ok(report.observed.has(JSON.stringify(['bytes', '2f726177ff2e766173'])));
 });
