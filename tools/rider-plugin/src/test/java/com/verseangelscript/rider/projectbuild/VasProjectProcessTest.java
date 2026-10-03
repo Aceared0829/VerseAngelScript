@@ -1,10 +1,12 @@
 package com.verseangelscript.rider.projectbuild;
 
+import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -31,6 +33,24 @@ public final class VasProjectProcessTest {
 
     private static final long TEST_TIMEOUT_MILLIS = 8000;
     private static final long OUTPUT_LIMIT = 8L * 1024 * 1024;
+    private Path fixtureClasses;
+
+    @Before
+    public void isolateJdkOnlyFixtureClass() throws Exception {
+        // Do not pass Gradle's Rider SDK classpath to CreateProcess on Windows: its
+        // expanded command line exceeds the 32 KiB limit. Copy the single JDK-only
+        // helper so both direct children and descendants have a tiny isolated classpath.
+        fixtureClasses = temporary.newFolder("fixture classes").toPath().toAbsolutePath();
+        String resource = VasProjectProcessFixture.class.getName().replace('.', '/') + ".class";
+        Path destination = fixtureClasses.resolve(resource);
+        Files.createDirectories(destination.getParent());
+        try (InputStream source = VasProjectProcessFixture.class.getResourceAsStream("/" + resource)) {
+            if (source == null) {
+                throw new IOException("Missing process fixture class: " + resource);
+            }
+            Files.copy(source, destination);
+        }
+    }
 
     @Test
     public void validatesTheActualNativeJvmExecutable() throws Exception {
@@ -70,11 +90,35 @@ public final class VasProjectProcessTest {
 
     @Test
     public void rejectsNonExecutableNativeFile() throws Exception {
-        assumeFalse(isWindows());
+        assumeFalse("Windows does not expose POSIX executable permission bits", isWindows());
         Path path = temporary.newFile("not-executable").toPath();
         Files.write(path, new byte[]{0x7f, 'E', 'L', 'F'});
         Files.setPosixFilePermissions(path, Set.of(PosixFilePermission.OWNER_READ));
         expectIOException(() -> VasProjectProcess.validateNativeCompiler(path.toString()));
+    }
+
+    @Test
+    public void doesNotInheritAnOversizedParentClasspath() throws Exception {
+        String original = System.getProperty("java.class.path");
+        String dependency = temporary.getRoot().toPath().resolve("unused SDK dependency.jar")
+            + System.getProperty("path.separator");
+        String oversized = dependency.repeat(1024);
+        assertTrue("Reproduce a classpath beyond the Windows command-line limit", oversized.length() > 32767);
+        try {
+            System.setProperty("java.class.path", oversized);
+            List<String> args = fixtureArgs("document");
+            assertEquals(fixtureClasses.toString(), args.get(1));
+            assertTrue("Only a small helper command should be launched",
+                args.stream().mapToInt(String::length).sum() + javaExecutable().toString().length() < 32767);
+            assertEquals("{\"plan\":true}", utf8(run("document", OUTPUT_LIMIT, null, () -> {}).stdout()));
+            assertEquals(fixtureClasses.toString(), utf8(run("classpath", OUTPUT_LIMIT, null, () -> {}).stdout()));
+        } finally {
+            if (original == null) {
+                System.clearProperty("java.class.path");
+            } else {
+                System.setProperty("java.class.path", original);
+            }
+        }
     }
 
     @Test
@@ -319,13 +363,9 @@ public final class VasProjectProcessTest {
             timeoutMillis, limit, guard, sink);
     }
 
-    private static List<String> fixtureArgs(String mode) {
-        // The child uses a different cwd, so every classpath entry must be absolute.
-        String classpath = Arrays.stream(System.getProperty("java.class.path").split(
-            java.util.regex.Pattern.quote(System.getProperty("path.separator"))))
-            .map(entry -> Path.of(entry).toAbsolutePath().toString())
-            .collect(java.util.stream.Collectors.joining(System.getProperty("path.separator")));
-        return new ArrayList<>(List.of("-cp", classpath, Fixture.class.getName(), mode));
+    private List<String> fixtureArgs(String mode) {
+        return new ArrayList<>(List.of("-cp", fixtureClasses.toString(),
+            VasProjectProcessFixture.class.getName(), mode));
     }
 
     private static Path javaExecutable() {
@@ -377,94 +417,4 @@ public final class VasProjectProcessTest {
         }
     }
 
-    /** A native java executable runs this fixture; it is not a compiler path shell wrapper. */
-    public static final class Fixture {
-        public static void main(String[] args) throws Exception {
-            switch (args[0]) {
-                case "arguments" -> {
-                    out(args[1] + "\n");
-                    System.err.write("diagnostic 漢字😀\n".getBytes(StandardCharsets.UTF_8));
-                    System.exit(7);
-                }
-                case "environment" -> out(Path.of(".").toRealPath() + "\n" + System.in.read() + "\n");
-                case "document" -> out("{\"plan\":true}");
-                case "stream" -> {
-                    byte[] unicode = "first 漢字😀\n".getBytes(StandardCharsets.UTF_8);
-                    // Split inside both the line and a multibyte UTF-8 sequence.
-                    System.out.write(unicode, 0, 7);
-                    System.out.flush();
-                    Thread.sleep(75);
-                    System.out.write(unicode, 7, unicode.length - 7);
-                    System.out.flush();
-                    Thread.sleep(250);
-                    out("second\n\n");
-                }
-                case "truncated" -> out("complete\ntruncated");
-                case "long-line" -> {
-                    out(ProcessHandle.current().pid() + "\n");
-                    writeBytes(System.out, 1024 * 1024 + 1, 'x');
-                    Thread.sleep(30000);
-                }
-                case "maximum-line" -> {
-                    writeBytes(System.out, 1024 * 1024, 'x');
-                    out("\n");
-                }
-                case "stdout-flood" -> {
-                    writeBytes(System.out, 1024 * 1024, '\n');
-                    Thread.sleep(30000);
-                }
-                case "stderr-large" -> {
-                    writeBytes(System.err, 1024 * 1024, 'e');
-                    out("done\n");
-                }
-                case "stderr-flood" -> {
-                    writeBytes(System.err, 4 * 1024 * 1024 + 1, 'e');
-                    Thread.sleep(30000);
-                }
-                case "marker" -> Files.writeString(Path.of(args[1]), "launched");
-                case "tree", "deep-tree", "stubborn-tree" -> {
-                    out(ProcessHandle.current().pid() + "\n");
-                    List<String> command = new ArrayList<>();
-                    command.add(javaExecutable().toString());
-                    command.addAll(fixtureArgs(switch (args[0]) {
-                        case "deep-tree" -> "tree";
-                        case "stubborn-tree" -> "stubborn";
-                        default -> "sleep";
-                    }));
-                    Process child = new ProcessBuilder(command).inheritIO().start();
-                    // Keep the parent available to reap children during cancellation.
-                    child.waitFor();
-                }
-                case "sleep", "stubborn" -> {
-                    if (args[0].equals("stubborn")) {
-                        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                            try {
-                                Thread.sleep(30000);
-                            } catch (InterruptedException ignored) {
-                            }
-                        }));
-                    }
-                    out(ProcessHandle.current().pid() + "\n");
-                    Thread.sleep(30000);
-                }
-                default -> throw new IllegalArgumentException(args[0]);
-            }
-        }
-
-        private static void out(String value) throws IOException {
-            System.out.write(value.getBytes(StandardCharsets.UTF_8));
-            System.out.flush();
-        }
-
-        private static void writeBytes(java.io.OutputStream output, int count, char value) throws IOException {
-            byte[] block = new byte[8192];
-            Arrays.fill(block, (byte) value);
-            while (count > 0) {
-                int size = Math.min(count, block.length);
-                output.write(block, 0, size);
-                count -= size;
-            }
-            output.flush();
-        }
-    }
 }

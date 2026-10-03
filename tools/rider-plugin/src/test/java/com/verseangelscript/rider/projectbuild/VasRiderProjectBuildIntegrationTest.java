@@ -19,12 +19,14 @@ import com.intellij.openapi.fileEditor.FileDocumentManager;
 import com.intellij.openapi.fileEditor.FileEditorManager;
 import com.intellij.openapi.fileEditor.OpenFileDescriptor;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.progress.impl.CoreProgressManager;
 import com.intellij.openapi.ui.TextFieldWithBrowseButton;
 import com.intellij.openapi.util.Disposer;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiDocumentManager;
 import com.intellij.testFramework.EdtTestUtil;
+import com.intellij.testFramework.PlatformTestUtil;
 import com.intellij.testFramework.ServiceContainerUtil;
 import com.jetbrains.rider.test.OpenSolutionParams;
 import com.jetbrains.rider.test.annotations.Solution;
@@ -54,6 +56,8 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Future;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -66,6 +70,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Real Rider Solution Host + registered action + actual native compiler.
+ * Rider invokes each test on EDT; the platform-backed wrapper pumps EDT events
+ * while the blocking case body and its cleanup execute on a pooled thread.
  * Unit selection, presentation, and launch/filesystem observers are hooked.
  * One filesystem observer uses a bounded barrier to verify EDT responsiveness;
  * actual filesystem validation and native processes are never replaced.
@@ -92,6 +98,10 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
 
     @Test
     void buildsExplicitUnitsWithDistinctHostConfigurations() throws Exception {
+        runCaseOffEdt(this::buildsExplicitUnitsWithDistinctHostConfigurationsOffEdt);
+    }
+
+    private void buildsExplicitUnitsWithDistinctHostConfigurationsOffEdt() throws Exception {
         try (Fixture fixture = fixture()) {
             EdtTestUtil.runInEdtAndWait(() -> {
                 assertInstanceOf(VasBuildProjectAction.class, ActionManager.getInstance().getAction("VAS.BuildProject"));
@@ -127,6 +137,10 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
 
     @Test
     void navigatesNestedUtf8DiagnosticsIndependentlyOfActiveEditor() throws Exception {
+        runCaseOffEdt(this::navigatesNestedUtf8DiagnosticsIndependentlyOfActiveEditorOffEdt);
+    }
+
+    private void navigatesNestedUtf8DiagnosticsIndependentlyOfActiveEditorOffEdt() throws Exception {
         try (Fixture fixture = fixture()) {
             Path middle = fixture.write("src/middle.vas", "#include \"nested/leaf.vas\"\n");
             Path leaf = fixture.write("src/nested/leaf.vas", UTF8_SOURCE);
@@ -178,6 +192,10 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
 
     @Test
     void navigatesExternalIncludeOnFirstVfsDiscovery() throws Exception {
+        runCaseOffEdt(this::navigatesExternalIncludeOnFirstVfsDiscoveryOffEdt);
+    }
+
+    private void navigatesExternalIncludeOnFirstVfsDiscoveryOffEdt() throws Exception {
         try (Fixture fixture = fixture()) {
             Path externalDirectory = Files.createTempDirectory("vas-native-external 漢😀 ").toAbsolutePath().normalize();
             Path externalLeaf = externalDirectory.resolve("external-leaf 漢😀.vas");
@@ -255,6 +273,10 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
 
     @Test
     void preservesLegacyWarningsAndLiteralUnicodeMetacharacterPaths() throws Exception {
+        runCaseOffEdt(this::preservesLegacyWarningsAndLiteralUnicodeMetacharacterPathsOffEdt);
+    }
+
+    private void preservesLegacyWarningsAndLiteralUnicodeMetacharacterPathsOffEdt() throws Exception {
         try (Fixture fixture = fixture()) {
             byte[] originalCompiler = Files.readAllBytes(fixture.compiler);
             Path literalCompiler = fixture.directory.resolve("compiler 漢😀 & $; ' ()" +
@@ -294,6 +316,10 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
 
     @Test
     void rejectsDirtyEntryManifestHostAndKnownInclude() throws Exception {
+        runCaseOffEdt(this::rejectsDirtyEntryManifestHostAndKnownIncludeOffEdt);
+    }
+
+    private void rejectsDirtyEntryManifestHostAndKnownIncludeOffEdt() throws Exception {
         try (Fixture fixture = fixture()) {
             Path include = fixture.write("src/nested/known.vas", "void included() {}\n");
             fixture.writePath(fixture.entry, "#include \"nested/known.vas\"\nvoid main() { included(); hostCall(); }\n");
@@ -324,6 +350,10 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
 
     @Test
     void rejectsDirtyPhysicalAliasOnFirstIncludeTraversal() throws Exception {
+        runCaseOffEdt(this::rejectsDirtyPhysicalAliasOnFirstIncludeTraversalOffEdt);
+    }
+
+    private void rejectsDirtyPhysicalAliasOnFirstIncludeTraversalOffEdt() throws Exception {
         try (Fixture fixture = fixture()) {
             String savedShared = "void included() {}\n";
             Path sharedText = fixture.write("src/shared.txt", savedShared);
@@ -405,6 +435,10 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
 
     @Test
     void retainsDependenciesAfterPartialTraversal() throws Exception {
+        runCaseOffEdt(this::retainsDependenciesAfterPartialTraversalOffEdt);
+    }
+
+    private void retainsDependenciesAfterPartialTraversalOffEdt() throws Exception {
         try (Fixture fixture = fixture()) {
             Path first = fixture.write("src/known-first.vas", "#include \"nested/known-second.vas\"\n");
             Path second = fixture.write("src/nested/known-second.vas", "void included() {}\n");
@@ -430,6 +464,10 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
 
     @Test
     void blocksUntrustedAndPassiveProjectExecution() throws Exception {
+        runCaseOffEdt(this::blocksUntrustedAndPassiveProjectExecutionOffEdt);
+    }
+
+    private void blocksUntrustedAndPassiveProjectExecutionOffEdt() throws Exception {
         try (Fixture fixture = fixture()) {
             fixture.trust(false);
             fixture.open(fixture.decoy);
@@ -457,6 +495,10 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
 
     @Test
     void cancelsSelectionAndSuppressesSupersededResults() throws Exception {
+        runCaseOffEdt(this::cancelsSelectionAndSuppressesSupersededResultsOffEdt);
+    }
+
+    private void cancelsSelectionAndSuppressesSupersededResultsOffEdt() throws Exception {
         try (Fixture fixture = fixture()) {
             fixture.selection = descriptor -> {
                 fixture.service.cancel();
@@ -492,6 +534,10 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
 
     @Test
     void preservesNewBuildWhenSupersededSelectionIsCancelled() throws Exception {
+        runCaseOffEdt(this::preservesNewBuildWhenSupersededSelectionIsCancelledOffEdt);
+    }
+
+    private void preservesNewBuildWhenSupersededSelectionIsCancelledOffEdt() throws Exception {
         try (Fixture fixture = fixture()) {
             assertNull(fixture.service.latest());
             AtomicInteger selectionOrder = new AtomicInteger();
@@ -531,6 +577,10 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
 
     @Test
     void suppressesResultsAfterInputsSettingsOrTrustChange() throws Exception {
+        runCaseOffEdt(this::suppressesResultsAfterInputsSettingsOrTrustChangeOffEdt);
+    }
+
+    private void suppressesResultsAfterInputsSettingsOrTrustChangeOffEdt() throws Exception {
         try (Fixture fixture = fixture()) {
             for (String change : List.of("input", "compiler", "trust")) {
                 Document document = fixture.document(fixture.entry);
@@ -565,6 +615,10 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
 
     @Test
     void invalidatesCompletedResultsAfterTrustOrCompilerChange() throws Exception {
+        runCaseOffEdt(this::invalidatesCompletedResultsAfterTrustOrCompilerChangeOffEdt);
+    }
+
+    private void invalidatesCompletedResultsAfterTrustOrCompilerChangeOffEdt() throws Exception {
         try (Fixture fixture = fixture()) {
             var first = fixture.build();
             assertTrue(first.success(), first.status());
@@ -622,6 +676,10 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
 
     @Test
     void invalidatesCompletedResultsAfterDependencyDirectoryChanges() throws Exception {
+        runCaseOffEdt(this::invalidatesCompletedResultsAfterDependencyDirectoryChangesOffEdt);
+    }
+
+    private void invalidatesCompletedResultsAfterDependencyDirectoryChangesOffEdt() throws Exception {
         try (Fixture fixture = fixture()) {
             Path dependency = fixture.write("src/nested/dependency.vas", "void included() {}\n");
             fixture.writePath(fixture.entry, "#include \"nested/dependency.vas\"\nvoid main() { included(); }\n");
@@ -710,6 +768,10 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
 
     @Test
     void ignoresBytecodeOutputChangesWithVasSuffix() throws Exception {
+        runCaseOffEdt(this::ignoresBytecodeOutputChangesWithVasSuffixOffEdt);
+    }
+
+    private void ignoresBytecodeOutputChangesWithVasSuffixOffEdt() throws Exception {
         try (Fixture fixture = fixture()) {
             Path output = fixture.entry.getParent().resolve("generated.vas");
             JsonObject definition = new JsonObject();
@@ -760,6 +822,10 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
 
     @Test
     void keepsFilesystemValidationOffEdt() throws Exception {
+        runCaseOffEdt(this::keepsFilesystemValidationOffEdtCase);
+    }
+
+    private void keepsFilesystemValidationOffEdtCase() throws Exception {
         try (Fixture fixture = fixture()) {
             Path unrelated = fixture.write("notes/unrelated.txt", "Saved unrelated note\n");
             Document note = fixture.document(unrelated);
@@ -866,6 +932,10 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
 
     @Test
     void rejectsMissingManifestWithoutActiveFileFallback() throws Exception {
+        runCaseOffEdt(this::rejectsMissingManifestWithoutActiveFileFallbackOffEdt);
+    }
+
+    private void rejectsMissingManifestWithoutActiveFileFallbackOffEdt() throws Exception {
         try (Fixture fixture = fixture()) {
             fixture.open(fixture.entry);
             Files.delete(fixture.manifest);
@@ -878,6 +948,73 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
             assertFalse(Files.exists(fixture.goodOutput), "a saved, compilable active entry is not a project manifest");
         }
         passed("rejectsMissingManifestWithoutActiveFileFallback");
+    }
+
+    @FunctionalInterface
+    private interface NativeCase {
+        void run() throws Exception;
+    }
+
+    /**
+     * Build 262's Rider EdtInvocationInterceptor runs @Test methods on EDT.
+     * PlatformTestUtil.waitForFuture pumps the IDE invocation queue and releases
+     * its write-intent lock while dispatching; a plain Future.get/join here would
+     * deadlock the worker's existing EdtTestUtil calls and production callbacks.
+     */
+    private static void runCaseOffEdt(NativeCase testCase) throws Exception {
+        var application = ApplicationManager.getApplication();
+        assertTrue(application.isDispatchThread(), "the Rider test entry point must retain the host's EDT lifecycle");
+        assertFalse(application.isWriteAccessAllowed(), "do not pump the case under a write action");
+        CompletableFuture<Throwable> completion = new CompletableFuture<>();
+        Future<?> worker = application.executeOnPooledThread(() -> {
+            Throwable failure = null;
+            try {
+                if (Thread.currentThread().isInterrupted()) {
+                    throw new InterruptedException("Native Rider case was cancelled before orchestration started");
+                }
+                // CoreProgressManager otherwise runs Backgroundable tasks in the
+                // caller's thread in unit/headless mode. This supported platform
+                // switch exercises the real pooled run + EDT callback path.
+                // Restore inside the worker's finally, after case/fixture cleanup:
+                // an outer timeout must not restore it while that work still runs.
+                PlatformTestUtil.withSystemProperty("intellij.progress.task.ignoreHeadless", "true", () -> {
+                    assertTrue(CoreProgressManager.shouldKeepTasksAsynchronous());
+                    assertFalse(application.isDispatchThread(), "blocking test orchestration must run off EDT");
+                    assertFalse(application.isReadAccessAllowed(), "the worker must not inherit an EDT read action");
+                    testCase.run();
+                });
+            } catch (Throwable thrown) {
+                failure = thrown;
+            } finally {
+                // Complete only after the test body, its cleanup, and property
+                // restoration. Future cancellation alone is not completion.
+                completion.complete(failure);
+            }
+        });
+        final Throwable failure;
+        try {
+            failure = PlatformTestUtil.waitForFuture(completion, TimeUnit.MINUTES.toMillis(3));
+        } catch (RuntimeException | Error waitingFailure) {
+            // Interrupted latches release their test barriers in finally. Keep
+            // dispatching EDT cleanup after interrupting the worker; never join
+            // it from EDT or mistake worker.cancel(true) for finished cleanup.
+            boolean interrupted = Thread.interrupted()
+                || waitingFailure.getCause() instanceof InterruptedException;
+            worker.cancel(true);
+            try {
+                PlatformTestUtil.waitForFuture(completion, TimeUnit.SECONDS.toMillis(10));
+            } catch (RuntimeException | Error cleanupFailure) {
+                waitingFailure.addSuppressed(cleanupFailure);
+            } finally {
+                if (interrupted) Thread.currentThread().interrupt();
+            }
+            throw waitingFailure;
+        }
+        // The completion carries the original assertion/exception so JUnit sees
+        // worker failures directly, rather than a successful pooled submission.
+        if (failure instanceof Exception exception) throw exception;
+        if (failure instanceof Error error) throw error;
+        if (failure != null) throw new AssertionError(failure);
     }
 
     private Fixture fixture() throws Exception {
@@ -969,7 +1106,11 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
                     VasSettingsState.getInstance(project).builderPath = "";
                     VasToolchainSettings.getInstance().compilerPath = compiler.toString();
                     trust(true);
-                    service.installLaunchObserver(args -> launches.add(List.copyOf(args)), lifetime);
+                    service.installLaunchObserver(args -> {
+                        assertFalse(ApplicationManager.getApplication().isDispatchThread(),
+                            "the actual native compiler launch must run in the background");
+                        launches.add(List.copyOf(args));
+                    }, lifetime);
                     service.setInteraction(new VasProjectBuildService.Interaction() {
                         @Override public String select(VasProjectProtocol.Descriptor descriptor) {
                             assertTrue(ApplicationManager.getApplication().isDispatchThread());
