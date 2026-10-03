@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const vm = require('node:vm');
 const { spawn } = require('node:child_process');
 const { launchWindowsJob } = require('./windowsJob');
 
@@ -32,13 +33,17 @@ function familyScript(directory, exitCode, inheritedOutput) {
   const grandchild = `${record('grandchild')} setInterval(() => {}, 1000);`;
   const stdio = inheritedOutput ? ['ignore', 'inherit', 'inherit'] : 'ignore';
   const finish = exitCode === null ? '' : `process.exit(${exitCode});`;
+  // Windows libuv kills non-detached children when their Node parent exits.
+  // Detach both generations so this fixture really leaves live orphans for
+  // our outer, non-breakaway Job to clean up (detached is not Job breakaway).
+  const spawnOptions = JSON.stringify({ stdio, detached: true, windowsHide: true });
   const middle = `${record('middle')}
-    const child = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(grandchild)}], { stdio: ${JSON.stringify(stdio)} });
+    const child = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(grandchild)}], ${spawnOptions});
     child.unref();
-    ${exitCode === null ? 'setInterval(() => {}, 1000);' : ''}
+    setInterval(() => {}, 1000);
   `;
   return `${record('leader')}
-    const child = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(middle)}], { stdio: ${JSON.stringify(stdio)} });
+    const child = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(middle)}], ${spawnOptions});
     child.unref();
     let ready = false;
     setInterval(() => {
@@ -50,6 +55,76 @@ function familyScript(directory, exitCode, inheritedOutput) {
     }, 10);
   `;
 }
+
+test('Windows family fixture keeps detached descendants alive until outer Job cleanup', () => {
+  // Exercise the generated fixture itself, not Windows Job APIs, on every OS.
+  // In particular, prevent an unref-only middle from exiting before its child
+  // starts, or libuv's own parent-exit cleanup from masquerading as Job cleanup.
+  for (const exitCode of [0, 7, null]) for (const inheritedOutput of [false, true]) {
+    const directory = path.join(os.tmpdir(), 'virtual-windows-family');
+    const files = new Map();
+    const stages = [];
+    function evaluate(script, pid) {
+      const state = { intervals: [], timeouts: [], children: [], exits: [] };
+      vm.runInNewContext(script, {
+        process: { execPath: process.execPath, pid, exit(code) { state.exits.push(code); } },
+        console: { log(stage) { stages.push(stage); } },
+        setTimeout(callback, milliseconds) {
+          const timer = { callback, milliseconds, unrefed: false,
+            unref() { timer.unrefed = true; } };
+          state.timeouts.push(timer);
+          return timer;
+        },
+        setInterval(callback, milliseconds) { state.intervals.push({ callback, milliseconds }); },
+        require(name) {
+          if (name === 'node:fs') return {
+            writeFileSync(file, value) { files.set(file, value); },
+            existsSync(file) { return files.has(file); }
+          };
+          assert.equal(name, 'node:child_process');
+          return { spawn(executable, args, options) {
+            const child = { executable, args, options, unrefed: false,
+              unref() { child.unrefed = true; } };
+            state.children.push(child);
+            return child;
+          } };
+        }
+      });
+      assert.equal(state.timeouts.length, 1);
+      assert.equal(state.timeouts[0].milliseconds, 20000, 'each descendant still self-expires after a containment failure');
+      assert.equal(state.timeouts[0].unrefed, true);
+      return state;
+    }
+    function descendant(parent, pid) {
+      assert.equal(parent.children.length, 1);
+      const child = parent.children[0];
+      assert.equal(child.executable, process.execPath);
+      assert.equal(child.args[0], '-e');
+      assert.equal(child.options.detached, true, 'libuv must not kill descendants on parent exit');
+      assert.equal(child.options.windowsHide, true);
+      assert.equal(JSON.stringify(child.options.stdio), JSON.stringify(inheritedOutput ? ['ignore', 'inherit', 'inherit'] : 'ignore'));
+      assert.equal(child.unrefed, true, 'a descendant must not hold its leader open');
+      return evaluate(child.args[1], pid);
+    }
+    const leader = evaluate(familyScript(directory, exitCode, inheritedOutput), 100);
+    assert.equal(leader.intervals.length, 1);
+    leader.intervals[0].callback();
+    assert.deepEqual(leader.exits, [], 'leader cannot finish before the entire tree starts');
+    const middle = descendant(leader, 101);
+    assert.equal(middle.intervals.length, 1, 'middle must stay live until the outer Job stops it');
+    leader.intervals[0].callback();
+    assert.deepEqual(leader.exits, [], 'spawning a grandchild does not mean it has started');
+    const grandchild = descendant(middle, 102);
+    assert.equal(grandchild.intervals.length, 1, 'grandchild must stay live until the outer Job stops it');
+    assert.equal(files.size, 3);
+    leader.intervals[0].callback();
+    leader.intervals[0].callback();
+    assert.deepEqual(stages, ['VAS_TEST_STAGE:windows:tree-ready']);
+    assert.deepEqual(leader.exits, exitCode === null ? [] : [exitCode], 'preserve the exact leader result');
+    assert.deepEqual(middle.exits, []);
+    assert.deepEqual(grandchild.exits, []);
+  }
+});
 
 async function withFamily(run) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'vas-windows-family-'));
