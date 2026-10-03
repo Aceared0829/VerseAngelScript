@@ -100,6 +100,19 @@ test('explicit build creates a pipe-backed native task, with no terminal problem
   assert.equal(await build.closed, 0);
 });
 
+test('resolving a Current build task is read-only and only actual launch creates its output directory', async () => {
+  const h = host();
+  const task = await h.provider.resolveTask({ definition: { type: 'vas', operation: 'build', file: 'src/main.vas' }, scope: h.folder, name: 'Current fixture' });
+  assert.ok(task);
+  assert.equal(h.created.length, 0, 'enumerating/resolving Current alongside Project must not create .vas');
+  assert.equal(h.spawns.length, 0);
+  const build = await h.openBuild(task);
+  assert.deepEqual(h.created, ['/project/.vas/build/src']);
+  assert.equal(h.spawns.length, 1);
+  h.spawns[0].child.emit('close', 0);
+  assert.equal(await build.closed, 0);
+});
+
 test('run launches the runner without compiling bytecode first', async () => {
   const h = host();
   await h.commands.get('vas.runCurrentFile')();

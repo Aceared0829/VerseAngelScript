@@ -45,7 +45,7 @@ async function createTask(definition, folder, name, builds) {
   await preparePlan(plan, folder);
   const execution = definition.operation === 'build' ? new vscode.CustomExecution(async () => {
     const terminal = createBuildTerminal({ vscode, plan, diagnostics: builds.diagnostics,
-      prepare: async () => { requireReady(folder); await preparePlan(plan, folder); requireReady(folder); },
+      prepare: async () => { requireReady(folder); await preparePlan(plan, folder, true); requireReady(folder); },
       done: () => builds.active.delete(terminal)
     });
     builds.active.add(terminal);
@@ -58,7 +58,7 @@ async function createTask(definition, folder, name, builds) {
   return task;
 }
 
-async function preparePlan(plan, folder) {
+async function preparePlan(plan, folder, createOutput = false) {
   await requireFile(plan.executable, 'VAS executable');
   await requireFile(plan.source, 'VAS source');
   if (plan.config) await requireFile(plan.config, 'VAS application interface configuration');
@@ -78,9 +78,13 @@ async function preparePlan(plan, folder) {
         ancestor = path.dirname(ancestor);
       }
     }
-    await fs.mkdir(path.dirname(plan.output), { recursive: true });
-    const realDirectory = await fs.realpath(path.dirname(plan.output));
-    if (!contains(realRoot, realDirectory)) throw new Error('The VAS output directory resolves outside the workspace.');
+    // Task enumeration/resolution is read-only. Create directories only for
+    // an actually opened build task, after repeating the same safety checks.
+    if (createOutput) {
+      await fs.mkdir(path.dirname(plan.output), { recursive: true });
+      const realDirectory = await fs.realpath(path.dirname(plan.output));
+      if (!contains(realRoot, realDirectory)) throw new Error('The VAS output directory resolves outside the workspace.');
+    }
     try {
       if ((await fs.lstat(plan.output)).isSymbolicLink()) throw new Error('The VAS output file must not be a symbolic link.');
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
