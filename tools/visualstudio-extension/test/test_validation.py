@@ -1,5 +1,6 @@
 """Regression tests for the fail-closed package and native-result gates."""
 import contextlib
+import codecs
 import io
 import hashlib
 import json
@@ -185,18 +186,24 @@ class VsixGateTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.path = pathlib.Path(self.temp.name) / "test.vsix"
 
-    def write_package(self, altered=False, assembly=False, missing=False):
+    @staticmethod
+    def registration():
+        return """[$RootKey$\\Packages\\{d3a6e112-5f40-4df1-8bb7-0b79f0e74226}]
+"Class"="VerseAngelScript.VisualStudio.VasPackage"
+"CodeBase"="$PackageFolder$\\VerseAngelScript.dll"
+[$RootKey$\\Menus]
+"{d3a6e112-5f40-4df1-8bb7-0b79f0e74226}"=", 1, 1"
+"""
+
+    def write_package(self, altered=False, assembly=False, missing=False, registration_bytes=None):
+        if registration_bytes is None:
+            registration_bytes = codecs.BOM_UTF16_LE + self.registration().encode("utf-16-le")
         with zipfile.ZipFile(self.path, "w") as archive:
             manifest = (ROOT / "source.extension.vsixmanifest").read_text().replace("|%CurrentProject%;PkgdefProjectOutputGroup|", "VerseAngelScript.pkgdef")
             archive.writestr("extension.vsixmanifest", manifest)
             archive.writestr("VerseAngelScript.dll", b"MZsynthetic managed payload")
             archive.writestr("Newtonsoft.Json.dll", b"MZsynthetic JSON dependency")
-            archive.writestr("VerseAngelScript.pkgdef", """[$RootKey$\\Packages\\{d3a6e112-5f40-4df1-8bb7-0b79f0e74226}]
-"Class"="VerseAngelScript.VisualStudio.VasPackage"
-"CodeBase"="$PackageFolder$\\VerseAngelScript.dll"
-[$RootKey$\\Menus]
-"{d3a6e112-5f40-4df1-8bb7-0b79f0e74226}"=", 1, 1"
-""")
+            archive.writestr("VerseAngelScript.pkgdef", registration_bytes)
             archive.writestr("VAS.pkgdef", (ROOT / "VAS.pkgdef").read_bytes())
             archive.writestr("language-configuration.json", (CANONICAL / "language-configuration.json").read_bytes())
             if not missing:
@@ -209,6 +216,52 @@ class VsixGateTests(unittest.TestCase):
         self.write_package()
         with contextlib.redirect_stdout(io.StringIO()):
             verify_vsix(self.path)
+
+    def test_generated_registration_uses_strict_utf16le_bom(self):
+        registration = self.registration() + '; Unicode fixture 漢字 😀\r\n'
+        self.write_package(registration_bytes=codecs.BOM_UTF16_LE + registration.encode("utf-16-le"))
+        raw_path = self.path.parent / "production-registration.pkgdef"
+        with contextlib.redirect_stdout(io.StringIO()):
+            verify_vsix(self.path, pkgdef_evidence_path=raw_path)
+        self.assertEqual(raw_path.read_bytes(), codecs.BOM_UTF16_LE + registration.encode("utf-16-le"))
+
+    def test_unsupported_registration_encodings_fail(self):
+        text = self.registration()
+        for data in (text.encode("utf-8"), codecs.BOM_UTF8 + text.encode("utf-8"),
+                     text.encode("utf-16-le"), codecs.BOM_UTF16_BE + text.encode("utf-16-be"),
+                     codecs.BOM_UTF32_LE + text.encode("utf-32-le"),
+                     codecs.BOM_UTF32_BE + text.encode("utf-32-be")):
+            with self.subTest(prefix=data[:4]):
+                self.write_package(registration_bytes=data)
+                with self.assertRaisesRegex(ValueError, "UTF-16LE BOM"):
+                    verify_vsix(self.path)
+
+    def test_malformed_utf16_registration_fails_and_preserves_raw_evidence(self):
+        valid = codecs.BOM_UTF16_LE + self.registration().encode("utf-16-le")
+        for ending in (b"x", b"\x00\xd8", b"\x00\xdc"):
+            with self.subTest(ending=ending):
+                data = valid + ending
+                self.write_package(registration_bytes=data)
+                raw_path = self.path.parent / "invalid-registration.pkgdef"
+                with self.assertRaises(UnicodeDecodeError):
+                    verify_vsix(self.path, pkgdef_evidence_path=raw_path)
+                self.assertEqual(raw_path.read_bytes(), data)
+
+    def test_embedded_nul_or_bom_registration_fails(self):
+        for text in (self.registration() + "\0", self.registration() + "\ufeff"):
+            with self.subTest(text=text[-1:]):
+                self.write_package(registration_bytes=codecs.BOM_UTF16_LE + text.encode("utf-16-le"))
+                with self.assertRaisesRegex(ValueError, "embedded"):
+                    verify_vsix(self.path)
+
+    def test_utf16_registration_cannot_hide_missing_or_forbidden_registration(self):
+        for text in (self.registration().replace("VerseAngelScript.VisualStudio.VasPackage", "Other.Package"),
+                     self.registration() + '[$RootKey$\\AutoLoadPackages]\n',
+                     self.registration() + 'ILanguageClient\n'):
+            with self.subTest(text=text):
+                self.write_package(registration_bytes=codecs.BOM_UTF16_LE + text.encode("utf-16-le"))
+                with self.assertRaises(AssertionError):
+                    verify_vsix(self.path)
 
     def test_package_evidence_hashes_exact_payload_and_container(self):
         self.write_package()

@@ -33,6 +33,10 @@ $projectEvidence = Join-Path $ResultsDirectory 'project-build'
 # Remove stale evidence before any run; a previous native pass cannot satisfy this gate.
 if (Test-Path $projectEvidence) { Remove-Item $projectEvidence -Recurse -Force }
 New-Item -ItemType Directory -Force $projectEvidence | Out-Null
+foreach ($name in @('production-package.json', 'production-registration.pkgdef')) {
+    $evidence = Join-Path $ResultsDirectory $name
+    if (Test-Path $evidence) { Remove-Item $evidence }
+}
 # Do not convert absence of a native MOTW prompt into trust-state evidence.
 [ordered]@{
     nativeMotwPromptCancellation = 'unverified'
@@ -71,7 +75,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Production VSIX build failed ($LASTEXITCODE)." }
     $packages = @(Get-ChildItem 'bin/Release' -Filter '*.vsix' -Recurse)
     if ($packages.Count -ne 1) { throw "Expected one production VSIX, found $($packages.Count)." }
-    python 'test/check_package.py' --vsix $packages[0].FullName --write-evidence (Join-Path $ResultsDirectory 'production-package.json')
+    python 'test/check_package.py' --vsix $packages[0].FullName --write-evidence (Join-Path $ResultsDirectory 'production-package.json') --write-pkgdef-evidence (Join-Path $ResultsDirectory 'production-registration.pkgdef')
     if ($LASTEXITCODE -ne 0) { throw 'Production VSIX contract failed.' }
 
     & $msbuild 'test/CoreTests/CoreTests.csproj' /restore /t:Build /p:Configuration=Release /p:TargetFrameworks=net472 /p:TargetFramework=net472 /nologo /verbosity:minimal

@@ -1,5 +1,6 @@
 """Exact production VSIX boundary; real VS18 behavior is a separate mandatory gate."""
 import argparse
+import codecs
 import json
 import hashlib
 import pathlib
@@ -50,7 +51,18 @@ class PackageContract(unittest.TestCase):
             self.assertEqual(packages[name].get("ExcludeAssets"), "runtime")
 
 
-def verify_vsix(path, evidence_path=None):
+def decode_generated_registration(data):
+    # Pinned CreatePkgDef uses Encoding.Unicode: UTF-16LE with its FF FE BOM.
+    # This is separate from the byte-identical UTF-8 VAS.pkgdef source asset.
+    if not data.startswith(codecs.BOM_UTF16_LE) or data.startswith(codecs.BOM_UTF32_LE):
+        raise ValueError("Generated package registration must have a UTF-16LE BOM")
+    registration = data[len(codecs.BOM_UTF16_LE):].decode("utf-16-le", errors="strict")
+    if "\0" in registration or "\ufeff" in registration:
+        raise ValueError("Generated package registration contains an embedded NUL or BOM")
+    return registration
+
+
+def verify_vsix(path, evidence_path=None, pkgdef_evidence_path=None):
     with zipfile.ZipFile(path) as archive:
         names = archive.namelist()
         assert len(names) == len(set(names)), "Duplicate VSIX entries"
@@ -68,7 +80,10 @@ def verify_vsix(path, evidence_path=None):
             assert archive.read(name).startswith(b"MZ"), f"Not a managed PE assembly: {name}"
         assert not any("test" in n.lower() for n in names), names
         assert {n for n in names if n.lower().endswith(".pkgdef")} == {"VAS.pkgdef", "VerseAngelScript.pkgdef"}, names
-        registration = archive.read("VerseAngelScript.pkgdef").decode("utf-8-sig").lower()
+        registration_bytes = archive.read("VerseAngelScript.pkgdef")
+        if pkgdef_evidence_path is not None:
+            pathlib.Path(pkgdef_evidence_path).write_bytes(registration_bytes)
+        registration = decode_generated_registration(registration_bytes).lower()
         for required in (PACKAGE_GUID, "verseangelscript.visualstudio.vaspackage", "verseangelscript.dll", "menus"):
             assert required in registration, f"Missing production registration: {required}"
         assert "ilanguageclient" not in registration and "autoloadpackages" not in registration
@@ -94,9 +109,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--vsix", type=pathlib.Path)
     parser.add_argument("--write-evidence", type=pathlib.Path)
+    parser.add_argument("--write-pkgdef-evidence", type=pathlib.Path)
     args = parser.parse_args()
     result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(PackageContract))
     if not result.wasSuccessful():
         raise SystemExit(1)
     if args.vsix:
-        verify_vsix(args.vsix, args.write_evidence)
+        verify_vsix(args.vsix, args.write_evidence, args.write_pkgdef_evidence)
