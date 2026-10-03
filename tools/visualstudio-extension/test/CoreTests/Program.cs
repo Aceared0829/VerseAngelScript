@@ -21,7 +21,7 @@ internal static class Program
         if (args.Length >= 2 && args[0] == "--fixture") return Fixture(args[1]);
         try
         {
-            DescriptorTests(); ReportTests(); PositionTests(); CompilerPathTests(); ProcessTests();
+            DescriptorTests(); ReportTests(); PositionTests(); CompilerPathTests(); InputEventTests(); ProcessTests();
             string native = Environment.GetEnvironmentVariable("VAS_NATIVE_ARGV_FIXTURE");
             if (!string.IsNullOrEmpty(native)) NativeArguments(native);
             else if (Environment.OSVersion.Platform == PlatformID.Win32NT) throw new Exception("Windows core gate requires VAS_NATIVE_ARGV_FIXTURE (tests/vasbuild/rider_argv_fixture.cpp).");
@@ -106,6 +106,22 @@ internal static class Program
         response = DescriptorJson(); response["success"] = false; response["projectSchemaVersion"] = null; response["compilationUnits"] = new JArray();
         response["errors"] = new JArray(new JObject { ["code"] = "project_json", ["field"] = "", ["message"] = "bad project", ["section"] = "", ["row"] = 0, ["column"] = 0, ["byteOffset"] = null });
         Reject(() => Protocol.Describe(DescriptorBytes(response), 2), "failed native descriptor surfaces error");
+    }
+    private static void InputEventTests()
+    {
+        const string source = "C:/project/src/main.vas";
+        foreach (var change in new[] { WatcherChangeTypes.Changed, WatcherChangeTypes.Created, WatcherChangeTypes.Deleted, WatcherChangeTypes.Renamed })
+        {
+            Check(InputEvents.Classify(source, @"c:\project\src\main.vas", change) == InputEventEffect.Invalidate, "Exact input event invalidates: " + change);
+            Check(InputEvents.Classify(source, "C:/project/src/unrelated.txt", change) == InputEventEffect.None, "Sibling event preserves input: " + change);
+            Check(InputEvents.Classify(source, "C:/project/out", change) == InputEventEffect.None, "Output event preserves input: " + change);
+            Check(InputEvents.Classify(source, "C:/proj", change) == InputEventEffect.None, "Path prefix without boundary is unrelated: " + change);
+            Check(InputEvents.Classify(source, "C:/project/src", change) == (change == WatcherChangeTypes.Changed ? InputEventEffect.Verify : InputEventEffect.Invalidate), "Ancestor metadata verifies; structural events invalidate: " + change);
+        }
+        Check(InputEvents.Classify("C:/project/tool/vasbuild.exe", "C:/project/tool/vasbuild.exe.calls", WatcherChangeTypes.Created) == InputEventEffect.None, "Compiler sidecar creation is unrelated");
+        Check(InputEvents.Classify("C:/project/tool/vasbuild.exe", "C:/project/tool", WatcherChangeTypes.Changed) == InputEventEffect.Verify, "Compiler sidecar parent metadata requires identity verification");
+        Check(InputEvents.Classify("C:/real/nested/missing.vas", "C:/real/nested", WatcherChangeTypes.Created) == InputEventEffect.Invalidate, "Missing canonical suffix ancestor creation invalidates");
+        Check(InputEvents.Classify("C:/real/nested/missing.vas", "C:/real/nested/missing.vas", WatcherChangeTypes.Created) == InputEventEffect.Invalidate, "Missing canonical include creation invalidates");
     }
     private static JObject Event(string type, int seq)
     { return new JObject { ["protocol"] = "vasbuild", ["version"] = 1, ["type"] = type, ["seq"] = seq, ["invalidUtf8Fields"] = new JArray(), ["rawBytes"] = new JObject() }; }

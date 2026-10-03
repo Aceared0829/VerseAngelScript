@@ -31,6 +31,8 @@ using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Shell.Settings;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
+using Microsoft.VisualStudio.Threading;
+using Microsoft.VisualStudio.Workspace.VSIntegration.Contracts;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Xunit;
@@ -59,6 +61,7 @@ namespace VerseAngelScript.VisualStudio.Tests
         private bool hadCompiler;
         private string openedFolder;
         private bool packageClosed;
+        private Window activeDialog;
         private readonly List<EnvDTE.Window> windows = new List<EnvDTE.Window>();
         private readonly List<Fixture> fixtures = new List<Fixture>();
 
@@ -70,14 +73,16 @@ namespace VerseAngelScript.VisualStudio.Tests
             var fixture = CreateFixture("solution Unicode 漢字 😀 & literal $ (space)");
             await OpenSolutionAsync(fixture);
             ConfigureCompiler(NativeCompiler);
+            Assert.False(Directory.Exists(fixture.OutputDirectory));
             await ChooseAndBuildAsync(fixture, 1);
             await WaitForAsync(() => !Busy && File.Exists(fixture.SecondOutput), "selected native unit output");
+            Assert.StartsWith("Build succeeded", Status);
             Assert.False(File.Exists(fixture.FirstOutput));
             Assert.True(new FileInfo(fixture.SecondOutput).Length > 0);
             AssertReportDigest(fixture.Entry);
             Assert.Contains("alternate", fixture.LastUnitDetails);
             SaveEvidence(nameof(SolutionCommandBuildsExplicitUnitWithNativeCompiler),
-                "solutionOpened", "registeredCommand", "explicitUnit", "nativeOutput", "sourceDigest");
+                "solutionOpened", "registeredCommand", "explicitUnit", "nativeOutput", "sourceDigest", "outputCreationPreservesBuild");
         }
 
         [IdeFact(MinVersion = VisualStudioVersion.VS18, MaxVersion = VisualStudioVersion.VS18, RootSuffix = "VASIntegration", MaxAttempts = 1)]
@@ -125,13 +130,25 @@ namespace VerseAngelScript.VisualStudio.Tests
                 await ReadUnitsAsync(dialog);
                 Assert.Equal(-1, Control<ListBox>(dialog, "ProjectUnits").SelectedIndex);
                 Assert.False(Control<Button>(dialog, "BuildSelectedUnit").IsEnabled);
+                var generation = Convert.ToInt64(Member(Coordinator, "Generation"));
+                // A write alongside the compiler and a new unrelated project
+                // directory must not invalidate the prepared descriptor.
+                File.WriteAllText(Path.Combine(Path.GetDirectoryName(fixture.Compiler), "unrelated.txt"), "not an input");
+                var notes = Path.Combine(fixture.Root, "notes"); Directory.CreateDirectory(notes);
+                File.WriteAllText(Path.Combine(notes, "unrelated.txt"), "not an input");
+                await Task.Delay(800); // Drain real native directory metadata events and the periodic validation.
+                Assert.Equal(generation, Convert.ToInt64(Member(Coordinator, "Generation")));
+                Assert.True(dialog.IsVisible, DiagnosticState());
+                Assert.Equal(2, Control<ListBox>(dialog, "ProjectUnits").Items.Count);
+                Assert.Equal(new[] { "describe" }, fixture.Calls);
+                Assert.False(Directory.Exists(fixture.OutputDirectory));
                 Invoke(Control<Button>(dialog, "CancelVasProject"));
             });
             await WaitForAsync(() => !Busy, "cancelled descriptor dialog");
             Assert.Equal(new[] { "describe" }, fixture.Calls);
             Assert.False(Directory.Exists(fixture.OutputDirectory));
             SaveEvidence(nameof(ReadUnitsRequiresExplicitSelectionAndCancelIsPassive),
-                "noDefaultUnit", "buildInitiallyDisabled", "zeroPassiveProcesses", "zeroCancelProcesses", "zeroOutputDirectories");
+                "noDefaultUnit", "buildInitiallyDisabled", "zeroPassiveProcesses", "zeroCancelProcesses", "zeroOutputDirectories", "unrelatedWritesPreserveSelection");
         }
 
         [IdeFact(MinVersion = VisualStudioVersion.VS18, MaxVersion = VisualStudioVersion.VS18, RootSuffix = "VASIntegration", MaxAttempts = 1)]
@@ -170,7 +187,7 @@ namespace VerseAngelScript.VisualStudio.Tests
             await DriveDialogAsync(fixture, async dialog =>
             {
                 Invoke(Control<Button>(dialog, "ReadProjectUnits"));
-                await WaitForAsync(() => fixture.Calls.Count == 1 && Control<TextBlock>(dialog, "ProjectBuildStatus").Text.IndexOf("Reading native", StringComparison.Ordinal) < 0, "rejected descriptor");
+                await WaitForAsync(() => fixture.Calls.Count == 1 && Control<TextBlock>(dialog, "ProjectBuildStatus").Text == "Unsupported VAS project descriptor protocol.", "rejected descriptor protocol");
                 Assert.False(Control<Button>(dialog, "BuildSelectedUnit").IsEnabled);
                 Assert.Empty(Control<ListBox>(dialog, "ProjectUnits").Items.Cast<object>());
                 Assert.DoesNotContain("Select a compilation unit", Control<TextBlock>(dialog, "ProjectBuildStatus").Text);
@@ -702,12 +719,7 @@ namespace VerseAngelScript.VisualStudio.Tests
             await WaitForAsync(() =>
             {
                 var components = (IComponentModel)Package.GetGlobalService(typeof(SComponentModel));
-                var contract = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType("Microsoft.VisualStudio.Workspace.VSIntegration.Contracts.IVsFolderWorkspaceService", false)).FirstOrDefault(t => t != null);
-                if (contract == null) return false;
-                var get = typeof(IComponentModel).GetMethods().Single(m => m.Name == "GetService" && m.IsGenericMethodDefinition);
-                var service = get.MakeGenericMethod(contract).Invoke(components, null);
-                var current = Member(service, "CurrentWorkspace");
-                return current != null && SamePath(Convert.ToString(Member(current, "Location")), fixture.Root);
+                return SamePath(components.GetService<IVsFolderWorkspaceService>()?.CurrentWorkspace?.Location, fixture.Root);
             }, "native IVsSolution7.OpenFolder");
         }
 
@@ -767,6 +779,7 @@ namespace VerseAngelScript.VisualStudio.Tests
                         return dialog != null || (allowPreflightRejection && !Busy && Status.IndexOf("modified", StringComparison.OrdinalIgnoreCase) >= 0);
                     }, "Build Project native dialog or explicit dirty-input rejection");
                     if (dialog == null) { driver.SetResult(false); return; }
+                    activeDialog = dialog;
                     Assert.Equal("Microsoft.VisualStudio.PlatformUI.DialogWindow", dialog.GetType().BaseType.FullName);
                     Assert.True(SamePath(Control<TextBox>(dialog, "ProjectRoot").Text, fixture.Root));
                     Assert.True(SamePath(Control<TextBox>(dialog, "ProjectManifest").Text, fixture.Manifest));
@@ -776,15 +789,23 @@ namespace VerseAngelScript.VisualStudio.Tests
                     driver.SetResult(true);
                 }
                 catch (Exception ex) { driver.TrySetException(ex); }
-                finally { if (dialog != null && dialog.IsVisible) dialog.Close(); }
+                finally { if (dialog != null && dialog.IsVisible) dialog.Close(); activeDialog = null; }
             }
         }
 
         private async Task ReadUnitsAsync(Window dialog)
         {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
             Assert.Equal(-1, Control<ListBox>(dialog, "ProjectUnits").SelectedIndex);
             Invoke(Control<Button>(dialog, "ReadProjectUnits"));
-            await WaitForAsync(() => Control<ListBox>(dialog, "ProjectUnits").Items.Count > 0, "compiler-described unit list");
+            await WaitForAsync(() =>
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                if (Control<ListBox>(dialog, "ProjectUnits").Items.Count > 0) return true;
+                var pending = Member(dialog, "PendingRead") as JoinableTask;
+                Assert.True(dialog.IsVisible && (pending == null || !pending.Task.IsCompleted), "Descriptor did not produce units. " + DiagnosticState());
+                return false;
+            }, "compiler-described unit list");
             Assert.False(Control<Button>(dialog, "ReadProjectUnits").IsEnabled);
         }
 
@@ -851,7 +872,7 @@ namespace VerseAngelScript.VisualStudio.Tests
             ErrorHandler.ThrowOnFailure(route.Exec(ref group, id, 0, IntPtr.Zero, IntPtr.Zero));
         }
 
-        private static async Task WaitForAsync(Func<bool> condition, string purpose)
+        private async Task WaitForAsync(Func<bool> condition, string purpose)
         {
             var timer = Stopwatch.StartNew();
             do
@@ -860,7 +881,17 @@ namespace VerseAngelScript.VisualStudio.Tests
                 if (condition()) return;
                 await Task.Delay(50);
             } while (timer.Elapsed < TimeSpan.FromSeconds(30));
-            Assert.Fail("Timed out waiting for " + purpose);
+            Assert.Fail("Timed out waiting for " + purpose + ". " + DiagnosticState());
+        }
+
+        private string DiagnosticState()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var dialogStatus = activeDialog == null ? "none" : Control<TextBlock>(activeDialog, "ProjectBuildStatus").Text;
+            var calls = string.Join("; ", fixtures.Select(f => Path.GetFileName(f.Root) + ": calls=[" + string.Join(",", f.Calls) + "], reaped=" + f.NoLiveProcesses()));
+            var state = "Status=" + Status + "; Busy=" + Busy + "; Generation=" + Member(Coordinator, "Generation") +
+                "; DialogVisible=" + activeDialog?.IsVisible + "; DialogStatus=" + dialogStatus + "; " + calls;
+            return state.Length <= 4096 ? state : state.Substring(0, 4096);
         }
 
         private static object Member(object instance, string name)

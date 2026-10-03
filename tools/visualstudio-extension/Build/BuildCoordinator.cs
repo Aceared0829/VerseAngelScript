@@ -317,7 +317,7 @@ namespace VerseAngelScript.VisualStudio.Build
         {
             await factory.SwitchToMainThreadAsync();
             if (current != session || disposed) return;
-            CancelIfCurrent(session, ex is OperationCanceledException ? "Build cancelled" : ex.Message);
+            CancelIfCurrent(session, Volatile.Read(ref session.InvalidationReason) ?? (ex is OperationCanceledException ? "Build cancelled" : ex.Message));
         }
         private void SetStatus(string status)
         {
@@ -389,6 +389,9 @@ namespace VerseAngelScript.VisualStudio.Build
                 if (session.Snapshots.ContainsKey(path)) return;
                 if (session.Snapshots.Count >= 4096 || (snapshot != null && session.TotalBytes + snapshot.Length > 64L * 1024 * 1024))
                     throw new IOException("VAS saved-input observation limit exceeded.");
+                if (session.PathAliases.TryGetValue(path, out var previousAliases) &&
+                    !new HashSet<string>(previousAliases, StringComparer.OrdinalIgnoreCase).SetEquals(aliases))
+                    throw new IOException("Input path alias changed; build again: " + path);
                 session.Snapshots.Add(path, snapshot);
                 session.PathAliases[path] = aliases.ToArray();
                 if (snapshot != null) session.TotalBytes += snapshot.Length;
@@ -400,12 +403,14 @@ namespace VerseAngelScript.VisualStudio.Build
             // Descriptor enumeration never requires dormant unit contents to be
             // available. Observe their path aliases for changes during selection.
             IReadOnlyList<string> aliases;
+            bool verified = true;
             try { aliases = FileIdentity.WatchAliases(path); }
-            catch (IOException) { aliases = new[] { Path.GetFullPath(path) }; }
-            catch (UnauthorizedAccessException) { aliases = new[] { Path.GetFullPath(path) }; }
+            catch (IOException) { aliases = new[] { Path.GetFullPath(path) }; verified = false; }
+            catch (UnauthorizedAccessException) { aliases = new[] { Path.GetFullPath(path) }; verified = false; }
             lock (session.Sync)
             {
                 Guard(session);
+                if (verified && !session.PathAliases.ContainsKey(path)) session.PathAliases[path] = aliases.ToArray();
                 foreach (var alias in aliases) session.Aliases.Add(alias);
             }
         }
@@ -419,11 +424,12 @@ namespace VerseAngelScript.VisualStudio.Build
                 Guard(session);
                 if (pair.Value == null ? File.Exists(pair.Key) || Directory.Exists(pair.Key) : !FileIdentity.Matches(pair.Value))
                     throw new IOException("Saved input changed; build again: " + pair.Key);
-                string[] aliases;
-                lock (session.Sync) aliases = session.PathAliases[pair.Key];
-                if (!new HashSet<string>(aliases, StringComparer.OrdinalIgnoreCase).SetEquals(FileIdentity.WatchAliases(pair.Key)))
-                    throw new IOException("Input path alias changed; build again: " + pair.Key);
             }
+            KeyValuePair<string, string[]>[] paths;
+            lock (session.Sync) paths = session.PathAliases.ToArray();
+            foreach (var pair in paths)
+                if (!new HashSet<string>(pair.Value, StringComparer.OrdinalIgnoreCase).SetEquals(FileIdentity.WatchAliases(pair.Key)))
+                    throw new IOException("Input path alias changed; build again: " + pair.Key);
             foreach (var source in session.NavigationSnapshots)
                 if (!FileIdentity.Matches(source)) throw new IOException("Compiler-observed source changed; build again: " + source.Path);
             foreach (var path in dirty)
@@ -474,9 +480,9 @@ namespace VerseAngelScript.VisualStudio.Build
                     }
                 }
                 var watcher = new FileSystemWatcher(directory) { IncludeSubdirectories = specification.Value, NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.CreationTime };
-                FileSystemEventHandler changed = (s, e) => InputEvent(session, e.FullPath);
+                FileSystemEventHandler changed = (s, e) => InputEvent(session, e.FullPath, e.ChangeType);
                 watcher.Changed += changed; watcher.Created += changed; watcher.Deleted += changed;
-                watcher.Renamed += (s, e) => { InputEvent(session, e.OldFullPath); InputEvent(session, e.FullPath); };
+                watcher.Renamed += (s, e) => { InputEvent(session, e.OldFullPath, e.ChangeType); InputEvent(session, e.FullPath, e.ChangeType); };
                 watcher.Error += (s, e) => InvalidateFromWorker(session, "Input watcher lost events; build again.");
                 try
                 {
@@ -491,15 +497,26 @@ namespace VerseAngelScript.VisualStudio.Build
                 catch { watcher.Dispose(); throw; }
             }
         }
-        private void InputEvent(Session session, string path)
+        private void InputEvent(Session session, string path, WatcherChangeTypes change)
         {
-            bool relevant;
-            lock (session.Sync) relevant = session.Aliases.Any(alias => SamePath(alias, path) || alias.Replace('\\', '/').StartsWith(path.Replace('\\', '/').TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase));
-            if (relevant) InvalidateFromWorker(session, "Saved input changed; build again.");
+            InputEventEffect effect;
+            lock (session.Sync) effect = session.Aliases.Select(alias => InputEvents.Classify(alias, path, change)).DefaultIfEmpty().Max();
+            if (effect == InputEventEffect.Invalidate)
+                InvalidateFromWorker(session, "Saved input changed (" + change + "): " + path + "; build again.");
+            else if (effect == InputEventEffect.Verify)
+            {
+                // FileSystemWatcher callbacks run off the UI thread. Keep this
+                // metadata hint harmless only if every tracked input and canonical
+                // alias still matches; junction retargets must also be detected.
+                try { Validate(session, session.DirtyMonikers); }
+                catch (OperationCanceledException) { }
+                catch (Exception ex) { InvalidateFromWorker(session, ex.Message); }
+            }
         }
         private void InvalidateFromWorker(Session session, string reason)
         {
             if (session.Generation != Generation) return;
+            Interlocked.CompareExchange(ref session.InvalidationReason, reason, null);
             // Advance immediately on the notifying thread, before any queued UI publication.
             if (Interlocked.CompareExchange(ref generation, session.Generation + 1, session.Generation) != session.Generation) return;
             session.RequestCancellation();
@@ -552,6 +569,7 @@ namespace VerseAngelScript.VisualStudio.Build
             internal string[] DirtyMonikers = new string[0];
             internal readonly ManualResetEventSlim DirtyCheck = new ManualResetEventSlim(true);
             internal string Executable;
+            internal string InvalidationReason;
             internal BuildDialog Dialog; internal Descriptor Descriptor; internal CompilationUnit Unit; internal Report Report;
             internal FileSnapshot[] NavigationSnapshots = new FileSnapshot[0]; internal string Stderr;
             internal Session(long generation, string root, string manifest, string compiler, CancellationToken lifetime)

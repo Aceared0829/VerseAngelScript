@@ -16,9 +16,9 @@ EDITOR_EXPECTED = {
     "CppAndAsAreNotClaimedByVasGrammar",
 }
 PROJECT_EVIDENCE = {
-    "SolutionCommandBuildsExplicitUnitWithNativeCompiler": {"solutionOpened", "registeredCommand", "explicitUnit", "nativeOutput", "sourceDigest"},
+    "SolutionCommandBuildsExplicitUnitWithNativeCompiler": {"solutionOpened", "registeredCommand", "explicitUnit", "nativeOutput", "sourceDigest", "outputCreationPreservesBuild"},
     "OpenFolderCommandBuildsExplicitUnitWithNativeCompiler": {"folderOpened", "registeredCommand", "explicitUnit", "nativeOutput"},
-    "ReadUnitsRequiresExplicitSelectionAndCancelIsPassive": {"noDefaultUnit", "buildInitiallyDisabled", "zeroPassiveProcesses", "zeroCancelProcesses", "zeroOutputDirectories"},
+    "ReadUnitsRequiresExplicitSelectionAndCancelIsPassive": {"noDefaultUnit", "buildInitiallyDisabled", "zeroPassiveProcesses", "zeroCancelProcesses", "zeroOutputDirectories", "unrelatedWritesPreserveSelection"},
     "LegacyManifestNeverSelectsEmbeddedTool": {"legacyWarning", "explicitUnit", "embeddedToolNotRun", "nativeOutput"},
     "InvalidDescriptorNeverEnablesBuild": {"failedDescriptor", "buildDisabled", "noOutput"},
     "CompilerArgumentsPreserveUnicodeAndMetacharacters": {"nativeWideArgv", "literalArguments", "stderrSeparate", "exitCodePreserved"},

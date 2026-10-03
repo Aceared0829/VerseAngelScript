@@ -27,6 +27,9 @@ during selection, or persistent trust flag.
   against dirty RDT physical aliases, replacement, canonical retargeting and change
 - Keep per-manifest/unit observations across partial traversals, including missing
   candidate canonical watch aliases built from an existing ancestor plus suffix
+- Verify ancestor directory metadata notifications against saved inputs and aliases;
+  output or unrelated sibling writes preserve a prepared operation, while input
+  writes, ancestor rename/delete and missing-candidate creation invalidate it
 - Suppress late publication/navigation after cancel, dispose, root close/reopen,
   new generation, changed compiler or changed saved/dirty inputs
 - Publish genuine structured diagnostics in native Error List; map UTF-8 byte
@@ -50,7 +53,9 @@ DialogWindow stages/cancellation, explicit nondefault units, real compiler
 errors/warnings/output, native Error List navigation including astral Unicode,
 physical dirty aliases, missing/mismatched proofs, input/root/compiler changes,
 repeated/cancelled/disposed operations and late-result suppression. The native
-wide-argv executable validates argc/Unicode/quotes independently of the client.
+cases also require output-directory creation and unrelated compiler-sidecar writes
+to preserve valid work, without weakening ancestor or missing-include invalidation.
+The native wide-argv executable validates argc/Unicode/quotes independently of the client.
 Strict result/evidence gates reject missing, skipped, failed or undiscovered
 required host tests. Compile-only/Linux evidence is reported separately.
 
