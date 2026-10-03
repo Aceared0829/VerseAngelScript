@@ -6,6 +6,12 @@ const path = require('node:path');
 const { contains, createPlan } = require('./toolchain');
 const { BuildDiagnostics } = require('./diagnostics');
 const { createBuildTerminal } = require('./buildTask');
+const { createProjectTerminal } = require('./projectTask');
+const { ProjectDependencies } = require('./projectReport');
+const { createProjectWatchers } = require('./projectWatch');
+const { ProjectInputObservations } = require('./projectObservations');
+const { documentDigest } = require('./projectVersions');
+const { compilerPath, projectRequest, snapshotDescriptor, projectPlan } = require('./project');
 
 async function requireFile(file, label) {
   try {
@@ -22,6 +28,7 @@ function requireReady(folder) {
 }
 
 async function createTask(definition, folder, name, builds) {
+  if (definition.operation === 'buildProject') return createProjectTask(definition, folder, name, builds);
   if (!folder || typeof folder !== 'object' || folder.uri.scheme !== 'file') {
     throw new Error('Open the VAS project as a filesystem workspace folder.');
   }
@@ -40,7 +47,7 @@ async function createTask(definition, folder, name, builds) {
   await preparePlan(plan, folder);
   const execution = definition.operation === 'build' ? new vscode.CustomExecution(async () => {
     const terminal = createBuildTerminal({ vscode, plan, diagnostics: builds.diagnostics,
-      prepare: async () => { requireReady(folder); await preparePlan(plan, folder); requireReady(folder); },
+      prepare: async () => { requireReady(folder); await preparePlan(plan, folder, true); requireReady(folder); },
       done: () => builds.active.delete(terminal)
     });
     builds.active.add(terminal);
@@ -53,7 +60,7 @@ async function createTask(definition, folder, name, builds) {
   return task;
 }
 
-async function preparePlan(plan, folder) {
+async function preparePlan(plan, folder, createOutput = false) {
   await requireFile(plan.executable, 'VAS executable');
   await requireFile(plan.source, 'VAS source');
   if (plan.config) await requireFile(plan.config, 'VAS application interface configuration');
@@ -73,9 +80,13 @@ async function preparePlan(plan, folder) {
         ancestor = path.dirname(ancestor);
       }
     }
-    await fs.mkdir(path.dirname(plan.output), { recursive: true });
-    const realDirectory = await fs.realpath(path.dirname(plan.output));
-    if (!contains(realRoot, realDirectory)) throw new Error('The VAS output directory resolves outside the workspace.');
+    // Task enumeration/resolution is read-only. Create directories only for
+    // an actually opened build task, after repeating the same safety checks.
+    if (createOutput) {
+      await fs.mkdir(path.dirname(plan.output), { recursive: true });
+      const realDirectory = await fs.realpath(path.dirname(plan.output));
+      if (!contains(realRoot, realDirectory)) throw new Error('The VAS output directory resolves outside the workspace.');
+    }
     try {
       if ((await fs.lstat(plan.output)).isSymbolicLink()) throw new Error('The VAS output file must not be a symbolic link.');
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -100,23 +111,85 @@ async function runCurrent(operation, builds) {
   }
 }
 
+function createProjectTask(definition, folder, name, builds, selected) {
+  if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace before building a VAS project.');
+  if (!folder || typeof folder !== 'object' || folder.uri.scheme !== 'file') throw new Error('Open a filesystem workspace folder for Build Project.');
+  const executable = compilerPath(vscode.workspace.getConfiguration('vas', folder.uri));
+  const request = projectRequest(definition, folder, executable);
+  const execution = new vscode.CustomExecution(async () => {
+    const terminal = createProjectTerminal({ vscode, diagnostics: builds.projectDiagnostics, dependencies: builds.dependencies, observations: builds.observations,
+      prepare: cancel => projectPlan(request, selected, { vscode, folder, cancel, dependencies: builds.dependencies }),
+      done: () => builds.active.delete(terminal) });
+    builds.active.add(terminal);
+    return terminal;
+  });
+  const task = new vscode.Task(definition, folder, name, 'VAS', execution, []);
+  task.group = vscode.TaskGroup.Build;
+  task.presentationOptions = { reveal: vscode.TaskRevealKind.Always, panel: vscode.TaskPanelKind.Dedicated, clear: true };
+  return task;
+}
+
+async function buildProject(builds) {
+  try {
+    if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace before building a VAS project.');
+    const folders = (vscode.workspace.workspaceFolders || []).filter(folder => folder.uri.scheme === 'file');
+    if (!folders.length) throw new Error('Open a filesystem workspace folder for Build Project.');
+    const picked = folders.length === 1 ? { folder: folders[0] } : await vscode.window.showQuickPick(
+      folders.map(folder => ({ label: folder.name, description: folder.uri.fsPath, folder })),
+      { title: 'VAS: Select Project Workspace', placeHolder: 'Choose the workspace root containing vas-project.json' });
+    if (!picked) return undefined;
+    const folder = picked.folder, project = path.join(folder.uri.fsPath, 'vas-project.json');
+    await builds.observations.settle();
+    const revision = builds.projectDiagnostics.revision;
+    const executable = compilerPath(vscode.workspace.getConfiguration('vas', folder.uri));
+    const selected = await snapshotDescriptor({ vscode, folder, project, executable });
+    if (revision !== builds.projectDiagnostics.revision) throw new Error('VAS inputs changed during project selection. Build Project again.');
+    const unit = await vscode.window.showQuickPick(selected.descriptor.compilationUnits.map(unit => ({
+      label: unit.id, description: unit.entry, detail: `Host API: ${unit.hostApi.config}   Output: ${unit.output}`, unit
+    })), { title: 'VAS: Select Compilation Unit', placeHolder: 'Choose an entry, host API configuration and bytecode output' });
+    if (!unit) return undefined;
+    if (revision !== builds.projectDiagnostics.revision) throw new Error('VAS inputs changed during project selection. Build Project again.');
+    const task = createProjectTask({ type: 'vas', operation: 'buildProject', project: 'vas-project.json', unit: unit.unit.id },
+      folder, `Build Project ${unit.unit.id}`, builds, selected);
+    return await vscode.tasks.executeTask(task);
+  } catch (error) { void vscode.window.showErrorMessage(`VAS: ${error.message}`); return undefined; }
+}
+
 function activate(context) {
   let collectionId = 0;
   const builds = {
     diagnostics: new BuildDiagnostics(() => vscode.languages.createDiagnosticCollection(`vas-build-${++collectionId}`)),
-    active: new Set()
+    projectDiagnostics: new BuildDiagnostics(() => vscode.languages.createDiagnosticCollection(`vas-project-${++collectionId}`)),
+    active: new Set(),
+    dependencies: new ProjectDependencies()
   };
+  builds.observations = new ProjectInputObservations(builds.projectDiagnostics, builds.dependencies);
   context.subscriptions.push(
     { dispose() {
       for (const terminal of builds.active) terminal.dispose();
       builds.active.clear();
+      builds.observations.dispose();
       builds.diagnostics.dispose();
+      builds.projectDiagnostics.dispose();
     } },
-    // Until dependency tracking exists, a file edit conservatively invalidates
-    // all build results, including pending reads, even if the user saves again.
+    // Dirty edits invalidate immediately. Clean reloads can preserve Project
+    // diagnostics only when text and disk match that generation's baseline.
+    // Current keeps its existing invalidation behavior. No automatic rebuild.
     vscode.workspace.onDidChangeTextDocument(event => {
-      if (event.document.uri.scheme === 'file' && event.contentChanges.length) builds.diagnostics.invalidate();
+      if (event.document.uri.scheme === 'file' && event.contentChanges.length) {
+        builds.diagnostics.invalidate();
+        if (event.document.isDirty !== false) builds.observations.invalidate();
+        else {
+          // A saved hardlink can reload another clean editor after compilation.
+          // Its actual text and disk identity must both match a pre-launch
+          // baseline; isDirty=false by itself is never sufficient evidence.
+          const digest = documentDigest(event.document.getText());
+          if (digest === undefined) builds.observations.invalidate();
+          else builds.observations.changed(event.document.uri.fsPath, { documentDigest: digest });
+        }
+      }
     }),
+    vscode.commands.registerCommand('vas.buildProject', () => buildProject(builds)),
     vscode.commands.registerCommand('vas.buildCurrentFile', () => runCurrent('build', builds)),
     vscode.commands.registerCommand('vas.runCurrentFile', () => runCurrent('run', builds)),
     vscode.tasks.registerTaskProvider('vas', {
@@ -127,6 +200,11 @@ function activate(context) {
       }
     })
   );
+  if (vscode.workspace.onDidChangeConfiguration) context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
+    if (event.affectsConfiguration('vas')) builds.observations.invalidate();
+  }));
+  if (vscode.workspace.createFileSystemWatcher) context.subscriptions.push(
+    createProjectWatchers(vscode, builds.dependencies, () => builds.observations.invalidate(), builds.observations));
 }
 
 module.exports = { activate };

@@ -22,6 +22,8 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         vscode: ['1.96.4', stable]
     runs-on: ${{ matrix.os }}
+    env:
+      VAS_TEST_REQUIRE_SOURCE_PROOFS: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -37,8 +39,10 @@ jobs:
       - name: Install extension test dependencies
         working-directory: tools/vscode-extension
         run: npm ci
-      - name: Unit and real TextMate tests
+      - name: Unit and real TextMate/native project tests
         working-directory: tools/vscode-extension
+        env:
+          VAS_TEST_COMPILER: ${{ github.workspace }}/out/vscode-test/${{ runner.os == 'Windows' && 'Release/vasbuild.exe' || 'vasbuild' }}
         run: npm test
       - name: Package VSIX
         working-directory: tools/vscode-extension

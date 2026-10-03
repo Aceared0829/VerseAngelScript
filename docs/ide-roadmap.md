@@ -10,6 +10,14 @@ Rider 的平面 token PSI 与符号扫描器目前依赖启发式解析，补全
 
 运行时为 AngelScript 2.39.0 WIP。已有编译、反射注册、调试行回调和命令行调试器；尚无 LSP/DAP 服务、UE 反射导出或可用 UE SDK 符号清单。
 
+## 当前交付状态与下一验收边界
+
+- 原生工具已有结构化 `vasbuild` v1 JSONL 报告、唯一的 versioned manifest/legacy 适配器、只读 descriptor 和显式单元构建，输出包含关系与别名检查由原生层负责。可选 loaded-source SHA-256 证明绑定实际加载字节，不宣称原生句柄身份或原子文件系统快照
+- VS Code 已实现独立 Build Project、按 manifest + unit 隔离的诊断/依赖观察，以及编译前版本与 loaded-source 证明核对；既有当前文件 build/run 保持独立。真实 Extension Host CI 覆盖 Linux/macOS/Windows × 1.96.4/stable，包含首次 include 发布后的真实文件通知；每个整合提交仍须通过该宿主矩阵，本地 unit/原生工具检查不能替代
+- Rider Build 262 的显式 `VAS.BuildProject` 源码模块已合并：应用级原生工具设置与项目 builder/runner 分离，复用同一 compiler descriptor/单元构建协议，要求明确选择，并提供入口上下文的诊断窗口与导航、脏输入别名、信任和过期结果防护。Windows Rider Solution Host CI 强制验收 16 个原生项目案例；已运行进程/子孙终止另由 JVM 进程测试覆盖，不能混称宿主中的在途取消验收。既有 Build Current、启发式编辑服务与旧安装 ZIP 不因此获得额外能力；源码合并不等于发布新安装包
+- Visual Studio 2026 当前 VSIX 仍是内容类型/编辑基础。工程命令、配置、诊断客户端与实际 VS18 Open Folder/.sln 宿主验收均待后续交付；现有 MSBuild 命令也未迁移到 manifest
+- 因此本轮不能宣称“同一 manifest 已在三种 IDE 构建一致”验收完成。完整未保存缓冲区、跨端语义绑定/LSP、真实 UE/SDK 导出与 IDE 调试仍待独立实现；没有 Run Project 或 bytecode-host 兼容保证
+
 ## 验收矩阵
 
 | 模块 | 交付能力 | 验收标准 |
