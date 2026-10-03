@@ -45,7 +45,7 @@ cmake -S $repositoryRoot -B $nativeBuild -G 'Visual Studio 18 2026' -A x64 "-DCM
 if ($LASTEXITCODE -ne 0) { throw 'Native VS2026 CMake configuration failed.' }
 cmake --build $nativeBuild --config Release --target vasbuild vas_rider_argv_fixture vas_source_digest_test --parallel
 if ($LASTEXITCODE -ne 0) { throw 'Native compiler/argument fixture build failed.' }
-ctest --test-dir $nativeBuild -C Release --output-on-failure -R '^(vasbuild_project_|vasbuild_jsonl_|vas_source_digest$)'
+ctest --test-dir $nativeBuild -C Release --output-on-failure --no-tests=error -R '^(vasbuild_project_|vasbuild_jsonl_|vas_source_digest$)'
 if ($LASTEXITCODE -ne 0) { throw 'Native compiler project/report conformance failed.' }
 $env:VAS_NATIVE_COMPILER = Join-Path $nativeBuild 'Release/vasbuild.exe'
 $env:VASBUILD_EXECUTABLE = $env:VAS_NATIVE_COMPILER
