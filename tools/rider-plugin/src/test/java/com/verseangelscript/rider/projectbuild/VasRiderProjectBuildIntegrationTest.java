@@ -54,8 +54,11 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 
@@ -63,7 +66,9 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Real Rider Solution Host + registered action + actual native compiler.
- * Only unit selection, presentation, and a read-only launch observer are hooked.
+ * Unit selection, presentation, and launch/filesystem observers are hooked.
+ * One filesystem observer uses a bounded barrier to verify EDT responsiveness;
+ * actual filesystem validation and native processes are never replaced.
  * The compiler environment is mandatory: a skipped/absent case is not evidence.
  * Cancellation here covers selection/queued work; native process-tree cancellation
  * is exercised independently by VasProjectProcessTest, not claimed by these cases.
@@ -554,6 +559,112 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
             assertEquals(launchesAfterBuild, fixture.launches.size(), "artifact and directory changes must never automatically build");
         }
         passed("ignoresBytecodeOutputChangesWithVasSuffix");
+    }
+
+    @Test
+    void keepsFilesystemValidationOffEdt() throws Exception {
+        try (Fixture fixture = fixture()) {
+            Path unrelated = fixture.write("notes/unrelated.txt", "Saved unrelated note\n");
+            Document note = fixture.document(unrelated);
+            String savedNote = EdtTestUtil.runInEdtAndGet(note::getText);
+            AtomicInteger filesystemCalls = new AtomicInteger();
+            AtomicInteger filesystemCallsOnEdt = new AtomicInteger();
+            AtomicBoolean holdBackgroundCheck = new AtomicBoolean();
+            AtomicBoolean observerTimedOut = new AtomicBoolean();
+            CountDownLatch backgroundEntered = new CountDownLatch(1);
+            CountDownLatch releaseBackground = new CountDownLatch(1);
+            CountDownLatch backgroundReturned = new CountDownLatch(1);
+            EdtTestUtil.runInEdtAndWait(() -> fixture.service.installFilesystemObserver(() -> {
+                filesystemCalls.incrementAndGet();
+                if (ApplicationManager.getApplication().isDispatchThread()) {
+                    filesystemCallsOnEdt.incrementAndGet();
+                    return; // Never manufacture an EDT deadlock if the regression occurs.
+                }
+                if (holdBackgroundCheck.get()) {
+                    backgroundEntered.countDown();
+                    try {
+                        if (!releaseBackground.await(15, TimeUnit.SECONDS)) {
+                            observerTimedOut.set(true);
+                            throw new IllegalStateException("Timed out releasing the filesystem observation barrier");
+                        }
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException("Interrupted while observing filesystem validation", interrupted);
+                    } finally {
+                        backgroundReturned.countDown();
+                    }
+                }
+            }, fixture.lifetime));
+            try {
+                var completed = fixture.build();
+                assertTrue(completed.success(), completed.status());
+                assertTrue(filesystemCalls.get() > 0, "the real build must exercise filesystem validation");
+                assertEquals(0, filesystemCallsOnEdt.get());
+                int callsAfterBuild = filesystemCalls.get();
+                int launchesAfterBuild = fixture.launches.size();
+                int publicationsAfterBuild = fixture.outcomes.size();
+                holdBackgroundCheck.set(true);
+                fixture.replace(note, savedNote + "First unrelated edit\n");
+                assertTrue(backgroundEntered.await(10, TimeUnit.SECONDS),
+                    "an unrelated dirty document must receive physical-alias validation on a worker");
+                assertTrue(filesystemCalls.get() > callsAfterBuild);
+                assertSame(completed, fixture.service.latest());
+
+                CountDownLatch edtReturned = new CountDownLatch(1);
+                AtomicReference<Throwable> edtFailure = new AtomicReference<>();
+                ApplicationManager.getApplication().invokeLater(() -> {
+                    try {
+                        // A real write/commit, not just repainting, must complete
+                        // while the physical-alias worker is explicitly held.
+                        fixture.replace(note, savedNote + "Second unrelated edit while the worker waits\n");
+                    } catch (Throwable failure) {
+                        edtFailure.set(failure);
+                    } finally {
+                        edtReturned.countDown();
+                    }
+                });
+                assertTrue(edtReturned.await(5, TimeUnit.SECONDS),
+                    "the EDT must remain able to edit documents while filesystem validation is blocked on a worker");
+                assertNull(edtFailure.get(), "the EDT edit must finish without an exception");
+                assertSame(completed, fixture.service.latest());
+                assertEquals(publicationsAfterBuild, fixture.outcomes.size());
+                assertEquals(launchesAfterBuild, fixture.launches.size());
+                holdBackgroundCheck.set(false);
+                releaseBackground.countDown();
+                assertTrue(backgroundReturned.await(10, TimeUnit.SECONDS));
+                assertTrue(fixture.service.isCurrent(completed), "unrelated dirty text must not invalidate the saved compilation inputs");
+                quietEdt();
+                assertSame(completed, fixture.service.latest());
+                assertEquals(publicationsAfterBuild, fixture.outcomes.size());
+                assertEquals(launchesAfterBuild, fixture.launches.size());
+                fixture.restore(note, savedNote);
+
+                Document entry = fixture.document(fixture.entry);
+                String savedEntry = EdtTestUtil.runInEdtAndGet(entry::getText);
+                try {
+                    fixture.replace(entry, savedEntry + "// a real input still invalidates immediately\n");
+                    await(() -> {
+                        var latest = fixture.service.latest();
+                        return latest != null && latest.generation() == completed.generation() && !latest.success()
+                            && latest.items().isEmpty() && fixture.outcomes.stream().anyMatch(shown -> shown == latest);
+                    }, "a real input edit must still invalidate completed results after alias checks move off the EDT");
+                    quietEdt();
+                    assertEquals(launchesAfterBuild, fixture.launches.size());
+                    assertEquals(publicationsAfterBuild + 1, fixture.outcomes.size());
+                    assertEquals(0, filesystemCallsOnEdt.get(), "no observed filesystem validation may execute on the EDT");
+                    assertFalse(observerTimedOut.get());
+                } finally {
+                    fixture.restore(entry, savedEntry);
+                }
+            } finally {
+                // Always unblock workers before fixture/project disposal, even
+                // if an assertion or the deliberately bounded UI check fails.
+                holdBackgroundCheck.set(false);
+                releaseBackground.countDown();
+                fixture.restore(note, savedNote);
+            }
+        }
+        passed("keepsFilesystemValidationOffEdt");
     }
 
     @Test

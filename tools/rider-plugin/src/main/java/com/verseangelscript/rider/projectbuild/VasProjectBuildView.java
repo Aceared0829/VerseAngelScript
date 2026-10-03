@@ -110,14 +110,19 @@ public final class VasProjectBuildView implements ToolWindowFactory {
         if (location == null) return;
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
             try {
-                if (!VasProjectBuildService.getInstance(project).isCurrent(outcome) || !location.snapshot().unchanged(true)) return;
+                var service = VasProjectBuildService.getInstance(project);
+                long inputRevision = service.inputRevision(outcome);
+                if (inputRevision < 0 || !service.isCurrent(outcome) || !location.snapshot().unchanged(true)) return;
+                // Refresh and load the document before returning to EDT. The final
+                // UI callback only inspects cached state and navigates the editor.
+                var file = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(location.file());
+                if (file == null) return;
+                var manager = FileDocumentManager.getInstance();
+                com.intellij.openapi.application.ReadAction.computeBlocking(() -> manager.getDocument(file));
                 ApplicationManager.getApplication().invokeLater(() -> {
                     if (project.isDisposed() || !TrustedProjects.isProjectTrusted(project)
-                        || VasProjectBuildService.getInstance(project).latest() != outcome) return;
-                    var file = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(location.file());
-                    if (file == null) return;
-                    var manager = FileDocumentManager.getInstance();
-                    var document = manager.getDocument(file);
+                        || service.inputRevision(outcome) != inputRevision || !file.isValid()) return;
+                    var document = manager.getCachedDocument(file);
                     if (document != null && (manager.isDocumentUnsaved(document)
                         || location.snapshot().text() != null && !document.getText().equals(location.snapshot().editorText()))) return;
                     if (location.offset() < 0) new OpenFileDescriptor(project, file).navigate(true);

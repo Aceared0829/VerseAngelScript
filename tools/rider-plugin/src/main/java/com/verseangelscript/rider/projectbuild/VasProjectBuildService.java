@@ -42,12 +42,23 @@ public final class VasProjectBuildService implements Disposable {
     public record Outcome(long generation, String unit, String status, boolean success, List<Item> items) {}
     private record Selection(VasProjectProtocol.Descriptor descriptor, Map<String,String> inputStamps) {}
     private final Project project;
+    private final Object stateLock = new Object();
     private final AtomicLong sequence = new AtomicLong();
     private final Map<String, Set<Path>> dependencies = new ConcurrentHashMap<>();
     private volatile Session current;
     private volatile Outcome latest;
     private volatile Interaction interaction;
     private volatile boolean disposed;
+    private volatile Runnable filesystemObserver = () -> {};
+    void installFilesystemObserver(Runnable observer, Disposable lifetime) {
+        filesystemObserver = observer;
+        com.intellij.openapi.util.Disposer.register(lifetime, () -> filesystemObserver = () -> {});
+    }
+    private void filesystemWork() {
+        if (ApplicationManager.getApplication().isDispatchThread())
+            throw new IllegalStateException("VAS filesystem validation must run off the EDT.");
+        filesystemObserver.run();
+    }
     private volatile java.util.function.Consumer<List<String>> launchObserver = ignored -> {};
     void installLaunchObserver(java.util.function.Consumer<List<String>> observer, Disposable lifetime) {
         launchObserver = observer;
@@ -72,28 +83,32 @@ public final class VasProjectBuildService implements Disposable {
         EditorFactory.getInstance().getEventMulticaster().addDocumentListener(new DocumentListener() {
             @Override public void documentChanged(@NotNull DocumentEvent event) {
                 VirtualFile file = FileDocumentManager.getInstance().getFile(event.getDocument());
-                if (file != null && relevant(Path.of(file.getPath()))) invalidate("Inputs changed; build again");
+                if (file != null) changed(Path.of(file.getPath()), false);
             }
         }, this);
         project.getMessageBus().connect(this).subscribe(VirtualFileManager.VFS_CHANGES, new BulkFileListener() {
             @Override public void before(@NotNull List<? extends VFileEvent> events) {
                 // Rename/move events must be checked while their old directory
                 // identity still exists, including parents of observed sources.
-                if (events.stream().anyMatch(event -> relevant(Path.of(event.getPath())))) invalidate("Files changed; build again");
+                for (VFileEvent event : events) changed(Path.of(event.getPath()), true);
             }
             @Override public void after(@NotNull List<? extends VFileEvent> events) {
-                if (events.stream().anyMatch(event -> relevant(Path.of(event.getPath())))) invalidate("Files changed; build again");
+                for (VFileEvent event : events) changed(Path.of(event.getPath()), true);
             }
         });
     }
 
     public static VasProjectBuildService getInstance(Project project) { return project.getService(VasProjectBuildService.class); }
     public Outcome latest() { return latest; }
+    public long inputRevision(Outcome outcome) {
+        Session session = current;
+        return session != null && outcome.generation() == session.id && active(session) && latest == outcome ? session.inputEvents.get() : -1;
+    }
     public boolean isCurrent(Outcome outcome) {
         Session session = current;
-        if (session == null || latest != outcome || !active(session)) return false;
+        if (session == null || outcome.generation() != session.id || latest != outcome || !active(session)) return false;
         try { guard(session, true); return latest == outcome && active(session); }
-        catch (RuntimeException exception) { invalidate(exception.getMessage()); return false; }
+        catch (RuntimeException exception) { invalidate(session, exception.getMessage()); return false; }
     }
     public void setInteraction(Interaction value) { interaction = value; }
     public Set<Path> dependencies(String manifest, String unit) { return Set.copyOf(dependencies.getOrDefault(key(manifest, unit), Set.of())); }
@@ -101,12 +116,19 @@ public final class VasProjectBuildService implements Disposable {
 
     public void start() {
         if (disposed || project.isDisposed() || project.getBasePath() == null) return;
-        Session old = current;
-        if (old != null) old.cancelled = true;
         Session session = new Session(sequence.incrementAndGet(), Path.of(project.getBasePath()).toAbsolutePath().normalize().resolve("vas-project.json"),
             VasToolchainSettings.getInstance().compilerPath);
-        current = session;
-        publish(session, new Outcome(session.id, "", "Reading project…", false, List.of()));
+        session.aliasChecks = new VasProjectChangeQueue(1024,
+            runnable -> ApplicationManager.getApplication().executeOnPooledThread(runnable),
+            () -> active(session), path -> {
+                if (inputAlias(session, path)) invalidate(session, "Inputs changed; build again");
+            }, () -> invalidate(session, "Too many pending input changes. Build again."));
+        synchronized (stateLock) {
+            Session old = current;
+            if (old != null) old.cancelled = true;
+            current = session;
+        }
+        publishProgress(session, new Outcome(session.id, "", "Reading project…", false, List.of()));
         ProgressManager.getInstance().run(new Task.Backgroundable(project, "Describe VAS project", true) {
             Selection selection;
             @Override public void run(@NotNull ProgressIndicator indicator) {
@@ -120,7 +142,7 @@ public final class VasProjectBuildService implements Disposable {
                     if (!Files.isRegularFile(session.manifest)) throw new IOException("No root vas-project.json. Build Project requires an explicit manifest.");
                     beforeProcess(session, List.of("--describe-project=json", session.manifest.toString()));
                     var output = VasProjectProcess.run(session.compiler, List.of("--describe-project=json", session.manifest.toString()),
-                        session.manifest.getParent(), 30_000, 16L * 1024 * 1024, () -> guard(session, false), null);
+                        session.manifest.getParent(), 30_000, 16L * 1024 * 1024, () -> guardState(session), null);
                     var descriptor = VasProjectProtocol.describe(output.stdout(), output.exitCode());
                     if (!same(Path.of(descriptor.project()), session.manifest) || !same(Path.of(descriptor.root()), session.manifest.getParent()))
                         throw new IOException("Compiler described a different VAS project.");
@@ -136,12 +158,12 @@ public final class VasProjectBuildService implements Disposable {
             @Override public void onSuccess() {
                 if (selection == null || !active(session)) return;
                 try {
-                    guard(session, true);
+                    guardState(session);
                     String chosen = ui().select(selection.descriptor());
                     if (chosen == null) { cancel(); return; }
                     var unit = selection.descriptor().units().stream().filter(value -> value.id().equals(chosen)).findFirst()
                         .orElseThrow(() -> new IllegalStateException("Select an explicit VAS compilation unit."));
-                    guard(session, true);
+                    guardState(session);
                     session.unit = unit;
                     session.descriptor = selection.descriptor();
                     build(session, selection);
@@ -152,7 +174,7 @@ public final class VasProjectBuildService implements Disposable {
     }
 
     private void build(Session session, Selection selection) {
-        publish(session, new Outcome(session.id, session.unit.id(), "Building…", false, List.of()));
+        publishProgress(session, new Outcome(session.id, session.unit.id(), "Building…", false, List.of()));
         ProgressManager.getInstance().run(new Task.Backgroundable(project, "Build VAS unit " + session.unit.id(), true) {
             @Override public void run(@NotNull ProgressIndicator indicator) {
                 session.indicator = indicator;
@@ -169,7 +191,7 @@ public final class VasProjectBuildService implements Disposable {
                     beforeProcess(session, List.of("--report=jsonl", "--project", session.manifest.toString(), "--unit", session.unit.id()));
                     var output = VasProjectProcess.run(session.compiler,
                         List.of("--report=jsonl", "--project", session.manifest.toString(), "--unit", session.unit.id()),
-                        Path.of(session.descriptor.root()), 120_000, 64L * 1024 * 1024, () -> guard(session, false), line -> {
+                        Path.of(session.descriptor.root()), 120_000, 64L * 1024 * 1024, () -> guardState(session), line -> {
                             report.acceptLine(line);
                             observe(session, report);
                         });
@@ -244,18 +266,31 @@ public final class VasProjectBuildService implements Disposable {
         return new Location(path, offset, snapshot);
     }
 
-    private void guard(Session session, boolean content) {
-        if (!active(session) || (session.indicator != null && session.indicator.isCanceled())) throw new IllegalStateException("VAS project build cancelled.");
+    /** Cheap state-only check, safe in UI callbacks. No filesystem or dirty-alias reads. */
+    private void guardState(Session session) {
+        ProgressIndicator indicator = session.indicator;
+        if (!active(session) || (indicator != null && indicator.isCanceled())) throw new IllegalStateException("VAS project build cancelled.");
         if (!TrustedProjects.isProjectTrusted(project)) throw new IllegalStateException("Trust this project before Build Project.");
         if (!session.compilerSetting.equals(VasToolchainSettings.getInstance().compilerPath)) throw new IllegalStateException("VAS compiler setting changed. Build again.");
-        ReadAction.runBlocking(() -> {
+    }
+
+    /** All disk checks run off EDT, and outside the short document read action. */
+    private void guard(Session session, boolean content) {
+        filesystemWork();
+        guardState(session);
+        List<Path> dirty = ReadAction.computeBlocking(() -> {
+            List<Path> files = new ArrayList<>();
             FileDocumentManager manager = FileDocumentManager.getInstance();
             for (Document document : manager.getUnsavedDocuments()) {
                 VirtualFile file = manager.getFile(document);
-                if (file != null && (file.getName().toLowerCase(Locale.ROOT).endsWith(".vas") || inputAlias(session, Path.of(file.getPath()))))
-                    throw new IllegalStateException("Save the VAS project input before building: " + file.getPath());
+                if (file != null) files.add(Path.of(file.getPath()));
             }
+            return files;
         });
+        for (Path path : dirty) {
+            if (path.toString().toLowerCase(Locale.ROOT).endsWith(".vas") || inputAlias(session, path))
+                throw new IllegalStateException("Save the VAS project input before building: " + path);
+        }
         try {
             if (session.compiler != null && (session.compilerStamp == null
                 || !session.compiler.equals(Path.of(session.compilerSetting).toRealPath())
@@ -267,6 +302,7 @@ public final class VasProjectBuildService implements Disposable {
     }
 
     private boolean inputAlias(Session session, Path path) {
+        filesystemWork();
         if (same(path, session.manifest)) return true;
         Set<Path> known = new HashSet<>(session.inputs.keySet());
         if (session.unit != null) known.addAll(dependencies.getOrDefault(key(session.manifest.toString(), session.unit.id()), Set.of()));
@@ -277,18 +313,25 @@ public final class VasProjectBuildService implements Disposable {
         return false;
     }
 
-    private boolean relevant(Path path) {
+    /** Listener work is purely lexical. Physical aliases are coalesced on a worker. */
+    private void changed(Path path, boolean includeAncestors) {
         Session session = current;
-        if (session == null || session.cancelled) return false;
-        if (inputAlias(session, path)) return true;
-        // The compiler permits any output suffix. Its bytecode must not invalidate
-        // its own build merely because the chosen destination ends with .vas.
-        if (session.unit != null && same(path, Path.of(session.unit.output()))) return false;
-        if (path.toString().toLowerCase(Locale.ROOT).endsWith(".vas")) return true;
+        if (session == null || !active(session)) return;
         Path changed = path.toAbsolutePath().normalize();
-        if (session.inputs.keySet().stream().anyMatch(input -> input.toAbsolutePath().normalize().startsWith(changed))) return true;
-        return dependencies.values().stream().anyMatch(paths -> paths.stream()
-            .anyMatch(input -> input.toAbsolutePath().normalize().startsWith(changed)));
+        session.inputEvents.incrementAndGet();
+        boolean known = same(changed, session.manifest) || session.inputs.containsKey(changed)
+            || dependencies.values().stream().anyMatch(paths -> paths.contains(changed));
+        if (!known && includeAncestors) {
+            known = session.inputs.keySet().stream().anyMatch(input -> input.startsWith(changed))
+                || dependencies.values().stream().anyMatch(paths -> paths.stream().anyMatch(input -> input.startsWith(changed)));
+        }
+        // A bytecode destination can itself end .vas; only real inputs invalidate it.
+        boolean output = session.unit != null && same(changed, Path.of(session.unit.output()));
+        if (known || !output && changed.toString().toLowerCase(Locale.ROOT).endsWith(".vas")) {
+            invalidate(session, "Inputs changed; build again");
+        } else {
+            session.aliasChecks.submit(changed);
+        }
     }
     private static boolean same(Path first, Path second) { return first.toAbsolutePath().normalize().equals(second.toAbsolutePath().normalize()); }
     private static Path resolve(String cwd, String path) {
@@ -298,30 +341,68 @@ public final class VasProjectBuildService implements Disposable {
     private boolean active(Session session) { return !disposed && !project.isDisposed() && !session.cancelled && current == session; }
     public void cancel() { invalidate("Build cancelled"); }
     public void compilerChanged() { invalidate("VAS compiler setting changed. Build again."); }
-    private void invalidate(String reason) {
-        Session session = current;
+    private void invalidate(String reason) { invalidate(current, reason); }
+    private void invalidate(Session session, String reason) {
         if (session == null) return;
-        synchronized (session) {
-            if (session.cancelled) return;
+        Outcome result;
+        synchronized (stateLock) {
+            if (current != session || session.cancelled) return;
             session.cancelled = true;
+            session.indicator = null;
+            result = new Outcome(session.id, session.unit == null ? "" : session.unit.id(), reason, false, List.of());
+            latest = result;
         }
-        session.indicator = null;
-        Outcome result = new Outcome(session.id, session.unit == null ? "" : session.unit.id(), reason, false, List.of());
-        latest = result;
-        ApplicationManager.getApplication().invokeLater(() -> { if (!disposed && !project.isDisposed() && current == session) ui().show(result); });
+        ApplicationManager.getApplication().invokeLater(() -> {
+            if (!disposed && !project.isDisposed() && current == session && latest == result) ui().show(result);
+        });
     }
     private void failed(Session session, Exception exception) {
         String message = exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage();
         publish(session, new Outcome(session.id, session.unit == null ? "" : session.unit.id(), message, false, List.of()));
     }
-    private void publish(Session session, Outcome result) {
+    private void publishProgress(Session session, Outcome result) {
+        // Empty, non-success progress is safe to display immediately, even while a
+        // filesystem is slow. Never leave the previous build's success visible.
+        long revision = session.publications.incrementAndGet();
         ApplicationManager.getApplication().invokeLater(() -> {
-            if (!active(session)) return;
-            // Queueing the UI must not permit late publication after an edit or trust change.
-            try { guard(session, false); }
-            catch (RuntimeException exception) { invalidate(exception.getMessage()); return; }
-            latest = result;
+            if (!active(session) || session.publications.get() != revision) return;
+            try { guardState(session); }
+            catch (RuntimeException exception) { invalidate(session, exception.getMessage()); return; }
+            synchronized (stateLock) {
+                if (!active(session) || session.publications.get() != revision) return;
+                latest = result;
+            }
             ui().show(result);
+        });
+    }
+
+    private void publish(Session session, Outcome result) {
+        validatePublication(session, result, session.publications.incrementAndGet());
+    }
+
+    /** Validate off-thread, then use an in-memory event/revision barrier on EDT. */
+    private void validatePublication(Session session, Outcome result, long revision) {
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            if (!active(session) || session.publications.get() != revision) return;
+            long events = session.inputEvents.get();
+            try { guard(session, false); }
+            catch (RuntimeException exception) { invalidate(session, exception.getMessage()); return; }
+            ApplicationManager.getApplication().invokeLater(() -> {
+                if (!active(session) || session.publications.get() != revision) return;
+                try { guardState(session); }
+                catch (RuntimeException exception) { invalidate(session, exception.getMessage()); return; }
+                if (session.inputEvents.get() != events) {
+                    // An edit or VFS event arrived after validation. Revalidate on a
+                    // worker rather than doing alias/stat/hash work on the UI thread.
+                    validatePublication(session, result, revision);
+                    return;
+                }
+                synchronized (stateLock) {
+                    if (!active(session) || session.publications.get() != revision) return;
+                    latest = result;
+                }
+                ui().show(result);
+            });
         });
     }
     private Interaction ui() { return interaction != null ? interaction : VasProjectBuildView.interaction(project); }
@@ -333,11 +414,14 @@ public final class VasProjectBuildService implements Disposable {
         final String compilerSetting;
         final Map<Path, VasProjectInputs.Snapshot> inputs = new ConcurrentHashMap<>();
         final Set<Path> observed = ConcurrentHashMap.newKeySet();
+        final AtomicLong inputEvents = new AtomicLong();
+        final AtomicLong publications = new AtomicLong();
+        VasProjectChangeQueue aliasChecks;
         volatile boolean cancelled;
         volatile ProgressIndicator indicator;
         volatile Path compiler;
         VasProjectProtocol.Descriptor descriptor;
-        VasProjectProtocol.Unit unit;
+        volatile VasProjectProtocol.Unit unit;
         long startedMillis;
         long inputBytes;
         String compilerStamp;

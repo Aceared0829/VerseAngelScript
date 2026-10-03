@@ -23,6 +23,7 @@ EXPECTED = frozenset({
     "invalidatesCompletedResultsAfterTrustOrCompilerChange",
     "invalidatesCompletedResultsAfterDependencyDirectoryChanges",
     "ignoresBytecodeOutputChangesWithVasSuffix",
+    "keepsFilesystemValidationOffEdt",
     "rejectsMissingManifestWithoutActiveFileFallback",
 })
 PREFIX = "VAS_RIDER_PROJECT_BUILD_AUDIT_V1 "
