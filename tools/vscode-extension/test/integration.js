@@ -6,6 +6,8 @@ const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { StringDecoder } = require('node:string_decoder');
 const vscode = require('vscode');
+const { RerunSaveEvidence } = require('./rerunSaveEvidence');
+const { documentDigest, readVersion } = require('../src/projectVersions');
 
 // Observe the real child-process boundary before activating the extension. These
 // wrappers never replace compiler output, exit status, tasks, or VS Code APIs.
@@ -466,6 +468,7 @@ async function userRerunTests(folder, fixture, inputKind = 'entry') {
     cachedTask = await projectTask(folder, alias.unit);
   }
   const entryPaths = [entry.uri.fsPath, await fs.realpath(entry.uri.fsPath)];
+  let saveEvidence;
   const fileEvents = [], diagnosticEvents = [], inputEvents = [], textEvents = [];
   inputAudit = event => { if (inputEvents.length < 64) inputEvents.push(event); };
   const textListener = vscode.workspace.onDidChangeTextDocument(event => {
@@ -474,8 +477,10 @@ async function userRerunTests(folder, fixture, inputKind = 'entry') {
   });
   const { sameFileName } = require('../src/toolchain');
   fileAudit = (kind, file) => {
-    if (fileEvents.length < 64 && entryPaths.some(input => sameFileName(input, file.fsPath))) {
-      fileEvents.push({ order: ++auditSequence, kind, path: file.fsPath });
+    if (entryPaths.some(input => sameFileName(input, file.fsPath))) {
+      const event = { order: ++auditSequence, kind, path: file.fsPath };
+      if (fileEvents.length < 64) fileEvents.push(event);
+      saveEvidence?.observed(event);
     }
   };
   const diagnosticListener = vscode.languages.onDidChangeDiagnostics(event => {
@@ -493,9 +498,18 @@ async function userRerunTests(folder, fixture, inputKind = 'entry') {
     assert.equal(entry.isDirty, true);
     assert.equal(vscode.languages.getDiagnostics(uri(alias.include)).length, 0);
   }
+  saveEvidence = new RerunSaveEvidence({ files: entryPaths, version: entry.version, text: entry.getText(),
+    before: await readVersion(entry.uri.fsPath) });
+  const rerunWillSaveListener = vscode.workspace.onWillSaveTextDocument(event => {
+    if (event.document.uri.toString() === entry.uri.toString()) saveEvidence.willSave({ order: ++auditSequence,
+      version: event.document.version, dirty: event.document.isDirty, digest: documentDigest(event.document.getText()) });
+  });
   const rerunSaved = [];
   const rerunSaveListener = vscode.workspace.onDidSaveTextDocument(item => {
-    if (item.uri.toString() === entry.uri.toString()) rerunSaved.push({ order: ++auditSequence, version: item.version, dirty: item.isDirty });
+    if (item.uri.toString() === entry.uri.toString()) {
+      const event = { order: ++auditSequence, version: item.version, dirty: item.isDirty, digest: documentDigest(item.getText()) };
+      rerunSaved.push(event); saveEvidence.didSave(event);
+    }
   });
   const rerunStart = processCalls.length, rerunCustom = customExecutions.length;
   processAudit = () => ({ dirty: entry.isDirty, saves: rerunSaved.length, version: entry.version });
@@ -529,21 +543,35 @@ async function userRerunTests(folder, fixture, inputKind = 'entry') {
         'the observed workbench save must precede the native --project spawn');
       assert.ok(builds[0].order < customExecutions[rerunCustom].closeEvents[0].order, 'native spawn must precede successful PTY close');
       try {
-        const savedOrder = Math.min(...rerunSaved.map(event => event.order));
-        await eventually(() => fileEvents.some(event => event.order > savedOrder), 'this rerun saved input notification on the extension actual watcher');
+        await eventually(() => saveEvidence.currentNotifications().length > 0,
+          'this rerun saved input notification on the extension actual watcher');
+        const sectionPath = uri(inputKind === 'include-alias' ? alias.include : alias.entry).fsPath;
+        const proof = builds[0].report?.find(record => record.type === 'section_loaded' && sameFileName(record.section, sectionPath));
+        audit.loadedSource = proof;
+        assert.equal(builds[0].reportTruncated, undefined, 'rerun native audit must remain complete');
+        const current = await readVersion(sectionPath);
+        await bounded(saveEvidence.settle(), 'capture the saved notification content');
+        const currentNotifications = saveEvidence.verify(proof, current);
+        audit.saveEvidence = saveEvidence.snapshot();
         assert.ok(lastInputObservations, 'the actual task must register its production input observation barrier');
         await bounded(lastInputObservations.settle(), 'classify the saved input notification against its pre-compile baseline');
-        audit.notificationAfterNativeClose = fileEvents.some(event => event.order > customExecutions[rerunCustom].closeEvents[0].order);
+        audit.notificationBeforeDidSave = currentNotifications.some(event => event.order < saveEvidence.saved.order);
+        audit.notificationAfterNativeClose = currentNotifications.some(event => event.order > customExecutions[rerunCustom].closeEvents[0].order);
         assert.ok(vscode.languages.getDiagnostics(uri(alias.include)).some(item => item.severity === vscode.DiagnosticSeverity.Warning),
           'the saved native build must retain current included-file diagnostics after its actual notification is classified');
       } catch (error) {
+        audit.saveEvidence = saveEvidence.snapshot();
         console.error('VAS saved-rerun diagnostic evidence:', JSON.stringify(audit));
         throw error;
       }
       if (inputKind === 'include-alias') assert.equal(vscode.languages.getDiagnostics(entry.uri).length, 0, 'physical alias recovery must not rebind compiler diagnostics');
       console.log('VAS saved-rerun diagnostic evidence:', JSON.stringify(audit));
     }
-  } finally { processAudit = undefined; fileAudit = undefined; inputAudit = undefined; textListener.dispose(); diagnosticListener.dispose(); rerunListener.dispose(); rerunSaveListener.dispose(); }
+  } finally {
+    processAudit = undefined; fileAudit = undefined; inputAudit = undefined;
+    textListener.dispose(); diagnosticListener.dispose(); rerunListener.dispose(); rerunSaveListener.dispose(); rerunWillSaveListener.dispose();
+    await bounded(saveEvidence.dispose(), 'dispose saved-notification audit reads');
+  }
   if (entry.isDirty) assert.equal(await entry.save(), true);
   console.log('PASS: real user Rerun Last Task preserves saved-input and event-order invariants');
 }
