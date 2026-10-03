@@ -1,6 +1,8 @@
 package com.verseangelscript.rider.projectbuild;
 
 import com.intellij.ide.trustedProjects.TrustedProjects;
+import com.intellij.ide.trustedProjects.TrustedProjectsListener;
+import com.intellij.ide.trustedProjects.TrustedProjectsLocator;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ReadAction;
@@ -59,6 +61,14 @@ public final class VasProjectBuildService implements Disposable {
 
     public VasProjectBuildService(Project project) {
         this.project = project;
+        ApplicationManager.getApplication().getMessageBus().connect(this).subscribe(TrustedProjectsListener.TOPIC,
+            new TrustedProjectsListener() {
+                @Override public void onProjectUntrusted(@NotNull TrustedProjectsLocator.LocatedProject locatedProject) {
+                    // Path-level trust updates may not carry a Project instance.
+                    if (!project.isDisposed() && !TrustedProjects.isProjectTrusted(project))
+                        invalidate("Project trust was revoked. Trust the project and build again.");
+                }
+            });
         EditorFactory.getInstance().getEventMulticaster().addDocumentListener(new DocumentListener() {
             @Override public void documentChanged(@NotNull DocumentEvent event) {
                 VirtualFile file = FileDocumentManager.getInstance().getFile(event.getDocument());
@@ -66,6 +76,11 @@ public final class VasProjectBuildService implements Disposable {
             }
         }, this);
         project.getMessageBus().connect(this).subscribe(VirtualFileManager.VFS_CHANGES, new BulkFileListener() {
+            @Override public void before(@NotNull List<? extends VFileEvent> events) {
+                // Rename/move events must be checked while their old directory
+                // identity still exists, including parents of observed sources.
+                if (events.stream().anyMatch(event -> relevant(Path.of(event.getPath())))) invalidate("Files changed; build again");
+            }
             @Override public void after(@NotNull List<? extends VFileEvent> events) {
                 if (events.stream().anyMatch(event -> relevant(Path.of(event.getPath())))) invalidate("Files changed; build again");
             }
@@ -264,9 +279,16 @@ public final class VasProjectBuildService implements Disposable {
 
     private boolean relevant(Path path) {
         Session session = current;
-        if (session == null) return false;
-        if (path.toString().toLowerCase(Locale.ROOT).endsWith(".vas") || inputAlias(session, path)) return true;
-        return dependencies.values().stream().anyMatch(paths -> paths.stream().anyMatch(input -> same(input, path)));
+        if (session == null || session.cancelled) return false;
+        if (inputAlias(session, path)) return true;
+        // The compiler permits any output suffix. Its bytecode must not invalidate
+        // its own build merely because the chosen destination ends with .vas.
+        if (session.unit != null && same(path, Path.of(session.unit.output()))) return false;
+        if (path.toString().toLowerCase(Locale.ROOT).endsWith(".vas")) return true;
+        Path changed = path.toAbsolutePath().normalize();
+        if (session.inputs.keySet().stream().anyMatch(input -> input.toAbsolutePath().normalize().startsWith(changed))) return true;
+        return dependencies.values().stream().anyMatch(paths -> paths.stream()
+            .anyMatch(input -> input.toAbsolutePath().normalize().startsWith(changed)));
     }
     private static boolean same(Path first, Path second) { return first.toAbsolutePath().normalize().equals(second.toAbsolutePath().normalize()); }
     private static Path resolve(String cwd, String path) {
@@ -279,7 +301,10 @@ public final class VasProjectBuildService implements Disposable {
     private void invalidate(String reason) {
         Session session = current;
         if (session == null) return;
-        session.cancelled = true;
+        synchronized (session) {
+            if (session.cancelled) return;
+            session.cancelled = true;
+        }
         session.indicator = null;
         Outcome result = new Outcome(session.id, session.unit == null ? "" : session.unit.id(), reason, false, List.of());
         latest = result;

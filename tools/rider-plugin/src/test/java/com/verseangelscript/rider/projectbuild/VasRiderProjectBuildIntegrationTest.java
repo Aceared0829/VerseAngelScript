@@ -12,6 +12,7 @@ import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.actionSystem.CommonDataKeys;
 import com.intellij.openapi.actionSystem.DataContext;
 import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.application.WriteAction;
 import com.intellij.openapi.command.WriteCommandAction;
 import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.fileEditor.FileDocumentManager;
@@ -358,6 +359,201 @@ public final class VasRiderProjectBuildIntegrationTest extends PerTestSolutionTe
             }
         }
         passed("suppressesResultsAfterInputsSettingsOrTrustChange");
+    }
+
+    @Test
+    void invalidatesCompletedResultsAfterTrustOrCompilerChange() throws Exception {
+        try (Fixture fixture = fixture()) {
+            var first = fixture.build();
+            assertTrue(first.success(), first.status());
+            assertFalse(first.items().isEmpty(), "the real compiler must publish diagnostics before they can be invalidated");
+            int launchesAfterFirst = fixture.launches.size();
+            int selectionsAfterFirst = fixture.selections.get();
+            fixture.trust(false);
+            await(() -> {
+                var latest = fixture.service.latest();
+                return latest != null && latest.generation() == first.generation() && !latest.success()
+                    && latest.items().isEmpty() && latest.status().toLowerCase(java.util.Locale.ROOT).contains("trust")
+                    && fixture.outcomes.stream().anyMatch(shown -> shown == latest);
+            }, "revoking trust must clear an already-completed result without another action or navigation click");
+            var trustInvalidated = fixture.service.latest();
+            assertNotSame(first, trustInvalidated);
+            quietEdt();
+            assertSame(trustInvalidated, fixture.service.latest());
+            assertEquals(launchesAfterFirst, fixture.launches.size());
+            assertEquals(selectionsAfterFirst, fixture.selections.get());
+            fixture.trust(true);
+            quietEdt();
+            assertSame(trustInvalidated, fixture.service.latest(), "restoring trust must not restore stale success or initiate a build");
+            assertEquals(launchesAfterFirst, fixture.launches.size());
+            assertEquals(selectionsAfterFirst, fixture.selections.get());
+
+            var second = fixture.build();
+            assertTrue(second.success(), second.status());
+            assertEquals(first.generation() + 1, second.generation());
+            assertFalse(second.items().isEmpty());
+            int launchesAfterSecond = fixture.launches.size();
+            int selectionsAfterSecond = fixture.selections.get();
+            fixture.applyCompilerSetting("");
+            await(() -> {
+                var latest = fixture.service.latest();
+                return latest != null && latest.generation() == second.generation() && !latest.success()
+                    && latest.items().isEmpty() && latest.status().toLowerCase(java.util.Locale.ROOT).contains("compiler")
+                    && fixture.outcomes.stream().anyMatch(shown -> shown == latest);
+            }, "applying a changed compiler setting must immediately invalidate completed results");
+            var compilerInvalidated = fixture.service.latest();
+            assertNotSame(second, compilerInvalidated);
+            quietEdt();
+            assertSame(compilerInvalidated, fixture.service.latest());
+            assertEquals(launchesAfterSecond, fixture.launches.size(), "settings changes must never launch project tools");
+            assertEquals(selectionsAfterSecond, fixture.selections.get());
+            fixture.applyCompilerSetting(fixture.compiler.toString());
+            quietEdt();
+            assertEquals(second.generation(), fixture.service.latest().generation());
+            assertFalse(fixture.service.latest().success());
+            assertTrue(fixture.service.latest().items().isEmpty());
+            assertEquals(launchesAfterSecond, fixture.launches.size(), "restoring compiler settings still requires an explicit action");
+            assertEquals(selectionsAfterSecond, fixture.selections.get());
+        }
+        passed("invalidatesCompletedResultsAfterTrustOrCompilerChange");
+    }
+
+    @Test
+    void invalidatesCompletedResultsAfterDependencyDirectoryChanges() throws Exception {
+        try (Fixture fixture = fixture()) {
+            Path dependency = fixture.write("src/nested/dependency.vas", "void included() {}\n");
+            fixture.writePath(fixture.entry, "#include \"nested/dependency.vas\"\nvoid main() { included(); }\n");
+            var first = fixture.build();
+            assertTrue(first.success(), first.status());
+            assertFalse(first.items().isEmpty());
+            assertTrue(fixture.service.dependencies(fixture.manifest.toString(), "good").contains(dependency));
+            VirtualFile parent = EdtTestUtil.runInEdtAndGet(() ->
+                LocalFileSystem.getInstance().refreshAndFindFileByNioFile(dependency.getParent()));
+            assertNotNull(parent);
+            int launchesAfterFirst = fixture.launches.size();
+            int selectionsAfterFirst = fixture.selections.get();
+            int publicationsAfterFirst = fixture.outcomes.size();
+            EdtTestUtil.runInEdtAndWait(() -> WriteAction.run(() -> parent.rename(fixture, "renamed-nested")));
+            assertFalse(Files.exists(dependency));
+            assertTrue(Files.exists(dependency.getParent().resolveSibling("renamed-nested").resolve(dependency.getFileName())));
+            await(() -> {
+                var latest = fixture.service.latest();
+                return latest != null && latest.generation() == first.generation() && !latest.success()
+                    && latest.items().isEmpty() && fixture.outcomes.stream().anyMatch(shown -> shown == latest);
+            }, "renaming a dependency's containing directory must clear completed diagnostics without another action");
+            quietEdt();
+            assertEquals(first.generation(), fixture.service.latest().generation());
+            assertFalse(fixture.service.latest().success());
+            assertTrue(fixture.service.latest().items().isEmpty());
+            assertEquals(launchesAfterFirst, fixture.launches.size());
+            assertEquals(selectionsAfterFirst, fixture.selections.get());
+            assertEquals(publicationsAfterFirst + 1, fixture.outcomes.size(),
+                "VFS before/after notifications must publish exactly one invalidation for a completed generation");
+            var onlyInvalidation = fixture.outcomes.getLast();
+            assertEquals(first.generation(), onlyInvalidation.generation());
+            assertFalse(onlyInvalidation.success());
+            assertTrue(onlyInvalidation.items().isEmpty());
+
+            Document entryDocument = fixture.document(fixture.entry);
+            String savedEntry = EdtTestUtil.runInEdtAndGet(entryDocument::getText);
+            try {
+                fixture.replace(entryDocument, savedEntry + "// edit after the session was invalidated\n");
+                VirtualFile child = EdtTestUtil.runInEdtAndGet(() -> parent.findChild("dependency.vas"));
+                assertNotNull(child);
+                EdtTestUtil.runInEdtAndWait(() -> WriteAction.run(() -> child.delete(fixture)));
+                assertFalse(child.isValid());
+                quietEdt();
+                assertSame(onlyInvalidation, fixture.service.latest());
+                assertEquals(publicationsAfterFirst + 1, fixture.outcomes.size(),
+                    "editing and deleting inputs after invalidation must not reopen or republish the results UI");
+                assertEquals(launchesAfterFirst, fixture.launches.size());
+            } finally {
+                fixture.restore(entryDocument, savedEntry);
+            }
+            EdtTestUtil.runInEdtAndWait(() -> WriteAction.run(() -> parent.rename(fixture, "nested")));
+            fixture.writePath(dependency, "void included() {}\n");
+            assertTrue(Files.exists(dependency));
+            quietEdt();
+            assertEquals(first.generation(), fixture.service.latest().generation());
+            assertFalse(fixture.service.latest().success());
+            assertEquals(launchesAfterFirst, fixture.launches.size(), "restoring the directory must not automatically rebuild");
+            assertEquals(selectionsAfterFirst, fixture.selections.get());
+            assertEquals(publicationsAfterFirst + 1, fixture.outcomes.size());
+            var second = fixture.build();
+            assertTrue(second.success(), second.status());
+            assertEquals(first.generation() + 1, second.generation());
+            assertFalse(second.items().isEmpty());
+            int launchesAfterSecond = fixture.launches.size();
+            int selectionsAfterSecond = fixture.selections.get();
+            int publicationsAfterSecond = fixture.outcomes.size();
+            EdtTestUtil.runInEdtAndWait(() -> WriteAction.run(() -> parent.delete(fixture)));
+            assertFalse(parent.isValid());
+            assertFalse(Files.exists(dependency.getParent()));
+            await(() -> {
+                var latest = fixture.service.latest();
+                return latest != null && latest.generation() == second.generation() && !latest.success()
+                    && latest.items().isEmpty() && fixture.outcomes.stream().anyMatch(shown -> shown == latest);
+            }, "deleting a dependency's containing directory must invalidate a completed result without navigation");
+            quietEdt();
+            assertEquals(second.generation(), fixture.service.latest().generation());
+            assertFalse(fixture.service.latest().success());
+            assertTrue(fixture.service.latest().items().isEmpty());
+            assertEquals(launchesAfterSecond, fixture.launches.size(), "directory deletion must never launch project tools");
+            assertEquals(selectionsAfterSecond, fixture.selections.get());
+            assertEquals(publicationsAfterSecond + 1, fixture.outcomes.size(),
+                "deleting a directory must also coalesce its before/after and descendant notifications");
+        }
+        passed("invalidatesCompletedResultsAfterDependencyDirectoryChanges");
+    }
+
+    @Test
+    void ignoresBytecodeOutputChangesWithVasSuffix() throws Exception {
+        try (Fixture fixture = fixture()) {
+            Path output = fixture.entry.getParent().resolve("generated.vas");
+            JsonObject definition = new JsonObject();
+            definition.addProperty("schemaVersion", 1);
+            JsonArray units = new JsonArray();
+            units.add(fixture.unit("good", fixture.goodConfig, output));
+            definition.add("compilationUnits", units);
+            fixture.writePath(fixture.manifest, definition.toString());
+            assertFalse(Files.exists(output));
+            var completed = fixture.build();
+            assertTrue(completed.success(), completed.status());
+            assertTrue(Files.size(output) > 0);
+            assertFalse(fixture.service.dependencies(fixture.manifest.toString(), "good").contains(output),
+                "a generated bytecode path is not a source dependency merely because its suffix is .vas");
+            int launchesAfterBuild = fixture.launches.size();
+            int publicationsAfterBuild = fixture.outcomes.size();
+            fixture.refresh(output);
+            quietEdt();
+            assertSame(completed, fixture.service.latest(), "observing the compiler's generated .vas output must not invalidate its own build");
+            assertEquals(publicationsAfterBuild, fixture.outcomes.size());
+            assertEquals(launchesAfterBuild, fixture.launches.size());
+            Files.writeString(output, "// modified generated artifact\n", StandardCharsets.UTF_8);
+            fixture.refresh(output);
+            quietEdt();
+            assertSame(completed, fixture.service.latest(), "changes to the selected bytecode output must not masquerade as input edits");
+            assertEquals(publicationsAfterBuild, fixture.outcomes.size());
+            assertEquals(launchesAfterBuild, fixture.launches.size());
+
+            VirtualFile sourceDirectory = EdtTestUtil.runInEdtAndGet(() ->
+                LocalFileSystem.getInstance().refreshAndFindFileByNioFile(fixture.entry.getParent()));
+            assertNotNull(sourceDirectory);
+            EdtTestUtil.runInEdtAndWait(() -> WriteAction.run(() -> sourceDirectory.rename(fixture, "renamed-src")));
+            assertFalse(Files.exists(fixture.entry));
+            await(() -> {
+                var latest = fixture.service.latest();
+                return latest != null && latest.generation() == completed.generation() && !latest.success()
+                    && latest.items().isEmpty() && fixture.outcomes.stream().anyMatch(shown -> shown == latest);
+            }, "excluding an output file must not exclude its ancestor directory when that directory also contains a real entry input");
+            quietEdt();
+            assertEquals(completed.generation(), fixture.service.latest().generation());
+            assertFalse(fixture.service.latest().success());
+            assertTrue(fixture.service.latest().items().isEmpty());
+            assertEquals(publicationsAfterBuild + 1, fixture.outcomes.size());
+            assertEquals(launchesAfterBuild, fixture.launches.size(), "artifact and directory changes must never automatically build");
+        }
+        passed("ignoresBytecodeOutputChangesWithVasSuffix");
     }
 
     @Test

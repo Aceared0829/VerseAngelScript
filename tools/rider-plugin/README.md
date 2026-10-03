@@ -114,7 +114,9 @@ stderr 单独读取，保留前 16 KiB、总量限制 4 MiB。保存文件构建
 `VasRiderProjectBuildIntegrationTest` 在真实 Rider Build 262 Solution Host 中通过注册动作
 调用真实编译器，覆盖显式单元、不同 host、嵌套诊断和实际编辑器导航、旧格式与特殊路径、
 脏输入、被动事件不执行工具、未信任项目、选择取消/排队请求替换、选择后的输入/工具/信任变化、
-不完整依赖保留、缺少 manifest 无回退。宿主中的取消案例覆盖选择/排队阶段；已运行进程及其
+不完整依赖保留、缺少 manifest 无回退。另覆盖构建完成后撤销信任/更改工具设置、
+依赖父目录重命名/删除、只清除一次过期结果，以及 `.vas` 后缀产物不会使自己的构建失效。
+宿主中的取消案例覆盖选择/排队阶段；已运行进程及其
 子进程的终止由独立 JVM 测试验证，不能混称为宿主中的在途取消验证。
 
 运行 `python -B -m unittest discover -s scripts -p test_project_build_results.py` 验证证据解析器。
