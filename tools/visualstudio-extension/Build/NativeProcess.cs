@@ -23,7 +23,7 @@ namespace VerseAngelScript.VisualStudio.Build
         private const int StderrRetain = 16 * 1024, StderrLimit = 4 * 1024 * 1024, CleanupMilliseconds = 2000;
         public static string ValidateCompiler(string configuredPath)
         {
-            if (string.IsNullOrWhiteSpace(configuredPath) || !Protocol.NativeAbsolute(configuredPath))
+            if (string.IsNullOrWhiteSpace(configuredPath) || !FullyQualifiedPath(configuredPath))
                 throw new IOException("Configure an absolute path to a native vasbuild executable.");
             string path = Path.GetFullPath(configuredPath);
             if (Environment.OSVersion.Platform == PlatformID.Win32NT && !path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
@@ -43,6 +43,28 @@ namespace VerseAngelScript.VisualStudio.Build
                     throw new IOException("The configured VAS compiler must be a native executable, not a script or shell wrapper.");
             }
             return path;
+        }
+
+        internal static bool FullyQualifiedPath(string path)
+        {
+            return Environment.OSVersion.Platform == PlatformID.Win32NT
+                ? WindowsFullyQualifiedPath(path) : !string.IsNullOrEmpty(path) && path.StartsWith("/", StringComparison.Ordinal);
+        }
+        internal static bool WindowsFullyQualifiedPath(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return false;
+            var value = path.Replace('\\', '/');
+            if (value.StartsWith("//?/", StringComparison.Ordinal))
+            {
+                value = value.Substring(4);
+                if (value.StartsWith("UNC/", StringComparison.OrdinalIgnoreCase)) value = "//" + value.Substring(4);
+            }
+            if (value.Length >= 3 && ((value[0] >= 'A' && value[0] <= 'Z') || (value[0] >= 'a' && value[0] <= 'z'))
+                && value[1] == ':' && value[2] == '/') return true;
+            if (!value.StartsWith("//", StringComparison.Ordinal)) return false;
+            var pieces = value.Substring(2).Split('/');
+            return pieces.Length >= 2 && pieces[0].Length > 0 && pieces[1].Length > 0
+                && pieces[0] != "." && pieces[0] != "?" && pieces[0] != ".." && pieces[1] != "." && pieces[1] != "..";
         }
 
         /// <summary>Windows CRT quoting, never shell quoting. Always quotes each token, including empty ones.</summary>
@@ -72,7 +94,7 @@ namespace VerseAngelScript.VisualStudio.Build
         private static ProcessResult Run(string executable, IReadOnlyList<string> args, string cwd,
             TimeSpan timeout, long stdoutLimit, CancellationToken token, Action guard, Action<byte[]> sink)
         {
-            if (!Protocol.NativeAbsolute(executable) || !Protocol.NativeAbsolute(cwd)) throw new IOException("Compiler and working-directory paths must be absolute.");
+            if (!FullyQualifiedPath(executable) || !FullyQualifiedPath(cwd)) throw new IOException("Compiler and working-directory paths must be absolute.");
             if (timeout <= TimeSpan.Zero || stdoutLimit < 0 || stdoutLimit > int.MaxValue) throw new ArgumentOutOfRangeException(nameof(timeout));
             token.ThrowIfCancellationRequested(); guard?.Invoke();
             var process = new Process { StartInfo = new ProcessStartInfo

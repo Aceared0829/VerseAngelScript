@@ -67,15 +67,15 @@ namespace VerseAngelScript.VisualStudio.Build
                 // Existence checks do not launch a process or create output directories.
                 await Task.Run(() =>
                 {
-                    NativeProcess.ValidateCompiler(session.Compiler);
-                    Track(session, session.Compiler, true);
+                    session.Executable = NativeProcess.ValidateCompiler(session.Compiler);
+                    Track(session, session.Executable, true);
                     Track(session, session.Manifest, true);
                     Validate(session, view.Dirty);
                     Watch(session);
                 });
                 Guard(session);
                 await factory.SwitchToMainThreadAsync();
-                session.Dialog = new BuildDialog(session.Root, session.Manifest, session.Compiler,
+                session.Dialog = new BuildDialog(session.Root, session.Manifest, session.Executable,
                     () => DescribeAsync(session), () => CancelIfCurrent(session, "Build cancelled"), factory);
                 var dialog = session.Dialog;
                 var accepted = dialog.ShowModal();
@@ -93,7 +93,7 @@ namespace VerseAngelScript.VisualStudio.Build
                 await factory.SwitchToMainThreadAsync();
                 flowRunning = false; Busy = false;
                 session.Dialog = null;
-                if (current != session) session.Cancel.Dispose();
+                if (current != session) session.DisposeCancellation();
             }
         }
 
@@ -105,7 +105,7 @@ namespace VerseAngelScript.VisualStudio.Build
             var descriptor = await Task.Run(async () =>
             {
                 Validate(session, view.Dirty);
-                var result = await NativeProcess.RunAsync(session.Compiler,
+                var result = await NativeProcess.RunAsync(session.Executable,
                     new[] { "--describe-project=json", session.Manifest }, session.Root, TimeSpan.FromSeconds(30), 16 * 1024 * 1024,
                     session.Token, () => GuardForProcess(session));
                 var parsed = Protocol.Describe(result.Stdout, result.ExitCode);
@@ -141,7 +141,7 @@ namespace VerseAngelScript.VisualStudio.Build
                     Track(session, session.Unit.Config, true);
                     Track(session, session.Unit.Entry, true);
                     Validate(session, view.Dirty); Watch(session);
-                    var result = await NativeProcess.RunAsync(session.Compiler,
+                    var result = await NativeProcess.RunAsync(session.Executable,
                         new[] { "--report=jsonl", "--project", session.Manifest, "--unit", session.Unit.Id },
                         session.Root, TimeSpan.FromMinutes(2), 64L * 1024 * 1024, session.Token,
                         () => GuardForProcess(session), line =>
@@ -303,14 +303,14 @@ namespace VerseAngelScript.VisualStudio.Build
             ThreadHelper.ThrowIfNotOnUIThread();
             Interlocked.Increment(ref generation);
             var session = current; current = null;
-            session?.Cancel.Cancel(); session?.StopWatching();
+            session?.RequestCancellation(); session?.StopWatching();
             if (session?.Dialog != null)
             {
                 session.Dialog.Invalidate(reason);
                 if (session.Dialog.IsVisible) session.Dialog.DialogResult = false;
             }
             Busy = flowRunning; ErrorProvider.Tasks.Clear(); SetStatus(reason);
-            if (!flowRunning) session?.Cancel.Dispose();
+            if (!flowRunning) session?.DisposeCancellation();
         }
         private void CancelIfCurrent(Session session, string reason) { ThreadHelper.ThrowIfNotOnUIThread(); if (current == session) Cancel(reason); }
         private async Task FailAsync(Session session, Exception ex)
@@ -447,23 +447,33 @@ namespace VerseAngelScript.VisualStudio.Build
             Guard(session);
             string[] aliases;
             lock (session.Sync) aliases = session.Aliases.ToArray();
-            var directories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var directories = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
             foreach (var alias in aliases)
             {
                 var directory = Path.GetDirectoryName(alias);
+                var directParent = directory;
                 while (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory)) directory = Path.GetDirectoryName(directory);
                 if (string.IsNullOrEmpty(directory)) throw new IOException("Cannot watch input ancestor: " + alias);
-                directories.Add(directory);
+                bool recursive = !SamePath(directory, directParent);
+                directories[directory] = recursive || (directories.TryGetValue(directory, out var previous) && previous);
                 // A watcher inside a renamed/deleted directory need not receive its
                 // own parent event. Watch the existing ancestor's parent as well.
                 var parent = Path.GetDirectoryName(directory);
-                if (!string.IsNullOrEmpty(parent)) directories.Add(parent);
+                if (!string.IsNullOrEmpty(parent) && !directories.ContainsKey(parent)) directories.Add(parent, false);
             }
-            foreach (var directory in directories)
+            foreach (var specification in directories)
             {
                 Guard(session);
-                lock (session.Sync) if (session.Watchers.ContainsKey(directory)) continue;
-                var watcher = new FileSystemWatcher(directory) { IncludeSubdirectories = true, NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.CreationTime };
+                var directory = specification.Key;
+                lock (session.Sync)
+                {
+                    if (session.Watchers.TryGetValue(directory, out var existing))
+                    {
+                        if (specification.Value) existing.IncludeSubdirectories = true;
+                        continue;
+                    }
+                }
+                var watcher = new FileSystemWatcher(directory) { IncludeSubdirectories = specification.Value, NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.CreationTime };
                 FileSystemEventHandler changed = (s, e) => InputEvent(session, e.FullPath);
                 watcher.Changed += changed; watcher.Created += changed; watcher.Deleted += changed;
                 watcher.Renamed += (s, e) => { InputEvent(session, e.OldFullPath); InputEvent(session, e.FullPath); };
@@ -492,7 +502,7 @@ namespace VerseAngelScript.VisualStudio.Build
             if (session.Generation != Generation) return;
             // Advance immediately on the notifying thread, before any queued UI publication.
             if (Interlocked.CompareExchange(ref generation, session.Generation + 1, session.Generation) != session.Generation) return;
-            session.Cancel.Cancel();
+            session.RequestCancellation();
             factory.RunAsync(() => InvalidateOnUiAsync(session, reason)).FileAndForget("VerseAngelScript/InvalidateInput");
         }
         private async Task InvalidateOnUiAsync(Session session, string reason)
@@ -532,6 +542,8 @@ namespace VerseAngelScript.VisualStudio.Build
             internal readonly string Root, Manifest, Compiler;
             internal readonly CancellationTokenSource Cancel;
             internal readonly CancellationToken Token;
+            private readonly object cancellationSync = new object();
+            private bool cancellationDisposed;
             internal readonly Dictionary<string, FileSnapshot> Snapshots = new Dictionary<string, FileSnapshot>(StringComparer.OrdinalIgnoreCase);
             internal readonly Dictionary<string, string[]> PathAliases = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
             internal readonly HashSet<string> Aliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -539,10 +551,25 @@ namespace VerseAngelScript.VisualStudio.Build
             internal long TotalBytes, DocumentRevision, VerifiedDocumentRevision;
             internal string[] DirtyMonikers = new string[0];
             internal readonly ManualResetEventSlim DirtyCheck = new ManualResetEventSlim(true);
+            internal string Executable;
             internal BuildDialog Dialog; internal Descriptor Descriptor; internal CompilationUnit Unit; internal Report Report;
             internal FileSnapshot[] NavigationSnapshots = new FileSnapshot[0]; internal string Stderr;
             internal Session(long generation, string root, string manifest, string compiler, CancellationToken lifetime)
             { Generation = generation; Root = root; Manifest = manifest; Compiler = compiler; Cancel = CancellationTokenSource.CreateLinkedTokenSource(lifetime); Token = Cancel.Token; }
+            internal void RequestCancellation()
+            {
+                // A queued native filesystem callback may race UI cancellation and
+                // disposal after its generation CAS. Keep CTS ownership serialized.
+                lock (cancellationSync) if (!cancellationDisposed) Cancel.Cancel();
+            }
+            internal void DisposeCancellation()
+            {
+                lock (cancellationSync)
+                {
+                    if (cancellationDisposed) return;
+                    cancellationDisposed = true; Cancel.Dispose();
+                }
+            }
             internal string[] Paths() { lock (Sync) return Snapshots.Keys.ToArray(); }
             internal void StopWatching()
             {

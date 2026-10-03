@@ -21,7 +21,7 @@ internal static class Program
         if (args.Length >= 2 && args[0] == "--fixture") return Fixture(args[1]);
         try
         {
-            DescriptorTests(); ReportTests(); PositionTests(); ProcessTests();
+            DescriptorTests(); ReportTests(); PositionTests(); CompilerPathTests(); ProcessTests();
             string native = Environment.GetEnvironmentVariable("VAS_NATIVE_ARGV_FIXTURE");
             if (!string.IsNullOrEmpty(native)) NativeArguments(native);
             else if (Environment.OSVersion.Platform == PlatformID.Win32NT) throw new Exception("Windows core gate requires VAS_NATIVE_ARGV_FIXTURE (tests/vasbuild/rider_argv_fixture.cpp).");
@@ -52,6 +52,33 @@ internal static class Program
     private static byte[] Json(JObject value) { return Utf8.GetBytes(value.ToString(Formatting.None)); }
     private static byte[] DescriptorBytes(JObject value) { return Utf8.GetBytes(value.ToString(Formatting.None) + "\n"); }
     private static Descriptor Descriptor() { return Protocol.Describe(DescriptorBytes(DescriptorJson()), 0); }
+    private static void CompilerPathTests()
+    {
+        foreach (var value in new[] { "/tools/vasbuild.exe", @"\tools\vasbuild.exe", "C:vasbuild.exe", "vasbuild.exe", "//server", @"\\.\pipe\vasbuild.exe" })
+            Check(!NativeProcess.WindowsFullyQualifiedPath(value), "Reject drive-relative Windows compiler setting: " + value);
+        foreach (var value in new[] { @"C:\tools\vasbuild.exe", "D:/tools/vasbuild.exe", @"\\server\share\vasbuild.exe", @"\\?\C:\tools\vasbuild.exe", @"\\?\UNC\server\share\vasbuild.exe" })
+            Check(NativeProcess.WindowsFullyQualifiedPath(value), "Accept fully qualified Windows compiler setting: " + value);
+        if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+        {
+            foreach (var value in new[] { "/tools/vasbuild.exe", @"\tools\vasbuild.exe", "C:vasbuild.exe" })
+                Reject(() => NativeProcess.ValidateCompiler(value), "No current-drive/compiler path inference");
+            var executable = Path.GetFullPath(Assembly.GetExecutingAssembly().Location);
+            var before = Environment.CurrentDirectory;
+            try
+            {
+                Environment.CurrentDirectory = Path.GetDirectoryName(executable);
+                if (executable.Length > 2 && executable[1] == ':')
+                {
+                    // This is an existing PE executable on the current drive. An
+                    // existence failure cannot accidentally satisfy this regression.
+                    var relativeToDrive = executable.Substring(2).Replace('\\', '/');
+                    Check(File.Exists(Path.GetFullPath(relativeToDrive)), "Root-relative fixture resolves to existing executable");
+                    Reject(() => NativeProcess.ValidateCompiler(relativeToDrive), "Reject existing current-drive-rooted executable");
+                }
+            }
+            finally { Environment.CurrentDirectory = before; }
+        }
+    }
     private static void DescriptorTests()
     {
         Check(Descriptor().Units[0].Config == Root + "/host.txt", "Native descriptor config identity");
