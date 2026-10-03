@@ -86,7 +86,14 @@ const shutdownTimeoutMs = 5000;
 async function activeGroupMembers(group) {
   const exists = () => {
     try { process.kill(-group, 0); return true; }
-    catch (error) { if (error.code === 'ESRCH') return false; throw error; }
+    catch (error) {
+      if (error.code === 'ESRCH') return false;
+      // Darwin's killpg1 excludes SZOMB processes, then returns EPERM if no
+      // signalable member remains, including for signal 0. EPERM alone says
+      // nothing about quiescence: inspect the exact group below instead.
+      if (error.code === 'EPERM') return true;
+      throw error;
+    }
   };
   if (!exists()) return [];
   // A killed orphan can remain a zombie until its new parent reaps it. Signal 0
@@ -137,16 +144,23 @@ async function terminateHost(child, closed) {
   if (!Number.isInteger(child.pid) || child.pid <= 0) return;
   // detached gives this child an owned process group. Descendants may outlive
   // their leader, so also address the group after the leader has exited.
-  const signal = name => {
+  const signal = async name => {
     try { process.kill(-child.pid, name); }
-    catch (error) { if (error.code !== 'ESRCH') throw error; }
+    catch (error) {
+      if (error.code === 'ESRCH') return;
+      // A group can become zombie-only between observation and signaling on
+      // macOS. Accept EPERM only with positive dead/zombie membership evidence
+      // (or confirmed disappearance); live or uninspectable groups still fail.
+      if (error.code === 'EPERM' && !(await activeGroupMembers(child.pid)).length) return;
+      throw error;
+    }
   };
-  signal('SIGTERM');
+  await signal('SIGTERM');
   let quiescent = false;
   try { quiescent = await waitForGroupQuiescence(child.pid); }
   catch { /* Still force termination if process-state inspection fails. */ }
   if (!quiescent) {
-    signal('SIGKILL');
+    await signal('SIGKILL');
     if (!await waitForGroupQuiescence(child.pid)) {
       throw new Error(`Owned VS Code process group ${child.pid} remains active after SIGKILL`);
     }
@@ -325,4 +339,4 @@ async function main() {
 }
 
 if (require.main === module) main().catch(error => { console.error(error); process.exitCode = 1; });
-module.exports = { createProjectFixture, launch };
+module.exports = { createProjectFixture, launch, activeGroupMembers, terminateHost };
