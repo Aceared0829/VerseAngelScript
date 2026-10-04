@@ -1,0 +1,35 @@
+void main()
+{
+    int result2 = 72;
+    println(result2);
+    println("result = {}", result2);
+    println("ABC + " + result2 + " ASDA");
+    println("ABC + {} ASDA", result2);
+    println("hex={:04X}, pi={:.2f}", result2, 3.14159);
+    println("{1} {0} {1}", "hello", "world");
+    println("{{}} {}", "{data}");
+    println("|{:>5}|{:<5}|", "x", "y");
+    println("{:0{}X} {:.{}f}", result2, 4, 3.14159, 3);
+    println("漢字😀 {}", "文字😀");
+    println("line\n");
+    println("");
+    println();
+    println("{}", "a\0b");
+    println("{} {} {} {} {} {} {} {} {} {} {} {}", 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+    int8 i8 = -128; uint8 u8 = 255;
+    int16 i16 = -32768; uint16 u16 = 65535;
+    int i32 = -2147483647 - 1; uint u32 = 4294967295;
+    int64 i64 = int64(-9223372036854775807) - 1;
+    uint64 u64 = 18446744073709551615;
+    float f = 1.25f; double d = -2.5;
+    println(i8); println(u8); println(i16); println(u16);
+    println(i32); println(u32); println(i64); println(u64);
+    println(f); println(d); println(true); println(false);
+    println("{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", i8, u8, i16, u16, i32, u32, i64, u64, f, d, true);
+    print("print still has no newline");
+    print("|ABC + " + result2 + " ASDA");
+    print("|ABC + {} ASDA", result2);
+    print("|hex={:04X}, pi={:.2f}", result2, 3.14159);
+    print("|{{}} {}", "{data}");
+    print("|漢字😀 {}", "文字😀");
+}

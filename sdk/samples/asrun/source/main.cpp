@@ -6,6 +6,7 @@
 #include <stdio.h>
 
 #include <sstream>   // stringstream
+#include "../../common/vas_format.h"
 #include <angelscript.h>
 #include "../../../add_on/scriptbuilder/scriptbuilder.h"
 #include "../../../add_on/scriptstdstring/scriptstdstring.h"
@@ -64,6 +65,30 @@ void              MessageCallback(const asSMessageInfo *msg, void *param);
 asIScriptContext *RequestContextCallback(asIScriptEngine *engine, void *param);
 void              ReturnContextCallback(asIScriptEngine *engine, asIScriptContext *ctx, void *param);
 void              PrintString(const string &str);
+static void PrintFormat(asIScriptGeneric *gen);
+static void PrintlnFormat(asIScriptGeneric *gen);
+static void PrintlnEmpty();
+template<typename T>
+static void PrintlnValue(T value)
+{
+	fmt::println("{}", value);
+}
+template<typename T>
+static void PrintlnSmallValue(T value)
+{
+	PrintlnValue(int(value));
+}
+template<typename T>
+static void PrintValue(T value)
+{
+	fmt::print("{}", value);
+}
+template<typename T>
+static void PrintSmallValue(T value)
+{
+	// Stream 8-bit integers as numbers rather than C++ characters.
+	PrintValue(int(value));
+}
 string            GetInput();
 int               ExecSystemCmd(const string &cmd);
 int               ExecSystemCmd(const string &str, string &out);
@@ -72,7 +97,6 @@ void              WaitForUser();
 int               PragmaCallback(const string &pragmaText, CScriptBuilder &builder, void *userParam);
 static bool       IsVasScriptFile(const char *filename);
 static int        ReportInvalidVasScriptExtension(asIScriptEngine *engine, const char *filename, const char *role);
-static string     ResolveIncludePath(const char *include, const char *from);
 static int        VasIncludeCallback(const char *include, const char *from, CScriptBuilder *builder, void *userParam);
 
 // The command line arguments
@@ -228,7 +252,33 @@ int ConfigureEngine(asIScriptEngine *engine)
 	RegisterScriptSocket(engine);
 
 	// Register a couple of extra functions for the scripts
-	r = engine->RegisterGlobalFunction("void print(const string &in)", asFUNCTION(PrintString), asCALL_CDECL); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void print(const string &in format, const ?&in ...)", asFUNCTION(PrintFormat), asCALL_GENERIC); assert( r >= 0 );
+	{ int checked = engine->GetFunctionById(r)->SetFormatStringValidator(vas::ValidateFormat, engine); assert(checked >= 0); (void)checked; }
+	r = engine->RegisterGlobalFunction("void print(int8)", asFUNCTION(PrintSmallValue<signed char>), asCALL_CDECL); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void print(uint8)", asFUNCTION(PrintSmallValue<asBYTE>), asCALL_CDECL); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void print(int16)", asFUNCTION(PrintSmallValue<short>), asCALL_CDECL); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void print(uint16)", asFUNCTION(PrintSmallValue<asWORD>), asCALL_CDECL); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void print(int)", asFUNCTION(PrintValue<int>), asCALL_CDECL); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void print(uint)", asFUNCTION(PrintValue<asUINT>), asCALL_CDECL); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void print(int64)", asFUNCTION(PrintValue<asINT64>), asCALL_CDECL); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void print(uint64)", asFUNCTION(PrintValue<asQWORD>), asCALL_CDECL); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void print(float)", asFUNCTION(PrintValue<float>), asCALL_CDECL); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void print(double)", asFUNCTION(PrintValue<double>), asCALL_CDECL); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void print(bool)", asFUNCTION(PrintValue<bool>), asCALL_CDECL); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void println(const string &in format, const ?&in ...)", asFUNCTION(PrintlnFormat), asCALL_GENERIC); assert( r >= 0 );
+	{ int checked = engine->GetFunctionById(r)->SetFormatStringValidator(vas::ValidateFormat, engine); assert(checked >= 0); (void)checked; }
+	r = engine->RegisterGlobalFunction("void println()", asFUNCTION(PrintlnEmpty), asCALL_CDECL); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void println(int8)", asFUNCTION(PrintlnSmallValue<asINT8>), asCALL_CDECL); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void println(uint8)", asFUNCTION(PrintlnSmallValue<asBYTE>), asCALL_CDECL); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void println(int16)", asFUNCTION(PrintlnSmallValue<asINT16>), asCALL_CDECL); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void println(uint16)", asFUNCTION(PrintlnSmallValue<asWORD>), asCALL_CDECL); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void println(int)", asFUNCTION(PrintlnValue<int>), asCALL_CDECL); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void println(uint)", asFUNCTION(PrintlnValue<asUINT>), asCALL_CDECL); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void println(int64)", asFUNCTION(PrintlnValue<asINT64>), asCALL_CDECL); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void println(uint64)", asFUNCTION(PrintlnValue<asQWORD>), asCALL_CDECL); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void println(float)", asFUNCTION(PrintlnValue<float>), asCALL_CDECL); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void println(double)", asFUNCTION(PrintlnValue<double>), asCALL_CDECL); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void println(bool)", asFUNCTION(PrintlnValue<bool>), asCALL_CDECL); assert( r >= 0 );
 	r = engine->RegisterGlobalFunction("string getInput()", asFUNCTION(GetInput), asCALL_CDECL); assert(r >= 0);
 	r = engine->RegisterGlobalFunction("array<string> @getCommandLineArgs()", asFUNCTION(GetCommandLineArgs), asCALL_CDECL); assert( r >= 0 );
 	r = engine->RegisterGlobalFunction("int exec(const string &in)", asFUNCTIONPR(ExecSystemCmd, (const string &), int), asCALL_CDECL); assert( r >= 0 );
@@ -380,6 +430,7 @@ int CompileScript(asIScriptEngine *engine, const char *scriptFile)
 	// Compile the script
 	r = builder.StartNewModule(engine, "script");
 	if( r < 0 ) return -1;
+	builder.SetMappedMessageCallback(MessageCallback, 0);
 
 	r = builder.AddSectionFromFile(scriptFile);
 	if( r < 0 ) return -1;
@@ -419,28 +470,15 @@ static int ReportInvalidVasScriptExtension(asIScriptEngine *engine, const char *
 	return asERROR;
 }
 
-static string ResolveIncludePath(const char *include, const char *from)
-{
-	string includePath = include ? include : "";
-	if( includePath.find_first_of("/\\") != 0 && includePath.find_first_of(":") == string::npos )
-	{
-		string sourcePath = from ? from : "";
-		string::size_type slash = sourcePath.find_last_of("/\\");
-		if( slash != string::npos )
-			sourcePath.resize(slash + 1);
-		else
-			sourcePath = "";
-
-		return sourcePath + includePath;
-	}
-
-	return includePath;
-}
-
 static int VasIncludeCallback(const char *include, const char *from, CScriptBuilder *builder, void *userParam)
 {
 	asIScriptEngine *engine = reinterpret_cast<asIScriptEngine *>(userParam);
-	string resolvedInclude = ResolveIncludePath(include, from);
+	string resolvedInclude = static_cast<vas::ScriptBuilder *>(builder)->ResolveDependency(include, from);
+	if (resolvedInclude.empty())
+	{
+		engine->WriteMessage(from, 0, 0, asMSGTYPE_ERROR, static_cast<vas::ScriptBuilder *>(builder)->GetResolutionError().c_str());
+		return -1;
+	}
 	if( !IsVasScriptFile(resolvedInclude.c_str()) )
 		return ReportInvalidVasScriptExtension(engine, resolvedInclude.c_str(), "included script");
 
@@ -558,6 +596,67 @@ int ExecuteScript(asIScriptEngine *engine, const char *scriptFile)
 	}
 
 	return r;
+}
+
+static void PrintlnEmpty()
+{
+	fmt::print("\n");
+}
+
+static void PrintFormatted(asIScriptGeneric *gen, bool newline)
+{
+	// Script arguments are dynamic: preserve their types for format specifiers.
+	try
+	{
+		vas::FormatArguments args(gen->GetArgCount() - 1);
+		const int stringType = gen->GetEngine()->GetTypeIdByDecl("string");
+		for (asUINT index = 1; index < asUINT(gen->GetArgCount()); ++index)
+		{
+			void *value = gen->GetArgAddress(index);
+			const int type = gen->GetArgTypeId(index);
+			switch (type)
+			{
+			case asTYPEID_BOOL: args.set(int(index) - 1, *static_cast<bool *>(value)); break;
+			case asTYPEID_INT8: args.set(int(index) - 1, int(*static_cast<asINT8 *>(value))); break;
+			case asTYPEID_UINT8: args.set(int(index) - 1, unsigned(*static_cast<asBYTE *>(value))); break;
+			case asTYPEID_INT16: args.set(int(index) - 1, int(*static_cast<asINT16 *>(value))); break;
+			case asTYPEID_UINT16: args.set(int(index) - 1, unsigned(*static_cast<asWORD *>(value))); break;
+			case asTYPEID_INT32: args.set(int(index) - 1, *static_cast<int *>(value)); break;
+			case asTYPEID_UINT32: args.set(int(index) - 1, *static_cast<asUINT *>(value)); break;
+			case asTYPEID_INT64: args.set(int(index) - 1, *static_cast<asINT64 *>(value)); break;
+			case asTYPEID_UINT64: args.set(int(index) - 1, *static_cast<asQWORD *>(value)); break;
+			case asTYPEID_FLOAT: args.set(int(index) - 1, *static_cast<float *>(value)); break;
+			case asTYPEID_DOUBLE: args.set(int(index) - 1, *static_cast<double *>(value)); break;
+			default:
+				if (type != stringType)
+				{
+					asGetActiveContext()->SetException(newline ? "println: unsupported argument type" : "print: unsupported argument type");
+					return;
+				}
+				const string &str = *static_cast<string *>(value);
+				args.set(int(index) - 1, fmt::string_view(str.data(), str.size()));
+			}
+		}
+		// Complete formatting before output, so failures cannot print a partial line.
+		fmt::memory_buffer output;
+		const string &format = *static_cast<string *>(gen->GetArgAddress(0));
+		vas::FormatTo(output, fmt::string_view(format.data(), format.size()), args, newline);
+		fmt::print("{}", fmt::string_view(output.data(), output.size()));
+	}
+	catch (const std::exception &error)
+	{
+		asGetActiveContext()->SetException((string(newline ? "println: " : "print: ") + error.what()).c_str());
+	}
+}
+
+static void PrintFormat(asIScriptGeneric *gen)
+{
+	PrintFormatted(gen, false);
+}
+
+static void PrintlnFormat(asIScriptGeneric *gen)
+{
+	PrintFormatted(gen, true);
 }
 
 // This little function allows the script to print a string to the screen

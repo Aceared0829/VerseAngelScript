@@ -1,0 +1,10 @@
+// math 的依赖宏也会自动传递给导入 math 的文件。
+import demo_constants;
+#define MATH_VERSION 1
+#define MATH_LABEL "math"
+#define MATH_ADD(left, right) ((left) + (right))
+
+int add(int left, int right)
+{
+    return left + right;
+}

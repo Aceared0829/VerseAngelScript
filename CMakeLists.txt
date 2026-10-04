@@ -195,6 +195,41 @@ if(BUILD_TESTING)
 	endif()
 	add_test(NAME vas_format_performance COMMAND vas_format_performance_test)
 	set_tests_properties(vas_format_performance PROPERTIES TIMEOUT 60)
+	add_executable(vas_module_performance_test
+		tests/vasbuild/test_module_performance.cpp
+		sdk/add_on/scriptbuilder/scriptbuilder.cpp)
+	target_link_libraries(vas_module_performance_test PRIVATE angelscript)
+	vas_enable_cxx23(vas_module_performance_test)
+	if(MSVC)
+		target_compile_options(vas_module_performance_test PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/EHsc>")
+	endif()
+	file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/module-performance")
+	add_test(NAME vas_module_performance COMMAND vas_module_performance_test module-performance)
+	set_tests_properties(vas_module_performance PROPERTIES TIMEOUT 60 WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+	add_test(NAME vas_modules
+		COMMAND ${CMAKE_COMMAND}
+			"-DVASBUILD=$<TARGET_FILE:vasbuild>"
+			"-DVASRUN=$<TARGET_FILE:vasrun>"
+			"-DSOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+			"-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/modules"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/tests/vasbuild/assert_modules.cmake")
+	set_tests_properties(vas_modules PROPERTIES TIMEOUT 60)
+	add_test(NAME vas_print_primitives
+		COMMAND ${CMAKE_COMMAND}
+			"-DVASBUILD=$<TARGET_FILE:vasbuild>"
+			"-DVASRUN=$<TARGET_FILE:vasrun>"
+			"-DSOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+			"-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/print-primitives"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/tests/vasbuild/assert_print_primitives.cmake")
+	set_tests_properties(vas_print_primitives PROPERTIES TIMEOUT 60)
+	add_test(NAME vas_println
+		COMMAND ${CMAKE_COMMAND}
+			"-DVASBUILD=$<TARGET_FILE:vasbuild>"
+			"-DVASRUN=$<TARGET_FILE:vasrun>"
+			"-DSOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+			"-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/println"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/tests/vasbuild/assert_println.cmake")
+	set_tests_properties(vas_println PROPERTIES TIMEOUT 60)
 	add_test(
 		NAME vasrun_rejects_legacy_entry_extension
 		COMMAND ${CMAKE_COMMAND}
