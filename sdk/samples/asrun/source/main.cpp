@@ -74,9 +74,9 @@ static void PrintlnValue(T value)
 	fmt::println("{}", value);
 }
 template<typename T>
-static void PrintlnSmallValue(T value)
+static void PrintlnSmallValue(asIScriptGeneric *gen)
 {
-	PrintlnValue(int(value));
+	PrintlnValue(int(*static_cast<T *>(gen->GetAddressOfArg(0))));
 }
 template<typename T>
 static void PrintValue(T value)
@@ -84,10 +84,10 @@ static void PrintValue(T value)
 	fmt::print("{}", value);
 }
 template<typename T>
-static void PrintSmallValue(T value)
+static void PrintSmallValue(asIScriptGeneric *gen)
 {
-	// Stream 8-bit integers as numbers rather than C++ characters.
-	PrintValue(int(value));
+	// Read narrow values from their script storage, independent of native ABI extension.
+	PrintValue(int(*static_cast<T *>(gen->GetAddressOfArg(0))));
 }
 string            GetInput();
 int               ExecSystemCmd(const string &cmd);
@@ -254,10 +254,10 @@ int ConfigureEngine(asIScriptEngine *engine)
 	// Register a couple of extra functions for the scripts
 	r = engine->RegisterGlobalFunction("void print(const string &in format, const ?&in ...)", asFUNCTION(PrintFormat), asCALL_GENERIC); assert( r >= 0 );
 	{ int checked = engine->GetFunctionById(r)->SetFormatStringValidator(vas::ValidateFormat, engine); assert(checked >= 0); (void)checked; }
-	r = engine->RegisterGlobalFunction("void print(int8)", asFUNCTION(PrintSmallValue<signed char>), asCALL_CDECL); assert( r >= 0 );
-	r = engine->RegisterGlobalFunction("void print(uint8)", asFUNCTION(PrintSmallValue<asBYTE>), asCALL_CDECL); assert( r >= 0 );
-	r = engine->RegisterGlobalFunction("void print(int16)", asFUNCTION(PrintSmallValue<short>), asCALL_CDECL); assert( r >= 0 );
-	r = engine->RegisterGlobalFunction("void print(uint16)", asFUNCTION(PrintSmallValue<asWORD>), asCALL_CDECL); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void print(int8)", asFUNCTION(PrintSmallValue<signed char>), asCALL_GENERIC); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void print(uint8)", asFUNCTION(PrintSmallValue<asBYTE>), asCALL_GENERIC); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void print(int16)", asFUNCTION(PrintSmallValue<short>), asCALL_GENERIC); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void print(uint16)", asFUNCTION(PrintSmallValue<asWORD>), asCALL_GENERIC); assert( r >= 0 );
 	r = engine->RegisterGlobalFunction("void print(int)", asFUNCTION(PrintValue<int>), asCALL_CDECL); assert( r >= 0 );
 	r = engine->RegisterGlobalFunction("void print(uint)", asFUNCTION(PrintValue<asUINT>), asCALL_CDECL); assert( r >= 0 );
 	r = engine->RegisterGlobalFunction("void print(int64)", asFUNCTION(PrintValue<asINT64>), asCALL_CDECL); assert( r >= 0 );
@@ -268,10 +268,10 @@ int ConfigureEngine(asIScriptEngine *engine)
 	r = engine->RegisterGlobalFunction("void println(const string &in format, const ?&in ...)", asFUNCTION(PrintlnFormat), asCALL_GENERIC); assert( r >= 0 );
 	{ int checked = engine->GetFunctionById(r)->SetFormatStringValidator(vas::ValidateFormat, engine); assert(checked >= 0); (void)checked; }
 	r = engine->RegisterGlobalFunction("void println()", asFUNCTION(PrintlnEmpty), asCALL_CDECL); assert( r >= 0 );
-	r = engine->RegisterGlobalFunction("void println(int8)", asFUNCTION(PrintlnSmallValue<asINT8>), asCALL_CDECL); assert( r >= 0 );
-	r = engine->RegisterGlobalFunction("void println(uint8)", asFUNCTION(PrintlnSmallValue<asBYTE>), asCALL_CDECL); assert( r >= 0 );
-	r = engine->RegisterGlobalFunction("void println(int16)", asFUNCTION(PrintlnSmallValue<asINT16>), asCALL_CDECL); assert( r >= 0 );
-	r = engine->RegisterGlobalFunction("void println(uint16)", asFUNCTION(PrintlnSmallValue<asWORD>), asCALL_CDECL); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void println(int8)", asFUNCTION(PrintlnSmallValue<asINT8>), asCALL_GENERIC); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void println(uint8)", asFUNCTION(PrintlnSmallValue<asBYTE>), asCALL_GENERIC); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void println(int16)", asFUNCTION(PrintlnSmallValue<asINT16>), asCALL_GENERIC); assert( r >= 0 );
+	r = engine->RegisterGlobalFunction("void println(uint16)", asFUNCTION(PrintlnSmallValue<asWORD>), asCALL_GENERIC); assert( r >= 0 );
 	r = engine->RegisterGlobalFunction("void println(int)", asFUNCTION(PrintlnValue<int>), asCALL_CDECL); assert( r >= 0 );
 	r = engine->RegisterGlobalFunction("void println(uint)", asFUNCTION(PrintlnValue<asUINT>), asCALL_CDECL); assert( r >= 0 );
 	r = engine->RegisterGlobalFunction("void println(int64)", asFUNCTION(PrintlnValue<asINT64>), asCALL_CDECL); assert( r >= 0 );
