@@ -3,7 +3,7 @@
   <Metadata>
     <Identity Id="VerseAngelScript.VisualStudio" Version="0.1.0" Language="en-US" Publisher="VerseAngelScript" />
     <DisplayName>VerseAngelScript editor</DisplayName>
-    <Description xml:space="preserve">Basic .vas editing for Visual Studio 2026: syntax colors, comments, brackets and indentation.</Description>
+    <Description xml:space="preserve">VAS editing and explicit native project builds with navigable compiler diagnostics for Visual Studio 2026.</Description>
     <Tags>VAS,VerseAngelScript,AngelScript,TextMate</Tags>
   </Metadata>
   <Installation>
@@ -17,5 +17,6 @@
   </Prerequisites>
   <Assets>
     <Asset Type="Microsoft.VisualStudio.VsPackage" Path="VAS.pkgdef" />
+    <Asset Type="Microsoft.VisualStudio.VsPackage" d:Source="Project" d:ProjectName="%CurrentProject%" Path="|%CurrentProject%;PkgdefProjectOutputGroup|" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011" />
   </Assets>
 </PackageManifest>

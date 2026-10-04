@@ -1,6 +1,9 @@
 """Regression tests for the fail-closed package and native-result gates."""
 import contextlib
+import codecs
 import io
+import hashlib
+import json
 import pathlib
 import tempfile
 import unittest
@@ -8,7 +11,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 from check_package import CANONICAL, ROOT, verify_vsix
-from check_results import EXPECTED, verify
+from check_results import EXPECTED, PROJECT_EVIDENCE, HOST_BOOTSTRAPS, verify
 
 
 class NativeResultGateTests(unittest.TestCase):
@@ -23,7 +26,30 @@ class NativeResultGateTests(unittest.TestCase):
         results = ET.SubElement(root, ns + "Results")
         for name in EXPECTED - ({missing} if missing else set()):
             ET.SubElement(results, ns + "UnitTestResult", testName="VerseAngelScript.VisualStudio.Tests.EditorTests." + name + " (VS18)", outcome=outcome)
+        for name in HOST_BOOTSTRAPS:
+            ET.SubElement(results, ns + "UnitTestResult", testName=name, outcome=outcome)
         ET.ElementTree(root).write(self.path)
+        (self.path.parent / "native-build.json").write_text(json.dumps({
+            "generator": "Visual Studio 18 2026", "configuration": "Release", "conformancePassed": True,
+            "compilerSha256": "a" * 64, "argvFixtureSha256": "b" * 64,
+        }))
+        (self.path.parent / "production-package.json").write_text(json.dumps({
+            "packageAssemblySha256": "d" * 64, "vsixSha256": "e" * 64,
+        }))
+        (self.path.parent / "host-instance.json").write_text(json.dumps({
+            "installationPath": "C:/Program Files/Microsoft Visual Studio/18/Enterprise",
+            "installationVersion": "18.0.42421.0",
+        }))
+        evidence_root = self.path.parent / "project-build"
+        evidence_root.mkdir(exist_ok=True)
+        for name, checks in PROJECT_EVIDENCE.items():
+            (evidence_root / (name + ".json")).write_text(json.dumps({
+                "testName": name, "hostMajor": 18, "processName": "devenv", "rootSuffix": "VASProjectDisposal" if name == "PackageDisposalCancelsRunningBuildAndLateResults" else "VASIntegration",
+                "compilerSha256": "a" * 64,
+                "hostExe": "C:/Program Files/Microsoft Visual Studio/18/Enterprise/Common7/IDE/devenv.exe",
+                "packageAssemblySha256": "d" * 64,
+                "checks": dict.fromkeys(checks, True),
+            }))
 
     def test_complete_native_results_pass(self):
         self.write_results()
@@ -52,15 +78,132 @@ class NativeResultGateTests(unittest.TestCase):
             verify(self.path)
 
 
+    def test_every_project_case_is_required(self):
+        for name in PROJECT_EVIDENCE:
+            with self.subTest(name=name):
+                self.write_results(missing=name)
+                with self.assertRaisesRegex(ValueError, "Missing required"):
+                    verify(self.path)
+
+    def test_project_evidence_is_required(self):
+        self.write_results()
+        name = next(iter(PROJECT_EVIDENCE))
+        (self.path.parent / "project-build" / (name + ".json")).unlink()
+        with self.assertRaises(FileNotFoundError):
+            verify(self.path)
+
+    def test_each_evidence_check_is_mandatory(self):
+        for name, checks in PROJECT_EVIDENCE.items():
+            for check in checks:
+                with self.subTest(name=name, check=check):
+                    self.write_results()
+                    evidence = self.path.parent / "project-build" / (name + ".json")
+                    data = json.loads(evidence.read_text())
+                    data["checks"].pop(check)
+                    evidence.write_text(json.dumps(data))
+                    with self.assertRaisesRegex(ValueError, "Missing native evidence"):
+                        verify(self.path)
+
+    def test_foreign_host_and_compiler_evidence_fail(self):
+        name = next(iter(PROJECT_EVIDENCE))
+        for key, value in (("hostMajor", 17), ("processName", "testhost"), ("rootSuffix", "Exp"), ("compilerSha256", "c" * 64), ("hostExe", "C:/Other/VS18/Common7/IDE/devenv.exe"), ("packageAssemblySha256", "f" * 64)):
+            with self.subTest(key=key):
+                self.write_results()
+                evidence = self.path.parent / "project-build" / (name + ".json")
+                data = json.loads(evidence.read_text())
+                data[key] = value
+                evidence.write_text(json.dumps(data))
+                with self.assertRaisesRegex(ValueError, "evidence"):
+                    verify(self.path)
+
+    def test_missing_host_or_production_package_evidence_fails(self):
+        for filename in ("host-instance.json", "production-package.json"):
+            with self.subTest(filename=filename):
+                self.write_results()
+                (self.path.parent / filename).unlink()
+                with self.assertRaises(FileNotFoundError):
+                    verify(self.path)
+
+    def test_invalid_host_and_package_identity_fail(self):
+        for filename, key, value in (
+            ("host-instance.json", "installationPath", "relative/VS18"),
+            ("host-instance.json", "installationVersion", "17.14.0"),
+            ("production-package.json", "packageAssemblySha256", ""),
+            ("production-package.json", "vsixSha256", "not-a-digest"),
+        ):
+            with self.subTest(filename=filename, key=key):
+                self.write_results()
+                evidence = self.path.parent / filename
+                data = json.loads(evidence.read_text())
+                data[key] = value
+                evidence.write_text(json.dumps(data))
+                with self.assertRaises(ValueError):
+                    verify(self.path)
+
+    def test_duplicate_or_substring_test_names_fail(self):
+        for replace in (False, True):
+            self.write_results()
+            tree = ET.parse(self.path)
+            results = tree.getroot()[0]
+            original = results[0]
+            if replace:
+                original.set("testName", "Fake" + original.get("testName").split(".")[-1])
+            else:
+                ET.SubElement(results, original.tag, **original.attrib)
+            tree.write(self.path)
+            with self.assertRaisesRegex(ValueError, "required native host test"):
+                verify(self.path)
+
+    def test_plain_unit_names_and_missing_bootstrap_fail(self):
+        for plain_names in (True, False):
+            self.write_results()
+            tree = ET.parse(self.path)
+            results = tree.getroot()[0]
+            if plain_names:
+                for result in results:
+                    result.set("testName", result.get("testName").replace(" (VS18)", ""))
+            else:
+                results.remove(next(result for result in results if result.get("testName") in HOST_BOOTSTRAPS))
+            tree.write(self.path)
+            with self.assertRaisesRegex(ValueError, "required native host"):
+                verify(self.path)
+
+    def test_native_conformance_and_digest_evidence_required(self):
+        for key, value in (("conformancePassed", False), ("generator", "Visual Studio 17 2022"), ("compilerSha256", "")):
+            with self.subTest(key=key):
+                self.write_results()
+                evidence = self.path.parent / "native-build.json"
+                data = json.loads(evidence.read_text())
+                data[key] = value
+                evidence.write_text(json.dumps(data))
+                with self.assertRaises(ValueError):
+                    verify(self.path)
+
+
 class VsixGateTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.path = pathlib.Path(self.temp.name) / "test.vsix"
 
-    def write_package(self, altered=False, assembly=False, missing=False):
+    @staticmethod
+    def registration():
+        return """[$RootKey$\\Packages\\{d3a6e112-5f40-4df1-8bb7-0b79f0e74226}]
+"Class"="VerseAngelScript.VisualStudio.VasPackage"
+"CodeBase"="$PackageFolder$\\VerseAngelScript.dll"
+[$RootKey$\\Menus]
+"{d3a6e112-5f40-4df1-8bb7-0b79f0e74226}"=", 1, 1"
+"""
+
+    def write_package(self, altered=False, assembly=False, missing=False, registration_bytes=None):
+        if registration_bytes is None:
+            registration_bytes = codecs.BOM_UTF16_LE + self.registration().encode("utf-16-le")
         with zipfile.ZipFile(self.path, "w") as archive:
-            archive.writestr("extension.vsixmanifest", (ROOT / "source.extension.vsixmanifest").read_bytes())
+            manifest = (ROOT / "source.extension.vsixmanifest").read_text().replace("|%CurrentProject%;PkgdefProjectOutputGroup|", "VerseAngelScript.pkgdef")
+            archive.writestr("extension.vsixmanifest", manifest)
+            archive.writestr("VerseAngelScript.dll", b"MZsynthetic managed payload")
+            archive.writestr("Newtonsoft.Json.dll", b"MZsynthetic JSON dependency")
+            archive.writestr("VerseAngelScript.pkgdef", registration_bytes)
             archive.writestr("VAS.pkgdef", (ROOT / "VAS.pkgdef").read_bytes())
             archive.writestr("language-configuration.json", (CANONICAL / "language-configuration.json").read_bytes())
             if not missing:
@@ -69,10 +212,67 @@ class VsixGateTests(unittest.TestCase):
             if assembly:
                 archive.writestr("HostTests.dll", b"must not ship")
 
-    def test_byte_identical_content_only_package_passes(self):
+    def test_byte_identical_package_with_exact_runtime_allowlist_passes(self):
         self.write_package()
         with contextlib.redirect_stdout(io.StringIO()):
             verify_vsix(self.path)
+
+    def test_generated_registration_uses_strict_utf16le_bom(self):
+        registration = self.registration() + '; Unicode fixture 漢字 😀\r\n'
+        self.write_package(registration_bytes=codecs.BOM_UTF16_LE + registration.encode("utf-16-le"))
+        raw_path = self.path.parent / "production-registration.pkgdef"
+        with contextlib.redirect_stdout(io.StringIO()):
+            verify_vsix(self.path, pkgdef_evidence_path=raw_path)
+        self.assertEqual(raw_path.read_bytes(), codecs.BOM_UTF16_LE + registration.encode("utf-16-le"))
+
+    def test_unsupported_registration_encodings_fail(self):
+        text = self.registration()
+        for data in (text.encode("utf-8"), codecs.BOM_UTF8 + text.encode("utf-8"),
+                     text.encode("utf-16-le"), codecs.BOM_UTF16_BE + text.encode("utf-16-be"),
+                     codecs.BOM_UTF32_LE + text.encode("utf-32-le"),
+                     codecs.BOM_UTF32_BE + text.encode("utf-32-be")):
+            with self.subTest(prefix=data[:4]):
+                self.write_package(registration_bytes=data)
+                with self.assertRaisesRegex(ValueError, "UTF-16LE BOM"):
+                    verify_vsix(self.path)
+
+    def test_malformed_utf16_registration_fails_and_preserves_raw_evidence(self):
+        valid = codecs.BOM_UTF16_LE + self.registration().encode("utf-16-le")
+        for ending in (b"x", b"\x00\xd8", b"\x00\xdc"):
+            with self.subTest(ending=ending):
+                data = valid + ending
+                self.write_package(registration_bytes=data)
+                raw_path = self.path.parent / "invalid-registration.pkgdef"
+                with self.assertRaises(UnicodeDecodeError):
+                    verify_vsix(self.path, pkgdef_evidence_path=raw_path)
+                self.assertEqual(raw_path.read_bytes(), data)
+
+    def test_embedded_nul_or_bom_registration_fails(self):
+        for text in (self.registration() + "\0", self.registration() + "\ufeff"):
+            with self.subTest(text=text[-1:]):
+                self.write_package(registration_bytes=codecs.BOM_UTF16_LE + text.encode("utf-16-le"))
+                with self.assertRaisesRegex(ValueError, "embedded"):
+                    verify_vsix(self.path)
+
+    def test_utf16_registration_cannot_hide_missing_or_forbidden_registration(self):
+        for text in (self.registration().replace("VerseAngelScript.VisualStudio.VasPackage", "Other.Package"),
+                     self.registration() + '[$RootKey$\\AutoLoadPackages]\n',
+                     self.registration() + 'ILanguageClient\n'):
+            with self.subTest(text=text):
+                self.write_package(registration_bytes=codecs.BOM_UTF16_LE + text.encode("utf-16-le"))
+                with self.assertRaises(AssertionError):
+                    verify_vsix(self.path)
+
+    def test_package_evidence_hashes_exact_payload_and_container(self):
+        self.write_package()
+        evidence_path = self.path.parent / "production-package.json"
+        with contextlib.redirect_stdout(io.StringIO()):
+            verify_vsix(self.path, evidence_path)
+        evidence = json.loads(evidence_path.read_text())
+        with zipfile.ZipFile(self.path) as archive:
+            expected_payload = hashlib.sha256(archive.read("VerseAngelScript.dll")).hexdigest()
+        self.assertEqual(evidence["packageAssemblySha256"], expected_payload)
+        self.assertEqual(evidence["vsixSha256"], hashlib.sha256(self.path.read_bytes()).hexdigest())
 
     def test_changed_canonical_bytes_fail(self):
         self.write_package(altered=True)
@@ -84,8 +284,28 @@ class VsixGateTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "Expected exactly one"):
             verify_vsix(self.path)
 
-    def test_test_or_runtime_assembly_cannot_ship(self):
+    def test_host_test_assembly_cannot_ship(self):
         self.write_package(assembly=True)
+        with self.assertRaises(AssertionError):
+            verify_vsix(self.path)
+
+    def test_sdk_assembly_and_unlisted_payload_cannot_ship(self):
+        for name in ("Microsoft.VisualStudio.Interop.dll", "vasbuild.exe", "fixture.json", "Menus.ctmenu"):
+            with self.subTest(name=name):
+                self.write_package()
+                with zipfile.ZipFile(self.path, "a") as archive:
+                    archive.writestr(name, b"MZnot allowed")
+                with self.assertRaises(AssertionError):
+                    verify_vsix(self.path)
+
+    def test_missing_production_registration_fails(self):
+        self.write_package()
+        replacement = self.path.with_suffix(".replacement")
+        with zipfile.ZipFile(self.path) as source, zipfile.ZipFile(replacement, "w") as target:
+            for name in source.namelist():
+                if name != "VerseAngelScript.pkgdef":
+                    target.writestr(name, source.read(name))
+        replacement.replace(self.path)
         with self.assertRaises(AssertionError):
             verify_vsix(self.path)
 
