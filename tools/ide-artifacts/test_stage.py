@@ -43,7 +43,9 @@ def rider_entries():
     entries += [("META-INF/plugin.xml", b'<idea-plugin><id>com.verseangelscript.language</id><version>0.5.6</version><idea-version since-build="262" until-build="262.*"/></idea-plugin>')]
     prefix = "verse-angelscript-rider/lib/"
     return [(prefix + "verse-angelscript-rider-0.5.6.jar", zipped(entries)),
-            (prefix + "gson-2.13.2.jar", zipped([("com/google/gson/Gson.class", b"synthetic-class")])),
+            # The official Gson 2.13.2 JAR also ships this consumer ProGuard file.
+            (prefix + "gson-2.13.2.jar", zipped([("com/google/gson/Gson.class", b"synthetic-class"),
+                                                ("META-INF/proguard/gson.pro", b"-keepattributes Signature\n")])),
             (prefix + "error_prone_annotations-2.41.0.jar", zipped([("com/google/errorprone/annotations/CanIgnoreReturnValue.class", b"synthetic-class")]))]
 
 
@@ -114,6 +116,20 @@ class StageTests(unittest.TestCase):
                 stage.rider_package(zipped(changed))
         with self.assertRaisesRegex(ValueError, "distribution payload"):
             stage.rider_package(zipped(entries[:-1]))
+
+    def test_gson_proguard_entry_is_allowed_only_in_gson(self):
+        entries = rider_entries()
+        self.assertEqual(stage.rider_package(zipped(entries))[0], "0.5.6")
+        # Do not broaden this exception to unrelated ProGuard data or another JAR.
+        for index, member in ((1, "META-INF/proguard/private.pro"),
+                              (1, "META-INF/private.txt"),
+                              (2, "META-INF/proguard/gson.pro")):
+            with zipfile.ZipFile(io.BytesIO(entries[index][1])) as dependency:
+                members = [(n, dependency.read(n)) for n in dependency.namelist()]
+            changed = list(entries)
+            changed[index] = (entries[index][0], zipped(members + [(member, b"unrelated")]))
+            with self.subTest(index=index, member=member), self.assertRaisesRegex(ValueError, "Unexpected Rider dependency member"):
+                stage.rider_package(zipped(changed))
 
     def test_checkout_commit_and_tree_are_not_pr_head(self):
         event = self.root / "event.json"

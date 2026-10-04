@@ -123,6 +123,7 @@ def rider_package(data):
                     require((member.startswith(namespace) and member.endswith(".class"))
                             or member in {"META-INF/MANIFEST.MF", "META-INF/LICENSE", "META-INF/NOTICE",
                                           "META-INF/versions/9/module-info.class"}
+                            or (name == prefix + "gson-2.13.2.jar" and member == "META-INF/proguard/gson.pro")
                             or re.fullmatch(r"META-INF/maven/(com.google.code.gson/gson|com.google.errorprone/error_prone_annotations)/pom\.(xml|properties)", member),
                             f"Unexpected Rider dependency member: {member}")
         with checked_zip(archive.read(primary)) as plugin:
