@@ -93,6 +93,8 @@ struct asCExprValue
 	bool IsNullConstant() const;
 	bool IsVoid() const;
 
+	// Factory-owned literal; retained in this compiler's usedStringConstants.
+	const void *constantString;
 	asCDataType dataType;
 	bool  isLValue : 1; // Can this value be updated in assignment, or increment operators, etc
 	bool  isTemporary : 1;

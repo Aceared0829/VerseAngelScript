@@ -185,6 +185,16 @@ if(BUILD_TESTING)
 		NAME vasrun_executes_vas
 		COMMAND $<TARGET_FILE:vasrun> "${VASBUILD_FIXTURE_DIR}/runnable.vas"
 	)
+	add_executable(vas_format_performance_test
+		tests/vasbuild/test_format_performance.cpp
+		sdk/add_on/scripthelper/scripthelper.cpp)
+	target_link_libraries(vas_format_performance_test PRIVATE angelscript)
+	vas_enable_cxx23(vas_format_performance_test)
+	if(MSVC)
+		target_compile_options(vas_format_performance_test PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/EHsc>")
+	endif()
+	add_test(NAME vas_format_performance COMMAND vas_format_performance_test)
+	set_tests_properties(vas_format_performance PROPERTIES TIMEOUT 60)
 	add_test(
 		NAME vasrun_rejects_legacy_entry_extension
 		COMMAND ${CMAKE_COMMAND}

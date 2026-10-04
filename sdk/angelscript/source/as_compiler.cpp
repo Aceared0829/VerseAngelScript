@@ -2589,7 +2589,8 @@ int asCCompiler::CompileDefaultAndNamedArgs(asCScriptNode *node, asCArray<asCExp
 		args[p]->bc.GetVarsUsed(reservedVariables);
 
 	// Make space for all the new arguments
-	args.SetLength(func->parameterTypes.GetLength());
+	// The variadic marker is not an actual argument (not even with named args).
+	args.SetLength(func->parameterTypes.GetLength() - (func->IsVariadic() ? 1 : 0));
 	for( asUINT c = explicitArgs; c < args.GetLength(); c++ )
 		args[c] = 0;
 
@@ -2622,7 +2623,7 @@ int asCCompiler::CompileDefaultAndNamedArgs(asCScriptNode *node, asCArray<asCExp
 	}
 
 	// Compile the arguments in reverse order (as they will be pushed on the stack)
-	for( int n = (int)func->parameterTypes.GetLength() - 1; n >= explicitArgs; n-- )
+	for( int n = (int)args.GetLength() - 1; n >= explicitArgs; n-- )
 	{
 		if( args[n] != 0 ) continue;
 		if (n >= (int)func->defaultArgs.GetLength()) { asASSERT(func->IsVariadic()); continue; }
@@ -12161,6 +12162,7 @@ int asCCompiler::CompileExpressionValue(asCScriptNode *node, asCExprContext *ctx
 					// Mark the string as literal constant so the compiler knows it is allowed
 					// to treat it differently than an ordinary constant string variable
 					ctx->type.isConstant = true;
+					ctx->type.constantString = strPtr;
 
 					// Mark the reference to the string constant as safe, so the compiler can
 					// avoid making unnecessary temporary copies when passing the reference to
@@ -15789,6 +15791,33 @@ int asCCompiler::MakeFunctionCall(asCExprContext *ctx, int funcId, asCObjectType
 
 	asCScriptFunction* descr = builder->GetFunctionDescription(funcId);
 
+	if (descr->formatStringValidator && args.GetLength())
+	{
+		asCArray<int> types;
+		for (asUINT i = 1; i < args.GetLength(); ++i)
+			types.PushLast(engine->GetTypeIdFromDataType(args[i]->type.dataType));
+		asCString literal;
+		const char *text = 0;
+		asUINT length = 0;
+		if (args[0]->type.constantString && engine->stringFactory &&
+		    engine->stringFactory->GetRawStringData(args[0]->type.constantString, 0, &length) >= 0)
+		{
+			literal.SetLength(length);
+			if (engine->stringFactory->GetRawStringData(args[0]->type.constantString, literal.AddressOf(), 0) < 0)
+				return -1;
+			text = literal.AddressOf();
+		}
+		char diagnostic[512] = {0};
+		if (descr->formatStringValidator(text, length, types.AddressOf(), types.GetLength(),
+		                                diagnostic, sizeof(diagnostic), descr->formatStringValidatorParam) < 0)
+		{
+			diagnostic[sizeof(diagnostic)-1] = 0;
+			asCString message = descr->name + ": " + (diagnostic[0] ? diagnostic : "invalid format call");
+			Error(message, args[0]->exprNode ? args[0]->exprNode : node);
+			return -1;
+		}
+	}
+
 	// Store the expression node for error reporting
 	if( ctx->exprNode == 0 )
 		ctx->exprNode = node;
@@ -18189,6 +18218,7 @@ void asCCompiler::FilterConst(asCArray<int> &funcs, bool removeConst)
 
 asCExprValue::asCExprValue()
 {
+	constantString   = 0;
 	isTemporary      = false;
 	stackOffset      = 0;
 	isConstant       = false;
@@ -18204,6 +18234,7 @@ asCExprValue::asCExprValue()
 void asCExprValue::Set(const asCDataType &dt)
 {
 	dataType         = dt;
+	constantString   = 0;
 	isTemporary      = false;
 	stackOffset      = 0;
 	isConstant       = false;

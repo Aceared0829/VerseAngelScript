@@ -186,6 +186,8 @@ public:
 	bool                 IsExplicit() const;
 	bool                 IsProperty() const;
 	bool                 IsVariadic() const;
+	int                  SetFormatStringValidator(asFORMATSTRINGVALIDATOR_t validator, void *userParam = 0);
+	asFORMATSTRINGVALIDATOR_t GetFormatStringValidator() const { return formatStringValidator; }
 	asUINT               GetParamCount() const;
 	int                  GetParam(asUINT index, int *typeId, asDWORD *flags = 0, const char **name = 0, const char **defaultArg = 0) const;
 	int                  GetReturnTypeId(asDWORD *flags = 0) const;
@@ -318,6 +320,8 @@ public:
 	asCModule                   *module;
 
 	asCArray<asPWORD>            userData;
+	asFORMATSTRINGVALIDATOR_t    formatStringValidator;
+	void                       *formatStringValidatorParam;
 
 	// Function signature
 	asCString                    name;

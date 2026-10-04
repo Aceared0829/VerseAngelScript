@@ -1,5 +1,6 @@
 #include <string.h>
 #include "scripthelper.h"
+#include <vector>
 #include <assert.h>
 #include <stdio.h>
 #include <fstream>
@@ -503,7 +504,7 @@ int WriteConfigToStream(asIScriptEngine *engine, ostream &strm)
 			strm << "access " << hex << (unsigned int)(accessMask) << dec << "\n";
 			currAccessMask = accessMask;
 		}
-		strm << "func \"" << Escape::Quotes(func->GetDeclaration()).c_str() << (func->IsProperty() ? " property" : "") << "\"\n";
+		strm << (func->GetFormatStringValidator() ? "formatfunc \"" : "func \"") << Escape::Quotes(func->GetDeclaration()).c_str() << (func->IsProperty() ? " property" : "") << "\"\n";
 	}
 
 	// Write global properties
@@ -560,9 +561,12 @@ int WriteConfigToStream(asIScriptEngine *engine, ostream &strm)
 	return 0;
 }
 
-int ConfigEngineFromStream(asIScriptEngine *engine, istream &strm, const char *configFile, asIStringFactory *stringFactory)
+int ConfigEngineFromStream(asIScriptEngine *engine, istream &strm, const char *configFile, asIStringFactory *stringFactory,
+                           asFORMATSTRINGVALIDATOR_t formatValidator, void *formatValidatorParam)
 {
 	int r;
+	std::vector<int> checkedFunctions;
+	std::vector<int> checkedLines;
 
 	// Some helper functions for parsing the configuration
 	struct in
@@ -796,7 +800,7 @@ int ConfigEngineFromStream(asIScriptEngine *engine, istream &strm, const char *c
 				return -1;
 			}
 		}
-		else if( token == "func" )
+		else if( token == "func" || token == "formatfunc" )
 		{
 			string decl;
 			in::GetToken(engine, decl, config, pos);
@@ -808,6 +812,17 @@ int ConfigEngineFromStream(asIScriptEngine *engine, istream &strm, const char *c
 			{
 				engine->WriteMessage(configFile, in::GetLineNumber(config, pos), 0, asMSGTYPE_ERROR, "Failed to register global function");
 				return -1;
+			}
+			if (token == "formatfunc" && !formatValidator)
+			{
+				engine->WriteMessage(configFile, in::GetLineNumber(config, pos), 0, asMSGTYPE_ERROR,
+				                     "formatfunc requires a compatible format string validator");
+				return -1;
+			}
+			if (token == "formatfunc")
+			{
+				checkedFunctions.push_back(r);
+				checkedLines.push_back(in::GetLineNumber(config, pos));
 			}
 		}
 		else if( token == "prop" )
@@ -916,6 +931,13 @@ int ConfigEngineFromStream(asIScriptEngine *engine, istream &strm, const char *c
 		}
 	}
 
+	// The string factory may appear after global functions in exported configs.
+	for (size_t i = 0; i < checkedFunctions.size(); ++i)
+		if (engine->GetFunctionById(checkedFunctions[i])->SetFormatStringValidator(formatValidator, formatValidatorParam) < 0)
+		{
+			engine->WriteMessage(configFile, checkedLines[i], 0, asMSGTYPE_ERROR, "Invalid formatfunc signature");
+			return -1;
+		}
 	return 0;
 }
 

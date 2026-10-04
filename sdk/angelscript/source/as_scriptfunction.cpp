@@ -346,6 +346,8 @@ int asCScriptFunction::ParseListPattern(asSListPatternNode *&target, const char 
 asCScriptFunction::asCScriptFunction(asCScriptEngine *engine, asCModule *mod, asEFuncType _funcType)
 {
 	funcType               = _funcType;
+	formatStringValidator  = 0;
+	formatStringValidatorParam = 0;
 	if( funcType == asFUNC_DELEGATE )
 	{
 		// Delegates behave like object instances, rather than script code
@@ -1873,6 +1875,17 @@ bool asCScriptFunction::IsProperty() const
 }
 
 // interface
+int asCScriptFunction::SetFormatStringValidator(asFORMATSTRINGVALIDATOR_t validator, void *userParam)
+{
+	// Host metadata is never serialized into script bytecode.
+	if (funcType != asFUNC_SYSTEM || !IsVariadic() || parameterTypes.GetLength() == 0 ||
+	    parameterTypes[0].GetTypeInfo() != engine->stringType.GetTypeInfo())
+		return asINVALID_ARG;
+	formatStringValidator = validator;
+	formatStringValidatorParam = userParam;
+	return asSUCCESS;
+}
+
 bool asCScriptFunction::IsVariadic() const
 {
 	return traits.GetTrait(asTRAIT_VARIADIC);
