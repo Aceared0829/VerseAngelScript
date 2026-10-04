@@ -74,7 +74,10 @@ static void benchmark(const char *label, const std::string &file, bool modern, i
 }
 int main(int argc, char **argv) {
     check(argc == 2, "Expected benchmark directory");
-    std::string root(argv[1]);
+    // The reference SDK loader treats MinGW relative paths as executable-relative.
+    // Give both builders the same native absolute path for a fair comparison.
+    std::string root;
+    check(vas::AbsolutePath(argv[1], root), "Cannot resolve benchmark directory");
     const std::string file = root + "/bench.vas", dependency = root + "/math.vas";
     std::string plain;
     for (int i = 0; i < 2000; ++i) plain += "int value" + std::to_string(i) + "(){return " + std::to_string(i) + ";}\n";
