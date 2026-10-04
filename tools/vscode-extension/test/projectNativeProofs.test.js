@@ -16,7 +16,7 @@ const { ProjectInputObservations } = require('../src/projectObservations');
 const { createProjectWatchers } = require('../src/projectWatch');
 const { BuildDiagnostics } = require('../src/diagnostics');
 const { documentDigest } = require('../src/projectVersions');
-const { configuredRuntime } = require('./vscodeRuntime');
+const { configuredRuntime, subscribeRuntimeParcel } = require('./vscodeRuntime');
 const { readyDirectoryWatch } = require('./watchReadiness');
 const { ParcelMetadataEvidence } = require('./parcelMetadataEvidence');
 const { sameFileName } = require('../src/toolchain');
@@ -339,9 +339,9 @@ test('a first real native include proof preserves warnings across pending and la
 test('real native publication survives a single metadata-only update for a target observed by the selected VS Code Parcel backend', nativeProofOptions,
   async () => {
     const runtime = await configuredRuntime();
-    const parcel = require(runtime.parcel);
     const audit = { version: runtime.version, commit: runtime.commit, parcelVersion: runtime.parcelVersion, backend: runtime.backend,
-      parcel: runtime.parcel, phase: 'subscribe', events: [], dropped: 0 };
+      parcel: runtime.parcel, parcelBinding: runtime.parcelBinding, parcelLayout: runtime.parcelLayout,
+      phase: 'subscribe', events: [], dropped: 0 };
     let watcherError, subscription, readiness, observeReadiness, bridge, evidence, closing;
     const initial = deferred(), received = deferred();
     function closeWatcher() {
@@ -398,7 +398,7 @@ test('real native publication survives a single metadata-only update for a targe
         // FSEvents starts with an empty path cache: an unknown existing target's
         // coalesced create/metadata flags may yield create. The separate initial
         // receipt establishes backend path knowledge, never a compiler baseline.
-        subscription = await parcel.subscribe(root, (error, events) => {
+        subscription = await subscribeRuntimeParcel(runtime, root, (error, events) => {
           if (error) {
             watcherError = error; audit.error = error.message; bridge?.emit('error', error);
             initial.resolve(); received.resolve(); return;
@@ -408,7 +408,7 @@ test('real native publication survives a single metadata-only update for a targe
             if (sameFileName(path.dirname(event.path), root)) observeReadiness?.(event.type, path.basename(event.path));
             evidence.observed(event);
           }
-        }, { backend: runtime.backend });
+        });
         assert.ifError(watcherError);
         audit.phase = 'initial-source-creation';
       } });
