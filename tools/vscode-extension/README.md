@@ -2,7 +2,7 @@
 
 VAS 的 VS Code 基础扩展：`.vas` 语法高亮、注释/括号/缩进、代码片段，以及由真实 `vasbuild` / `vasrun` 驱动的构建、运行和 Problems 错误列表。
 
-当前已交付编辑/当前文件任务基础，并增加独立的编译器工程构建客户端。当前没有语义补全、跨文件重命名、格式化器、后台诊断或 IDE 断点调试；完整验收范围见 [IDE 路线图](../../docs/ide-roadmap.md)。
+当前已交付编辑/当前文件任务基础，并增加独立的编译器工程构建客户端。当前没有语义补全、跨文件重命名、格式化器、后台诊断或 IDE 断点调试；完整验收范围见 [IDE 路线图](https://github.com/Aceared0829/VerseAngelScript/blob/master/docs/ide-roadmap.md)。
 
 ## 安装与构建
 

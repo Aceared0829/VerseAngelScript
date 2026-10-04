@@ -936,6 +936,10 @@ async function run() {
 }
 
 module.exports = { run: async () => {
-  try { await run(); stage('complete'); }
+  try {
+    await run();
+    await require('./runtimeEvidence').recordHost(process.env.VAS_TEST_RUNTIME_EVIDENCE, vscode.version, process.env.VAS_TEST_MODE);
+    stage('complete');
+  }
   catch (error) { stage(`failed: ${error.message}`); throw error; }
 } };
