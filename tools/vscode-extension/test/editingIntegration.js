@@ -45,6 +45,12 @@ async function run() {
   const change = new vscode.WorkspaceEdit(); change.replace(library.uri, new vscode.Range(library.positionAt(0), library.positionAt(library.getText().length)), 'namespace Library { int NewValue() { return 2; } }'); assert(await vscode.workspace.applyEdit(change));
   await replace('import Library;\nvoid Main() { int Value = Library::NewValue(); }'); await waitFor(values => values.length === 0);
   await new Promise(r => setTimeout(r, 800)); assert.equal(vscode.languages.getDiagnostics(document.uri).length, 0);
+  if (process.platform === 'linux') {
+    await fs.writeFile(path.join(folder, 'Editor.vas'), 'void BrokenCase() { UnknownCaseName(); }');
+    await replace('import Editor;\nvoid Main() {}');
+    await new Promise(r => setTimeout(r, 2000));
+    assert.equal(vscode.languages.getDiagnostics(document.uri).length, 0, 'case-distinct imported errors must not be published on editor.vas');
+  }
   const evidence = { host: vscode.version, nativeTyping: true, pairs: 5, closingSkip: true, pairedBackspace: true, commentProtection: true,
     nativeFunctionCompletion: true, parameterHelp: true, structuralErrors: true, nativeCompilerErrors: true, missingSemicolon: true, clearedErrorsAfterFix: true, unsavedImport: true };
   await fs.writeFile(process.env.VAS_EDITING_EVIDENCE, JSON.stringify(evidence, null, 2));

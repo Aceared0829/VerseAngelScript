@@ -56,7 +56,9 @@ function registerLiveDiagnostics(vscode, context, workspace) {
       const diagnostics = structural(document);
       for (const line of output.split(/\r?\n/)) {
         const issue = parseDiagnostic(line, temporary);
-        if (!issue || path.resolve(issue.file).toLowerCase() !== path.resolve(source).toLowerCase()) continue;
+        if (!issue) continue;
+        const reportedFile = path.resolve(issue.file), entryFile = path.resolve(source);
+        if (process.platform === 'win32' ? reportedFile.toLowerCase() !== entryFile.toLowerCase() : reportedFile !== entryFile) continue;
         const start = sourcePosition(text, issue.row, issue.column);
         const position = new vscode.Position(start.line, start.character);
         const range = document.getWordRangeAtPosition(position) || new vscode.Range(position, position.translate(0, Math.min(1, document.lineAt(position.line).text.length - position.character)));
