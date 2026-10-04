@@ -22,6 +22,7 @@ internal static class Program
         try
         {
             DescriptorTests(); ReportTests(); PositionTests(); CompilerPathTests(); InputEventTests(); WorkspaceEventTests(); ProcessTests();
+            FixtureMutationTests.Run(Check);
             string native = Environment.GetEnvironmentVariable("VAS_NATIVE_ARGV_FIXTURE");
             if (!string.IsNullOrEmpty(native)) NativeArguments(native);
             else if (Environment.OSVersion.Platform == PlatformID.Win32NT) throw new Exception("Windows core gate requires VAS_NATIVE_ARGV_FIXTURE (tests/vasbuild/rider_argv_fixture.cpp).");

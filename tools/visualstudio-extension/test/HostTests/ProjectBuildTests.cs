@@ -555,7 +555,7 @@ namespace VerseAngelScript.VisualStudio.Tests
                 else
                 {
                     var path = change == "source" ? fixture.Entry : change == "config" ? fixture.Config : fixture.Manifest;
-                    File.AppendAllText(path, "\n");
+                    await AppendBlockedInputAsync(fixture, path, generation, holdReadLease: change == "manifest");
                 }
                 await WaitForAsync(() => !Busy && fixture.NoLiveProcesses() && Convert.ToInt64(Member(Coordinator, "Generation")) > generation, "concurrent " + change + " change invalidates and stops process");
                 var status = Status;
@@ -575,23 +575,19 @@ namespace VerseAngelScript.VisualStudio.Tests
                 await ChooseAndBuildAsync(racing, 0);
                 await WaitForAsync(() => Busy && racing.Calls.Count(call => call == "build") == cycle + 1, "blocked process for concurrent cancel cycle");
                 var mutationStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-                var mutation = Task.Run(() =>
+                var before = File.ReadAllBytes(racing.Entry);
+                var mutation = Task.Run(async () =>
                 {
                     mutationStarted.SetResult(true);
                     // Actual file changes race native watcher cancellation against
                     // the UI command; no callback ordering is assumed or forced.
                     for (var edit = 0; edit < 4; edit++)
-                    {
-                        for (var attempt = 0; ; attempt++)
-                        {
-                            try { File.AppendAllText(racing.Entry, " "); break; }
-                            catch (IOException) when (attempt < 100) { System.Threading.Thread.Sleep(5); }
-                        }
-                    }
+                        await FixtureMutation.AppendOnceAsync(racing.Entry, " ", TimeSpan.FromSeconds(5), CancellationToken.None);
                 });
                 await mutationStarted.Task;
                 ExecuteCommand(CancelCommand);
                 await mutation;
+                Assert.Equal(before.Concat(Encoding.UTF8.GetBytes("    ")).ToArray(), File.ReadAllBytes(racing.Entry));
                 await WaitForAsync(() => !Busy && racing.NoLiveProcesses(), "concurrent watcher/command cancellation owns and reaps process");
                 File.WriteAllText(racing.ReleaseFile, "late output after concurrent cancellation");
                 await Task.Delay(150);
@@ -603,7 +599,50 @@ namespace VerseAngelScript.VisualStudio.Tests
                 Assert.Equal((cycle + 1) * 2, racing.Calls.Count);
                 Assert.False(Directory.Exists(racing.OutputDirectory));
             }
-            SaveEvidence(nameof(BlockedBuildInputAndCompilerChangesInvalidate), "sourceMutationCancels", "configMutationCancels", "manifestMutationCancels", "compilerSettingCancels", "lateOutputIgnored", "processesReaped", "concurrentWatcherCancelSafe");
+            SaveEvidence(nameof(BlockedBuildInputAndCompilerChangesInvalidate), "sourceMutationCancels", "configMutationCancels", "manifestMutationCancels", "compilerSettingCancels", "lateOutputIgnored", "processesReaped", "concurrentWatcherCancelSafe", "sharingAcquisitionResponsive", "exactSingleInputMutation");
+        }
+
+        private async Task AppendBlockedInputAsync(Fixture fixture, string path, long generation, bool holdReadLease)
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+            Assert.True(Busy && !fixture.NoLiveProcesses());
+            Assert.Equal(generation, Convert.ToInt64(Member(Coordinator, "Generation")));
+            var before = File.ReadAllBytes(path);
+            var contention = new TaskCompletionSource<IOException>(TaskCreationOptions.RunContinuationsAsynchronously);
+            FileStream reader = holdReadLease ? new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read) : null;
+            using (var cancellation = new CancellationTokenSource())
+            {
+                var mutation = FixtureMutation.AppendOnceAsync(path, "\n", TimeSpan.FromSeconds(5), cancellation.Token,
+                    error => contention.TrySetResult(error));
+                try
+                {
+                    if (holdReadLease)
+                    {
+                        var first = await Task.WhenAny(contention.Task, mutation);
+                        if (first == mutation) await mutation; // Propagate an unexpected acquisition failure.
+                        Assert.Same(contention.Task, first);
+                        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                        Assert.True(FixtureMutation.IsSharingConflict(await contention.Task));
+                        Assert.False(mutation.IsCompleted);
+                        Assert.Equal(before, File.ReadAllBytes(path));
+                        Assert.True(Busy && !fixture.NoLiveProcesses());
+                        Assert.Equal(generation, Convert.ToInt64(Member(Coordinator, "Generation")));
+                        var flags = QueryCommand(CancelCommand); // The real native UI remains usable while write acquisition waits.
+                        Assert.True((flags & (uint)OLECMDF.OLECMDF_ENABLED) != 0);
+                        reader.Dispose(); reader = null;
+                    }
+                    await mutation;
+                    await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                    Assert.Equal(before.Concat(new[] { (byte)'\n' }).ToArray(), File.ReadAllBytes(path));
+                }
+                finally
+                {
+                    cancellation.Cancel();
+                    reader?.Dispose();
+                    try { await mutation; }
+                    catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+                }
+            }
         }
 
         [IdeFact(MinVersion = VisualStudioVersion.VS18, MaxVersion = VisualStudioVersion.VS18, RootSuffix = "VASIntegration", MaxAttempts = 1)]
