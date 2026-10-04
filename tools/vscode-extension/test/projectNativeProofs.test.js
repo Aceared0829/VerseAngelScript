@@ -18,6 +18,7 @@ const { BuildDiagnostics } = require('../src/diagnostics');
 const { documentDigest } = require('../src/projectVersions');
 const { configuredRuntime } = require('./vscodeRuntime');
 const { readyDirectoryWatch } = require('./watchReadiness');
+const { ParcelMetadataEvidence } = require('./parcelMetadataEvidence');
 const { sameFileName } = require('../src/toolchain');
 
 // These are native-process/component tests, not extension-host or native Windows
@@ -52,7 +53,7 @@ class Emitter {
   dispose() { this.listeners.clear(); }
 }
 
-async function fixture(run, { canonicalAlias = false } = {}) {
+async function fixture(run, { canonicalAlias = false, beforeFiles = async () => {} } = {}) {
   assert.ok(process.env.VAS_TEST_COMPILER, 'Proof-required tests require an actual VAS_TEST_COMPILER executable');
   const storage = await fs.mkdtemp(path.join(os.tmpdir(), 'vas-native-proof-'));
   let root = storage;
@@ -152,6 +153,7 @@ async function fixture(run, { canonicalAlias = false } = {}) {
   const state = { root, project, include, bytes, vscode, collections, diagnostics, dependencies, observations, start, cleanup, watchPatterns,
     fsChanged: file => fileEvents.fire(vscode.Uri.file(file)) };
   try {
+    await beforeFiles(state);
     await fs.writeFile(project, JSON.stringify({ schemaVersion: 1, compilationUnits: [
       { id: 'main', entry: 'main.vas', hostApi: { config: 'api.txt' }, output: 'out/main.vasbc' }
     ] }));
@@ -162,7 +164,10 @@ async function fixture(run, { canonicalAlias = false } = {}) {
   } finally {
     // Release filesystem barriers even on assertion failure, then reap real
     // children before deleting their files or letting the test process exit.
-    for (const dispose of cleanup.reverse()) dispose();
+    const cleanupErrors = [];
+    for (const dispose of cleanup.reverse()) {
+      try { await dispose(); } catch (error) { cleanupErrors.push(error); }
+    }
     for (const build of builds) build.terminal.dispose();
     let quiescent = true;
     try {
@@ -188,6 +193,7 @@ async function fixture(run, { canonicalAlias = false } = {}) {
       watchers.dispose(); observations.dispose(); diagnostics.dispose(); fileEvents.dispose();
       if (quiescent) await fs.rm(storage, { recursive: true, force: true });
       else console.error(`Preserving source-proof fixture because cleanup was not confirmed: ${storage}`);
+      if (cleanupErrors.length) throw new AggregateError(cleanupErrors, 'Source-proof fixture cleanup failed');
     }
   }
 }
@@ -330,66 +336,87 @@ test('a first real native include proof preserves warnings across pending and la
     });
   });
 
-test('real native publication survives a single metadata-only change delivered by the selected VS Code Parcel backend', nativeProofOptions,
-  async () => fixture(async state => {
+test('real native publication survives a single metadata-only update for a target observed by the selected VS Code Parcel backend', nativeProofOptions,
+  async () => {
     const runtime = await configuredRuntime();
     const parcel = require(runtime.parcel);
-    const root = await fs.realpath(state.root), included = await fs.realpath(state.include);
     const audit = { version: runtime.version, commit: runtime.commit, parcelVersion: runtime.parcelVersion, backend: runtime.backend,
       parcel: runtime.parcel, phase: 'subscribe', events: [], dropped: 0 };
-    let armed = false, watcherError, subscription, readiness, observeReadiness, bridge;
-    const received = deferred();
+    let watcherError, subscription, readiness, observeReadiness, bridge, evidence, closing;
+    const initial = deferred(), received = deferred();
+    function closeWatcher() {
+      if (!closing) closing = (async () => {
+        evidence?.close(); readiness?.close();
+        await subscription?.unsubscribe(); assert.ifError(watcherError);
+      })();
+      return closing;
+    }
     try {
-      // Use the product's actual native module/backend. Node fs.watch's macOS
-      // rename/change classification is not Parcel's stat-based update mapping.
-      // Parcel exposes subscription completion; the GUI fixture still proves
-      // delivery through the extension's own existing FileSystemWatcher.
-      subscription = await parcel.subscribe(root, (error, events) => {
-        if (error) { watcherError = error; audit.error = error.message; bridge?.emit('error', error); received.resolve(); return; }
-        for (const event of events) {
-          if (audit.events.length < 64) audit.events.push({ type: event.type, path: event.path, phase: audit.phase }); else audit.dropped++;
-          if (sameFileName(path.dirname(event.path), root)) observeReadiness?.(event.type, path.basename(event.path));
-          if (armed && event.type === 'update' && sameFileName(event.path, included)) {
-            state.fsChanged(state.include); received.resolve();
+      await fixture(async state => {
+        await bounded(initial.promise, 'same Parcel subscription to observe the initial target creation');
+        assert.ifError(watcherError);
+        audit.initial = evidence.initial;
+        assert.ok(audit.initial, 'target creation must be observed before any native build');
+        audit.phase = 'readiness';
+        const root = await fs.realpath(state.root);
+        readiness = await readyDirectoryWatch(root, () => {}, { createWatcher(_directory, receive) {
+          // Forward this same Parcel subscription, never create a Node watcher.
+          observeReadiness = receive; bridge = new EventEmitter();
+          bridge.close = () => { observeReadiness = undefined; };
+          return bridge;
+        } });
+        audit.readiness = readiness.audit;
+        audit.phase = 'compile';
+        const build = state.start();
+        assert.equal(await bounded(build.closed.promise, 'single native build'), 0, build.output.join(''));
+        assertActualProof(state, build); assertNativeSuccess(build);
+        const publication = warningEntries(state)[0]; assert.ok(publication);
+        const before = await fs.stat(state.include, { bigint: true });
+        assert.ifError(watcherError);
+        evidence.trigger();
+        audit.phase = 'post-publication-touch';
+        await fs.utimes(state.include, Number(before.atimeNs) / 1e9, Number(before.mtimeNs) / 1e9 + 2);
+        await bounded(received.promise, 'post-publication Parcel metadata notification');
+        assert.ifError(watcherError);
+        audit.update = evidence.update;
+        await bounded(state.observations.settle(), 'classify the actual metadata notification');
+        const after = await fs.stat(state.include, { bigint: true });
+        audit.mtime = { before: before.mtimeNs.toString(), after: after.mtimeNs.toString() };
+        assert.notEqual(after.mtimeNs, before.mtimeNs);
+        assert.equal(after.dev, before.dev); assert.equal(after.ino, before.ino); assert.equal(after.size, before.size);
+        assert.deepEqual(await fs.readFile(state.include), state.bytes);
+        assert.equal(warningEntries(state)[0], publication);
+        assert.deepEqual(build.closeCodes, [0]);
+        assert.equal(build.wire.filter(record => record.type === 'start').length, 1);
+      }, { beforeFiles: async state => {
+        const root = await fs.realpath(state.root), included = path.join(root, path.basename(state.include));
+        evidence = new ParcelMetadataEvidence(included, {
+          created: () => initial.resolve(), updated: () => { state.fsChanged(state.include); received.resolve(); }
+        });
+        state.cleanup.push(closeWatcher);
+        // Subscribe to the empty directory before the single initial source write.
+        // FSEvents starts with an empty path cache: an unknown existing target's
+        // coalesced create/metadata flags may yield create. The separate initial
+        // receipt establishes backend path knowledge, never a compiler baseline.
+        subscription = await parcel.subscribe(root, (error, events) => {
+          if (error) {
+            watcherError = error; audit.error = error.message; bridge?.emit('error', error);
+            initial.resolve(); received.resolve(); return;
           }
-        }
-      }, { backend: runtime.backend });
-      assert.ifError(watcherError);
-      audit.phase = 'readiness';
-      readiness = await readyDirectoryWatch(root, () => {}, { createWatcher(_directory, receive) {
-        // Forward this same Parcel subscription, never create a Node watcher.
-        observeReadiness = receive; bridge = new EventEmitter();
-        bridge.close = () => { observeReadiness = undefined; };
-        return bridge;
+          for (const event of events) {
+            if (audit.events.length < 64) audit.events.push({ type: event.type, path: event.path, phase: audit.phase }); else audit.dropped++;
+            if (sameFileName(path.dirname(event.path), root)) observeReadiness?.(event.type, path.basename(event.path));
+            evidence.observed(event);
+          }
+        }, { backend: runtime.backend });
+        assert.ifError(watcherError);
+        audit.phase = 'initial-source-creation';
       } });
-      audit.readiness = readiness.audit;
-      audit.phase = 'compile';
-      const build = state.start();
-      assert.equal(await bounded(build.closed.promise, 'single native build'), 0, build.output.join(''));
-      assertActualProof(state, build); assertNativeSuccess(build);
-      const publication = warningEntries(state)[0]; assert.ok(publication);
-      const before = await fs.stat(state.include, { bigint: true });
-      assert.ifError(watcherError);
-      armed = true;
-      audit.phase = 'post-publication-touch';
-      await fs.utimes(state.include, Number(before.atimeNs) / 1e9, Number(before.mtimeNs) / 1e9 + 2);
-      await bounded(received.promise, 'post-publication Parcel metadata notification');
-      assert.ifError(watcherError);
-      await bounded(state.observations.settle(), 'classify the actual metadata notification');
-      const after = await fs.stat(state.include, { bigint: true });
-      audit.mtime = { before: before.mtimeNs.toString(), after: after.mtimeNs.toString() };
-      assert.notEqual(after.mtimeNs, before.mtimeNs);
-      assert.equal(after.dev, before.dev); assert.equal(after.ino, before.ino); assert.equal(after.size, before.size);
-      assert.deepEqual(await fs.readFile(state.include), state.bytes);
-      assert.equal(warningEntries(state)[0], publication);
-      assert.deepEqual(build.closeCodes, [0]);
-      assert.equal(build.wire.filter(record => record.type === 'start').length, 1);
     } finally {
-      readiness?.close();
-      try { await subscription?.unsubscribe(); assert.ifError(watcherError); }
+      try { await closeWatcher(); }
       finally { console.log('VAS Parcel metadata evidence:', JSON.stringify(audit)); }
     }
-  }));
+  });
 
 test('real cold-include proofs retain mandatory dirty and clean physical-alias checks', nativeProofOptions, async () => {
   for (const mode of ['dirty-alias', 'clean-alias-mismatch', 'clean-alias-match', 'unrelated-equal-bytes']) await fixture(async state => {
