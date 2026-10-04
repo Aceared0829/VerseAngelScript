@@ -60,9 +60,11 @@ def checked_zip(data):
     require(len(archive.infolist()) <= 10000, "Too many ZIP entries")
     require(sum(i.file_size for i in archive.infolist()) <= 256 * 1024 * 1024, "ZIP is too large")
     for entry in archive.infolist():
-        name = entry.filename
+        # ZipInfo normalizes OS separators and truncates NUL in filename. Check
+        # the original first; also reject effective aliases from Unicode extras.
+        name = entry.orig_filename
         parts = name.rstrip("/").split("/")
-        require(name and not name.startswith("/") and "\\" not in name and ":" not in name
+        require(name == entry.filename and name and not name.startswith("/") and "\\" not in name and ":" not in name
                 and all(p not in ("", ".", "..") for p in parts)
                 and not any(ord(c) < 32 for c in name), "Unsafe ZIP entry")
         require(name.casefold() not in seen, "Duplicate ZIP entry")

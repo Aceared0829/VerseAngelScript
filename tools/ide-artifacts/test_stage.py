@@ -4,6 +4,7 @@ import io
 import json
 from pathlib import Path
 import stat
+import struct
 import subprocess
 import tempfile
 import unittest
@@ -22,6 +23,27 @@ def zipped(entries):
             for name, value in entries:
                 archive.writestr(name, value)
     return result.getvalue()
+
+
+def raw_named_zip(name, local_name=None):
+    """Patch both physical names, bypassing ZipInfo's host-dependent rewriting."""
+    raw = name.encode("ascii")
+    local = raw if local_name is None else local_name.encode("ascii")
+    assert raw and len(local) == len(raw)
+    placeholder = "x" * len(raw)
+    data = bytearray(zipped([(placeholder, b"payload")]))
+    # This fixture has one stored entry, no extras/comments, and fixed payload.
+    central = data.index(b"PK\x01\x02")
+    assert data[:4] == b"PK\x03\x04"
+    assert struct.unpack_from("<H", data, 26)[0] == len(raw)
+    assert struct.unpack_from("<H", data, central + 28)[0] == len(raw)
+    assert data[30:30 + len(raw)] == placeholder.encode("ascii")
+    assert data[central + 46:central + 46 + len(raw)] == placeholder.encode("ascii")
+    data[30:30 + len(raw)] = local
+    data[central + 46:central + 46 + len(raw)] = raw
+    assert data[30:30 + len(raw)] == local
+    assert data[central + 46:central + 46 + len(raw)] == raw
+    return bytes(data)
 
 
 def vscode_entries():
@@ -59,8 +81,11 @@ class StageTests(unittest.TestCase):
 
     def test_zip_rejects_bad_duplicates_traversal_and_symlinks(self):
         for name in ("../private", "/absolute", "C:/private", r"a\private", "a//b", "a/./b", "a/../b", "a\nb"):
+            data = raw_named_zip(name)
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                self.assertEqual(archive.infolist()[0].orig_filename, name)
             with self.subTest(name=name), self.assertRaises(ValueError):
-                stage.checked_zip(zipped([(name, b"bad")]))
+                stage.checked_zip(data)
         for entries in ([('a', b'x'), ('a', b'y')], [('a', b'x'), ('A', b'y')]):
             with self.assertRaisesRegex(ValueError, "Duplicate"):
                 stage.checked_zip(zipped(entries))
@@ -71,6 +96,36 @@ class StageTests(unittest.TestCase):
             stage.checked_zip(zipped([(symlink, b"../private")]))
         with self.assertRaises(zipfile.BadZipFile):
             stage.checked_zip(b"not a zip")
+
+    def test_raw_names_rejected_before_platform_normalization(self):
+        # Exercise Windows and POSIX ZipInfo normalization on every test host.
+        for separator, alternate in (("/", None), ("\\", "/")):
+            with patch.object(zipfile.os, "sep", separator), patch.object(zipfile.os, "altsep", alternate):
+                for name in (r"a\private", "safe\0/hidden", "a\tb", "a\rb", "a\x1fb"):
+                    data = raw_named_zip(name)
+                    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                        entry = archive.infolist()[0]
+                        self.assertEqual(entry.orig_filename, name)
+                        if "\0" in name:
+                            self.assertEqual(entry.filename, "safe")
+                        elif separator == "\\" and "\\" in name:
+                            self.assertEqual(entry.filename, "a/private")
+                    with self.subTest(separator=separator, name=name), self.assertRaisesRegex(ValueError, "Unsafe ZIP entry"):
+                        stage.checked_zip(data)
+                with stage.checked_zip(raw_named_zip("safe/file.txt")) as archive:
+                    self.assertEqual(archive.namelist(), ["safe/file.txt"])
+                    self.assertEqual(archive.read("safe/file.txt"), b"payload")
+                with stage.checked_zip(zipped([("safe/", b""), ("safe/file.txt", b"payload")])) as archive:
+                    self.assertEqual(stage.files(archive), {"safe/file.txt"})
+                    self.assertEqual(archive.read("safe/file.txt"), b"payload")
+
+    def test_raw_local_name_cannot_alias_a_safe_central_name(self):
+        for separator, alternate in (("/", None), ("\\", "/")):
+            with patch.object(zipfile.os, "sep", separator), patch.object(zipfile.os, "altsep", alternate):
+                for local in (r"a\private", "a\0private"):
+                    data = raw_named_zip("a/private", local_name=local)
+                    with self.subTest(separator=separator, local=local), self.assertRaisesRegex(ValueError, "Corrupt ZIP entry"):
+                        stage.checked_zip(data)
 
     def test_package_selection_fails_closed(self):
         with self.assertRaisesRegex(ValueError, "found 0"):
