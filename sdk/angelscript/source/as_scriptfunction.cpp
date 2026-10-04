@@ -1879,6 +1879,7 @@ int asCScriptFunction::SetFormatStringValidator(asFORMATSTRINGVALIDATOR_t valida
 {
 	// Host metadata is never serialized into script bytecode.
 	if (funcType != asFUNC_SYSTEM || !IsVariadic() || parameterTypes.GetLength() == 0 ||
+	    !engine->stringType.GetTypeInfo() ||
 	    parameterTypes[0].GetTypeInfo() != engine->stringType.GetTypeInfo())
 		return asINVALID_ARG;
 	formatStringValidator = validator;

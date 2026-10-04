@@ -69,6 +69,11 @@ static void numericRegression() {
 static void dummy(asIScriptGeneric *) {}
 static void compilerRegression() {
     asIScriptEngine *engine = asCreateScriptEngine();
+    int invalid = engine->RegisterGlobalFunction("void invalid(int value, const ?&in ...)",
+                                                asFUNCTION(dummy), asCALL_GENERIC);
+    require(invalid >= 0, "primitive variadic registration failed");
+    require(engine->GetFunctionById(invalid)->SetFormatStringValidator(vas::ValidateFormat, engine) == asINVALID_ARG,
+            "missing string type accepted a primitive format parameter");
     RegisterStdString(engine);
     int id = engine->RegisterGlobalFunction("void checked(const string &in format, const ?&in ...)",
                                            asFUNCTION(dummy), asCALL_GENERIC);
