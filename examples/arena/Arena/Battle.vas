@@ -1,0 +1,92 @@
+import Combatant;
+import Skills; // Shared Combatant dependency is processed only once.
+
+namespace Arena
+{
+	class FBattleResult
+	{
+		string LeftName;
+		string RightName;
+		int32 LeftHealth;
+		int32 RightHealth;
+		int32 LeftDamageDealt;
+		int32 RightDamageDealt;
+		int32 LeftHealingDone;
+		int32 RightHealingDone;
+		int32 RoundCount = 0;
+		int32 WinnerIndex = -1; // -1: draw, 0: left wins, 1: right wins.
+	}
+
+	void TakeTurn(FCombatant@ Actor, FCombatant@ Target, ICombatSkill@ Attack, ICombatSkill@ Heal,
+				  FDeterministicRandom@ Random, bool bVerbose)
+	{
+		if (!Actor.IsAlive() || !Target.IsAlive())
+		{
+			return;
+		}
+		ICombatSkill@ Selected = Attack;
+		if (Actor.Role == Medic && Actor.Health <= Actor.MaxHealth / 2)
+		{
+			@Selected = Heal;
+		}
+		int32 Amount = Selected.Execute(Actor, Target, Random);
+#if VAS_ARENA_VERBOSE
+		if (bVerbose)
+		{
+			println("  {} {}：{}，双方 HP = {} / {}", Actor.Name, Selected.GetLabel(), Amount, Actor.Health, Target.Health);
+		}
+#endif
+	}
+
+	FBattleResult@ SimulateBattle(FCombatant@ Left, FCombatant@ Right, uint32 Seed, bool bVerbose)
+	{
+		FDeterministicRandom Random(Seed);
+		// Create skills once per battle and reuse them inside the round loop.
+		FAttackSkill Attack;
+		FHealSkill Heal;
+		FBattleResult@ Result = FBattleResult();
+		for (int32 Round = 1; Round <= VAS_ARENA_MAX_ROUNDS && Left.IsAlive() && Right.IsAlive(); ++Round)
+		{
+			Result.RoundCount = Round;
+#if VAS_ARENA_VERBOSE
+			if (bVerbose)
+			{
+				println("第 {:02d} 回合", Round);
+			}
+#endif
+			// Alternate initiative each round and check both combatants before every action.
+			if (Round % 2 == 1)
+			{
+				TakeTurn(Left, Right, Attack, Heal, Random, bVerbose);
+				TakeTurn(Right, Left, Attack, Heal, Random, bVerbose);
+			}
+			else
+			{
+				TakeTurn(Right, Left, Attack, Heal, Random, bVerbose);
+				TakeTurn(Left, Right, Attack, Heal, Random, bVerbose);
+			}
+		}
+		Result.LeftName = Left.Name;
+		Result.RightName = Right.Name;
+		Result.LeftHealth = Left.Health;
+		Result.RightHealth = Right.Health;
+		Result.LeftDamageDealt = Left.DamageDealt;
+		Result.RightDamageDealt = Right.DamageDealt;
+		Result.LeftHealingDone = Left.HealingDone;
+		Result.RightHealingDone = Right.HealingDone;
+		if (Left.IsAlive() && !Right.IsAlive())
+		{
+			Result.WinnerIndex = 0;
+		}
+		if (Right.IsAlive() && !Left.IsAlive())
+		{
+			Result.WinnerIndex = 1;
+		}
+		return Result;
+	}
+
+	string GetWinnerLabel(FBattleResult@ Result)
+	{
+		return Result.WinnerIndex == 0 ? Result.LeftName : Result.WinnerIndex == 1 ? Result.RightName : "平局";
+	}
+}

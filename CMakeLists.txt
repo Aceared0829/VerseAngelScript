@@ -214,6 +214,14 @@ if(BUILD_TESTING)
 			"-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/modules"
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/tests/vasbuild/assert_modules.cmake")
 	set_tests_properties(vas_modules PROPERTIES TIMEOUT 60)
+	add_test(NAME vas_arena_example
+		COMMAND ${CMAKE_COMMAND}
+			"-DVASBUILD=$<TARGET_FILE:vasbuild>"
+			"-DVASRUN=$<TARGET_FILE:vasrun>"
+			"-DSOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+			"-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/arena-example"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/tests/vasbuild/assert_arena.cmake")
+	set_tests_properties(vas_arena_example PROPERTIES TIMEOUT 60)
 	add_test(NAME vas_print_primitives
 		COMMAND ${CMAKE_COMMAND}
 			"-DVASBUILD=$<TARGET_FILE:vasbuild>"
