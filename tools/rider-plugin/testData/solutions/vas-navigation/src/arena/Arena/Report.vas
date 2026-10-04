@@ -1,0 +1,84 @@
+import Battle;
+
+namespace Arena
+{
+	class FStanding
+	{
+		string Name;
+		int32 Wins = 0;
+		int32 Draws = 0;
+		int32 Losses = 0;
+		int32 DamageDealt = 0;
+		int32 HealingDone = 0;
+
+		FStanding(const string&in Label)
+		{
+			Name = Label;
+		}
+		int32 GetPoints() const
+		{
+			return Wins * 3 + Draws;
+		}
+	}
+
+	void RecordResult(FStanding@ Left, FStanding@ Right, FBattleResult@ Result)
+	{
+		Left.DamageDealt += Result.LeftDamageDealt;
+		Right.DamageDealt += Result.RightDamageDealt;
+		Left.HealingDone += Result.LeftHealingDone;
+		Right.HealingDone += Result.RightHealingDone;
+		if (Result.WinnerIndex == 0)
+		{
+			++Left.Wins;
+			++Right.Losses;
+		}
+		else if (Result.WinnerIndex == 1)
+		{
+			++Right.Wins;
+			++Left.Losses;
+		}
+		else
+		{
+			++Left.Draws;
+			++Right.Draws;
+		}
+	}
+
+	bool ShouldRankBefore(FStanding@ Left, FStanding@ Right)
+	{
+		if (Left.GetPoints() != Right.GetPoints())
+		{
+			return Left.GetPoints() > Right.GetPoints();
+		}
+		if (Left.DamageDealt != Right.DamageDealt)
+		{
+			return Left.DamageDealt > Right.DamageDealt;
+		}
+		return Left.Name < Right.Name; // Keep tied rankings deterministic.
+	}
+
+	void PrintStandings(array<FStanding@>&inout Standings)
+	{
+		// Insertion sort suits this small table; move handles instead of copying statistics.
+		for (uint32 Index = 1; Index < Standings.length(); ++Index)
+		{
+			FStanding@ Current = Standings[Index];
+			uint32 InsertionIndex = Index;
+			while (InsertionIndex > 0 && ShouldRankBefore(Current, Standings[InsertionIndex - 1]))
+			{
+				@Standings[InsertionIndex] = Standings[InsertionIndex - 1];
+				--InsertionIndex;
+			}
+			@Standings[InsertionIndex] = Current;
+		}
+		println();
+		println("[排行榜：胜 3 分 / 平 1 分 / 负 0 分]");
+		println("{:<8} {:>4} {:>4} {:>4} {:>4} {:>6} {:>6}", "角色", "积分", "胜", "平", "负", "伤害", "治疗");
+		for (uint32 Index = 0; Index < Standings.length(); ++Index)
+		{
+			FStanding@ Row = Standings[Index];
+			println("{:<8} {:>4d} {:>4d} {:>4d} {:>4d} {:>6d} {:>6d}",
+					Row.Name, Row.GetPoints(), Row.Wins, Row.Draws, Row.Losses, Row.DamageDealt, Row.HealingDone);
+		}
+	}
+}

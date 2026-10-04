@@ -118,6 +118,13 @@ public final class VasLexer extends LexerBase {
             return;
         }
 
+        Integer dependencyEnd = includeEnds.get(tokenStart);
+        if (current != '#' && dependencyEnd != null) {
+            tokenEnd = dependencyEnd;
+            tokenType = VasTypes.PREPROCESSOR;
+            return;
+        }
+
         if (current == '#') {
             Integer includeEnd = includeEnds.get(tokenStart);
             if (includeEnd != null) {

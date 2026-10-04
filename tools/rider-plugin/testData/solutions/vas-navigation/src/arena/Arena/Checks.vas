@@ -1,0 +1,93 @@
+import Report;
+
+namespace Arena
+{
+	class FSelfTestChecks
+	{
+		int32 Count = 0;
+		int32 Failures = 0;
+
+		void Expect(bool bCondition, const string&in Description)
+		{
+			++Count;
+			if (!bCondition)
+			{
+				++Failures;
+				println("[FAIL] {}", Description);
+			}
+		}
+	}
+
+	bool AreSelfTestsPassing()
+	{
+		FSelfTestChecks Checks;
+		Checks.Expect(Clamp(-5, 0, 10) == 0, "clamp 下界");
+		Checks.Expect(Clamp(15, 0, 10) == 10, "clamp 上界");
+		Checks.Expect(Clamp(7, 0, 10) == 7, "clamp 区间内");
+		Checks.Expect(CreateCombatant(99) is null, "非法角色索引返回 null");
+		FCombatant@ Combatant = CreateCombatant(0);
+		Checks.Expect(Combatant.ApplyDamage(-10) == 0 && Combatant.Health == 90, "负伤害不回血");
+		Checks.Expect(Combatant.ApplyDamage(7) == 7 && Combatant.Health == 83, "实际伤害");
+		Checks.Expect(Combatant.RestoreHealth(1000) == 7 && Combatant.Health == 90, "治疗封顶");
+		Checks.Expect(Combatant.RestoreHealth(-10) == 0 && Combatant.Health == 90, "负治疗不扣血");
+		Checks.Expect(Combatant.ApplyDamage(1000) == 90 && !Combatant.IsAlive(), "致命伤害封底");
+		Checks.Expect(Combatant.RestoreHealth(18) == 0 && Combatant.Health == 0, "治疗不复活");
+
+		FDeterministicRandom FirstRandom(42);
+		FDeterministicRandom ReplayRandom(42);
+		FDeterministicRandom DifferentRandom(43);
+		bool bEqualSequence = true;
+		for (uint32 Index = 0; Index < 20; ++Index)
+		{
+			bEqualSequence = (FirstRandom.Next() == ReplayRandom.Next()) && bEqualSequence;
+		}
+		Checks.Expect(bEqualSequence, "相同种子生成相同序列");
+		FDeterministicRandom InitialRandom(42);
+		Checks.Expect(InitialRandom.Next() != DifferentRandom.Next(), "不同种子改变序列");
+		Checks.Expect(FirstRandom.NextBelow(0) == 0, "零范围随机数避免除零");
+
+		ICombatSkill@ Attack = FAttackSkill();
+		ICombatSkill@ Heal = FHealSkill();
+		FDeterministicRandom CriticalRandom(0);
+		FDeterministicRandom NormalRandom(1);
+		FCombatant@ Actor = CreateCombatant(0);
+		FCombatant@ Target = CreateCombatant(1);
+		Checks.Expect(Attack.Execute(Actor, Target, NormalRandom) == 12, "普通攻击扣除护甲");
+		@Target = CreateCombatant(1);
+		Checks.Expect(Attack.Execute(Actor, Target, CriticalRandom) == 30, "暴击宏与接口调用");
+		Actor.ApplyDamage(20);
+		Checks.Expect(Heal.Execute(Actor, Target, NormalRandom) == 18 && Actor.Health == 88, "治疗技能多态");
+		Checks.Expect(Attack.Execute(null, Target, NormalRandom) == 0, "空句柄保护");
+		Checks.Expect(Attack.Execute(Combatant, Target, NormalRandom) == 0, "倒下角色不能行动");
+
+		FBattleResult@ FirstResult = SimulateBattle(CreateCombatant(0), CreateCombatant(1), 42, false);
+		FBattleResult@ SecondResult = SimulateBattle(CreateCombatant(0), CreateCombatant(1), 42, false);
+		Checks.Expect(
+			FirstResult.WinnerIndex == SecondResult.WinnerIndex &&
+			FirstResult.LeftHealth == SecondResult.LeftHealth &&
+			FirstResult.RightHealth == SecondResult.RightHealth &&
+			FirstResult.RoundCount == SecondResult.RoundCount &&
+			FirstResult.LeftDamageDealt == SecondResult.LeftDamageDealt &&
+			FirstResult.RightDamageDealt == SecondResult.RightDamageDealt,
+			"整场战斗可重放");
+		Checks.Expect(
+			FirstResult.RoundCount > 0 && FirstResult.RoundCount <= VAS_ARENA_MAX_ROUNDS &&
+			FirstResult.LeftHealth >= 0 && FirstResult.RightHealth >= 0,
+			"回合上限和 HP 范围");
+
+		FStanding Left("左"), Right("右");
+		FBattleResult Result;
+		Result.WinnerIndex = 0;
+		Result.LeftDamageDealt = 17;
+		RecordResult(Left, Right, Result);
+		Checks.Expect(Left.GetPoints() == 3 && Left.Wins == 1 && Right.Losses == 1 && Left.DamageDealt == 17,
+					  "胜负积分和伤害归档");
+		Result.WinnerIndex = -1;
+		RecordResult(Left, Right, Result);
+		Checks.Expect(Left.GetPoints() == 4 && Right.GetPoints() == 1 && Left.Draws == 1 && Right.Draws == 1,
+					  "平局积分归档");
+		Checks.Expect(ShouldRankBefore(Left, Right), "排行榜积分优先");
+		println("SELF_TEST passed={} failed={}", Checks.Count - Checks.Failures, Checks.Failures);
+		return Checks.Failures == 0;
+	}
+}

@@ -1,0 +1,52 @@
+import Combatant;
+
+namespace Arena
+{
+	interface ICombatSkill
+	{
+		string GetLabel() const;
+		int32 Execute(FCombatant@ Actor, FCombatant@ Target, FDeterministicRandom@ Random);
+	}
+
+	// Invoke implementations through ICombatSkill@ to demonstrate dynamic dispatch.
+	class FAttackSkill : ICombatSkill
+	{
+		string GetLabel() const
+		{
+			return "攻击";
+		}
+
+		int32 Execute(FCombatant@ Actor, FCombatant@ Target, FDeterministicRandom@ Random)
+		{
+			if (Actor is null || Target is null || Random is null)
+			{
+				return 0;
+			}
+			if (!Actor.IsAlive() || !Target.IsAlive())
+			{
+				return 0;
+			}
+			int32 Amount = Actor.Attack;
+			if (Random.NextBelow(100) < VAS_ARENA_CRIT_PERCENT)
+			{
+				Amount = VAS_ARENA_CRITICAL_DAMAGE(Amount);
+			}
+			int32 Actual = Target.ApplyDamage(Clamp(Amount - Target.Armor, 0, Target.Health));
+			Actor.DamageDealt += Actual;
+			return Actual;
+		}
+	}
+
+	class FHealSkill : ICombatSkill
+	{
+		string GetLabel() const
+		{
+			return "治疗";
+		}
+
+		int32 Execute(FCombatant@ Actor, FCombatant@ Target, FDeterministicRandom@ Random)
+		{
+			return Actor is null ? 0 : Actor.RestoreHealth(18);
+		}
+	}
+}

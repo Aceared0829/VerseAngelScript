@@ -39,11 +39,11 @@ $env:JAVA_HOME = 'C:\Path\To\JDK-25'
 
 **Settings | Plugins | 齿轮菜单 | Install Plugin from Disk**
 
-选择本次 `build/distributions` 生成的 ZIP 后按提示重启 Rider。仓库 `plugins/rider/VerseAngelScript-Rider-Plugin-0.5.6.zip` 是较早的已检入包，不能代表当前源码；源码版本号未变也不表示包内容相同。也可使用目标提交对应的完整成功 CI 运行所附安装产物（保留 7 天）；核对其中 manifest 与 SHA-256，解压 Actions 外层包后选择内部插件 ZIP。
+选择本次 `build/distributions` 生成的 ZIP 后按提示重启 Rider。仓库 `plugins/rider/VerseAngelScript-Rider-Plugin-0.5.6.zip` 是较早的已检入包，不能代表当前 0.5.9 源码。也可使用目标提交对应的完整成功 CI 运行所附安装产物（保留 7 天）；核对其中 manifest 与 SHA-256，解压 Actions 外层包后选择内部插件 ZIP。
 
 ## 后台诊断与项目安全
 
-打开或编辑 `.vas` 文件触发的后台编译诊断，仅在 Rider 已信任项目且已配置 builder 路径时运行。项目配置中的可执行文件路径本身不代表信任；未信任或已释放的项目不会启动后台编译器。插件会在收集输入、处理排队请求和启动进程之前重新检查，不会自动更改信任状态或弹出信任提示。
+打开或编辑 `.vas` 文件触发的后台编译诊断，仅在 Rider 已信任项目且已配置应用级 Compiler executable 或既有项目 builder 路径时运行。项目配置中的可执行文件路径本身不代表信任；未信任或已释放的项目不会启动后台编译器。插件会在收集输入、处理排队请求和启动进程之前重新检查，不会自动更改信任状态或弹出信任提示。
 
 显式 **Build/Run** 动作和起步项目生成器保持原有行为。原生 Rider 信任回归测试使用隔离的测试信任存储与项目级记录启动器，检查未信任文件的打开/编辑、排队请求、恢复信任后的普通高亮及诊断范围；不会执行项目提供的测试二进制文件。
 
@@ -161,3 +161,10 @@ CI 保留 Gradle、既有 trust gate、新 project-build gate 各自失败状态
 编辑事件仍可执行，以及合并、上限、取消和队列退出竞态。新增原生宿主案例
 `keepsFilesystemValidationOffEdt` 使用实际构建和后台检查观察器验证对应适配链路；该案例
 仍需在真实 Rider Solution Host 中运行后才能计为宿主通过。
+
+
+当前源码 0.5.9 补齐 `import Foo.Bar;`/include 依赖导航、导出宏候选、命名空间/简单对象成员补全、类型/函数/宏语义颜色和 Go to Symbol。原有函数 `import ... from ...` 仍进入索引。条件编译尚无编译器绑定，导航展示已知候选，重命名仍须通过覆盖预检。安装本次 `build/distributions/verse-angelscript-rider-0.5.9.zip` 并重启后生效；详细验证与性能见 [语言服务说明](../../docs/ide-language-support.md)。
+
+当前源码还提供原生符号配对/成对退格/块缩进、函数调用补全、参数提示与即时结构错误标记。后台检查镜像未保存的 import/include 依赖，拒绝发布过期快照。配置与验证见 [语言服务说明](../../docs/ide-language-support.md)。
+
+0.5.9 修复宏/条件指令模块的原生 Find Usages：只读搜索与重命名覆盖预检分别处理，Code Vision 计数及调用导航同步恢复。`RunBatch` 跨模块调用由真实 Rider FindUsagesManager 的已注册 handler 验证。

@@ -31,6 +31,9 @@ public final class VasSymbolIndex extends ScalarIndexExtension<String> {
                     names.put(symbol.name(), null);
                 }
             }
+            for (VasMacroScanner.Macro macro : VasMacroScanner.scan(inputData.getContentAsText())) {
+                names.put(macro.name(), null);
+            }
             return names;
         };
     }
@@ -52,6 +55,6 @@ public final class VasSymbolIndex extends ScalarIndexExtension<String> {
 
     @Override
     public int getVersion() {
-        return 4;
+        return 6;
     }
 }

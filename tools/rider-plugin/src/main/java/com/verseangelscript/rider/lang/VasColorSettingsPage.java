@@ -16,6 +16,11 @@ public final class VasColorSettingsPage implements ColorSettingsPage {
     private static final AttributesDescriptor[] DESCRIPTORS = {
         new AttributesDescriptor("Keyword", VasSyntaxHighlighter.KEYWORD),
         new AttributesDescriptor("Identifier", VasSyntaxHighlighter.IDENTIFIER),
+        new AttributesDescriptor("Type", VasSemanticAnnotator.TYPE),
+        new AttributesDescriptor("Function", VasSemanticAnnotator.FUNCTION),
+        new AttributesDescriptor("Namespace", VasSemanticAnnotator.NAMESPACE),
+        new AttributesDescriptor("Variable declaration", VasSemanticAnnotator.VARIABLE),
+        new AttributesDescriptor("Macro", VasSemanticAnnotator.MACRO),
         new AttributesDescriptor("Number", VasSyntaxHighlighter.NUMBER),
         new AttributesDescriptor("String", VasSyntaxHighlighter.STRING),
         new AttributesDescriptor("Comment", VasSyntaxHighlighter.COMMENT),

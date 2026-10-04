@@ -62,7 +62,7 @@ final class VasCallNavigation {
             .orElse(false)) {
             return source;
         }
-        List<PsiElement> candidates = VasSymbolResolver.findDeclarations(source).stream()
+        List<PsiElement> candidates = VasSymbolResolver.findNavigationDeclarations(source).stream()
             .filter(candidate -> VasSymbolResolver.findSymbol(candidate)
                 .map(symbol -> symbol.kind() == VasSymbolKind.FUNCTION)
                 .orElse(false))

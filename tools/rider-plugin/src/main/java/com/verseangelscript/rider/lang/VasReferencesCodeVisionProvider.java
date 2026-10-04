@@ -4,9 +4,10 @@ import com.intellij.codeInsight.hints.codeVision.ReferencesCodeVisionProvider;
 import com.intellij.codeInsight.codeVision.CodeVisionRelativeOrdering;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiFile;
-import com.intellij.psi.search.searches.ReferencesSearch;
+import com.intellij.psi.search.PsiSearchHelper;
 import com.verseangelscript.rider.VasLanguage;
 import com.verseangelscript.rider.index.VasSymbolResolver;
+import com.verseangelscript.rider.index.VasUsageSearch;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.List;
@@ -24,8 +25,9 @@ public final class VasReferencesCodeVisionProvider extends ReferencesCodeVisionP
 
     @Override
     public String getHint(@NotNull PsiElement element, @NotNull PsiFile file) {
-        int count = ReferencesSearch.search(element).findAll().size();
-        return count + (count == 1 ? " usage" : " usages");
+        int[] count = {0};
+        VasUsageSearch.process(element, PsiSearchHelper.getInstance(element.getProject()).getUseScope(element), usage -> { count[0]++; return true; });
+        return count[0] + (count[0] == 1 ? " usage" : " usages");
     }
 
     @Override

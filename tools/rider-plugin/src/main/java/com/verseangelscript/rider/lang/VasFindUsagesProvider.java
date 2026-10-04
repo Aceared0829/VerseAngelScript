@@ -24,7 +24,7 @@ public final class VasFindUsagesProvider implements FindUsagesProvider {
     @Override
     public boolean canFindUsagesFor(@NotNull PsiElement element) {
         return element.getLanguage().isKindOf(VasLanguage.INSTANCE)
-            && VasSymbolResolver.findSymbol(element).isPresent();
+            && VasFindUsagesHandlerFactory.target(element) != null;
     }
 
     @Override

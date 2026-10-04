@@ -17,9 +17,12 @@ import com.intellij.openapi.util.Disposer;
 import com.intellij.openapi.util.Key;
 import com.intellij.openapi.util.TextRange;
 import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.openapi.fileEditor.FileDocumentManager;
 import com.intellij.psi.PsiDocumentManager;
 import com.intellij.psi.PsiFile;
 import com.verseangelscript.rider.build.VasSettingsState;
+import com.verseangelscript.rider.build.VasToolchainSettings;
+import com.verseangelscript.rider.index.VasIncludeScanner;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.TestOnly;
@@ -28,14 +31,13 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.Map;
+import java.util.HashMap;
 
 public final class VasExternalAnnotator extends ExternalAnnotator<
     VasExternalAnnotator.Request,
@@ -43,9 +45,6 @@ public final class VasExternalAnnotator extends ExternalAnnotator<
 > {
     private static final int TIMEOUT_MS = 20_000;
     private static final Key<ProcessLauncher> TEST_LAUNCHER = Key.create("vas.diagnostics.testLauncher");
-    private static final Pattern INCLUDE = Pattern.compile(
-        "(?m)^\\s*#include\\s+\"([^\"]+)\""
-    );
 
     @Override
     public @Nullable Request collectInformation(@NotNull PsiFile file) {
@@ -57,7 +56,20 @@ public final class VasExternalAnnotator extends ExternalAnnotator<
         if (virtualFile == null || project.getBasePath() == null) {
             return null;
         }
-        return new Request(project, virtualFile, file.getText());
+        Map<String, String> unsaved = new HashMap<>();
+        var documents = FileDocumentManager.getInstance();
+        long bytes = 0;
+        for (Document document : documents.getUnsavedDocuments()) {
+            VirtualFile open = documents.getFile(document);
+            if (open != null && open.getExtension() != null && open.getExtension().equalsIgnoreCase("vas")
+                && open.getPath().startsWith(project.getBasePath() + "/") && document.getTextLength() <= 4 * 1024 * 1024) {
+                bytes += document.getTextLength();
+                if (unsaved.size() >= 256 || bytes > 16 * 1024 * 1024) break;
+                unsaved.put(open.getPath(), document.getText());
+            }
+        }
+        unsaved.put(virtualFile.getPath(), file.getText());
+        return new Request(project, virtualFile, file.getText(), Map.copyOf(unsaved));
     }
 
     @Override
@@ -92,7 +104,7 @@ public final class VasExternalAnnotator extends ExternalAnnotator<
                 request.sourceText(),
                 toolchain.root(),
                 temporaryRoot,
-                new HashSet<>()
+                new HashSet<>(), request.openSources(), new long[] {0}
             );
 
             Path output = temporaryRoot.resolve("out/diagnostics.vasbc");
@@ -105,6 +117,10 @@ public final class VasExternalAnnotator extends ExternalAnnotator<
                 )
                 .withWorkDirectory(temporaryRoot.toFile())
                 .withCharset(StandardCharsets.UTF_8);
+            List<String> includeRoots = new ArrayList<>();
+            for (Path parent = temporarySource.getParent(); parent != null && parent.startsWith(temporaryRoot); parent = parent.getParent())
+                includeRoots.add(parent.toString());
+            commandLine.withEnvironment("VAS_INCLUDE_PATH", String.join(java.io.File.pathSeparator, includeRoots));
             ProgressManager.checkCanceled();
             // Recheck after preparing the snapshot, immediately before starting a process.
             if (!canRunDiagnostics(request.project())) {
@@ -135,7 +151,7 @@ public final class VasExternalAnnotator extends ExternalAnnotator<
                     currentFileDiagnostics.add(diagnostic);
                 }
             }
-            return new Result(List.copyOf(currentFileDiagnostics));
+            return new Result(List.copyOf(currentFileDiagnostics), request.sourceText(), request.openSources());
         } catch (ExecutionException | IOException ignored) {
             return null;
         } finally {
@@ -155,6 +171,12 @@ public final class VasExternalAnnotator extends ExternalAnnotator<
         Document document = PsiDocumentManager.getInstance(file.getProject()).getDocument(file);
         if (document == null) {
             return;
+        }
+        if (result.sourceText() != null && !document.getText().equals(result.sourceText())) return;
+        for (var snapshot : result.openSources().entrySet()) {
+            VirtualFile open = com.intellij.openapi.vfs.LocalFileSystem.getInstance().findFileByPath(snapshot.getKey());
+            Document cached = open == null ? null : FileDocumentManager.getInstance().getCachedDocument(open);
+            if (cached != null && !cached.getText().equals(snapshot.getValue())) return;
         }
 
         for (VasCompilerDiagnostic diagnostic : result.diagnostics()) {
@@ -217,12 +239,14 @@ public final class VasExternalAnnotator extends ExternalAnnotator<
         // A configured path is necessary but not proof of consent: vas.xml may come
         // from the project itself. The caller must also check actual project trust.
         // The explicit Build action is a separate, user-initiated operation.
-        if (settings.builderPath == null || settings.builderPath.isBlank()) {
+        String configuredBuilder = settings.builderPath;
+        if (configuredBuilder == null || configuredBuilder.isBlank()) configuredBuilder = VasToolchainSettings.getInstance().compilerPath;
+        if (configuredBuilder == null || configuredBuilder.isBlank()) {
             return null;
         }
 
         Path root = projectRoot;
-        Path builder = resolveConfiguredPath(root, settings.builderPath, "");
+        Path builder = resolveConfiguredPath(root, configuredBuilder, "");
         Path config = resolveConfiguredPath(root, settings.configPath, ".vas/vasbuild.config.txt");
         if (settings.configPath == null || settings.configPath.isBlank()) {
             if (!Files.isRegularFile(config)) {
@@ -246,32 +270,50 @@ public final class VasExternalAnnotator extends ExternalAnnotator<
         String sourceText,
         Path actualRoot,
         Path temporaryRoot,
-        Set<Path> visited
+        Set<Path> visited, Map<String, String> openSources, long[] bytes
     ) throws IOException {
         Path normalizedSource = actualSource.toAbsolutePath().normalize();
         if (!visited.add(normalizedSource)) {
             return;
         }
-
-        Matcher matcher = INCLUDE.matcher(sourceText);
-        while (matcher.find()) {
-            Path included = normalizedSource.getParent().resolve(matcher.group(1)).normalize();
+        bytes[0] += sourceText.length();
+        if (visited.size() > 256 || bytes[0] > 16 * 1024 * 1024) throw new IOException("Diagnostic snapshot limit exceeded");
+        for (var dependency : VasIncludeScanner.scan(sourceText).includes()) {
+            Path included = normalizedSource.getParent().resolve(dependency.path()).normalize();
+            if (!Files.isRegularFile(included) || dependency.kind() == VasIncludeScanner.Kind.SYSTEM) {
+                Set<Path> matches = new java.util.LinkedHashSet<>();
+                for (Path parent = normalizedSource.getParent(); parent != null && parent.startsWith(actualRoot); parent = parent.getParent()) {
+                    Path candidate = parent.resolve(dependency.path()).normalize();
+                    if (candidate.startsWith(actualRoot) && Files.isRegularFile(candidate)) matches.add(candidate);
+                }
+                if (matches.size() != 1) continue;
+                included = matches.iterator().next();
+            }
             if (!included.startsWith(actualRoot) || !Files.isRegularFile(included)) {
                 continue;
             }
-            Path target = temporarySource.getParent().resolve(matcher.group(1)).normalize();
+            Path target = temporaryRoot.resolve(actualRoot.relativize(included)).normalize();
             if (!target.startsWith(temporaryRoot)) {
                 continue;
             }
             Files.createDirectories(target.getParent());
-            Files.copy(included, target, StandardCopyOption.REPLACE_EXISTING);
+            String text = openSources.get(included.toString().replace('\\', '/'));
+            if (text == null) text = openSources.get(included.toString());
+            if (text == null) for (var snapshot : openSources.entrySet()) {
+                if (snapshot.getKey().replace('\\', '/').equalsIgnoreCase(included.toString().replace('\\', '/'))) { text = snapshot.getValue(); break; }
+            }
+            if (text == null) {
+                if (Files.size(included) > 4 * 1024 * 1024) throw new IOException("Diagnostic source limit exceeded");
+                text = Files.readString(included, StandardCharsets.UTF_8);
+            }
+            Files.writeString(target, text, StandardCharsets.UTF_8);
             copyIncludes(
                 included,
                 target,
-                Files.readString(included, StandardCharsets.UTF_8),
+                text,
                 actualRoot,
                 temporaryRoot,
-                visited
+                visited, openSources, bytes
             );
         }
     }
@@ -296,11 +338,14 @@ public final class VasExternalAnnotator extends ExternalAnnotator<
     public record Request(
         @NotNull Project project,
         @NotNull VirtualFile file,
-        @NotNull String sourceText
+        @NotNull String sourceText,
+        @NotNull Map<String, String> openSources
     ) {
+        public Request(Project project, VirtualFile file, String sourceText) { this(project, file, sourceText, Map.of()); }
     }
 
-    public record Result(@NotNull List<VasCompilerDiagnostic> diagnostics) {
+    public record Result(@NotNull List<VasCompilerDiagnostic> diagnostics, @Nullable String sourceText, @NotNull Map<String, String> openSources) {
+        public Result(List<VasCompilerDiagnostic> diagnostics) { this(diagnostics, null, Map.of()); }
     }
 
     private record Toolchain(@NotNull Path root, @NotNull Path builder, @NotNull Path config) {

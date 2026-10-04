@@ -38,6 +38,23 @@ public final class VasLexerTest {
     }
 
     @Test
+    public void moduleImportsAreOpaqueButNativeFunctionImportsRemainTokens() {
+        String source = "import pkg.tool;\n#include <api.vas>\nimport int host(int) from \"other\";\nint value = 42;";
+        VasLexer lexer = new VasLexer();
+        lexer.start(source);
+        List<Token> tokens = new ArrayList<>();
+        while (lexer.getTokenType() != null) {
+            tokens.add(new Token(lexer.getTokenType(), source.substring(lexer.getTokenStart(), lexer.getTokenEnd())));
+            lexer.advance();
+        }
+        assertToken(tokens, VasTypes.PREPROCESSOR, "import pkg.tool;");
+        assertToken(tokens, VasTypes.PREPROCESSOR, "#include <api.vas>");
+        assertToken(tokens, VasTypes.KEYWORD, "import");
+        assertToken(tokens, VasTypes.IDENTIFIER, "host");
+        assertToken(tokens, VasTypes.IDENTIFIER, "value");
+    }
+
+    @Test
     public void keepsEscapedQuotesInsideStrings() {
         String source = "string value = \"VAS \\\"script\\\"\";";
         VasLexer lexer = new VasLexer();

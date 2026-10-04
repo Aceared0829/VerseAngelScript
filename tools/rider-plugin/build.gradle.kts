@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "com.verseangelscript"
-version = "0.5.6"
+version = "0.5.9"
 
 repositories {
     mavenCentral()
@@ -76,8 +76,12 @@ intellijPlatform {
         """.trimIndent()
 
         changeNotes = """
-            Adds a Rider Solution Host integration test for nested include and declaration
-            navigation, while retaining the strict .vas entry/include validation.
+            <p>0.5.9: Native Find Usages, Code Vision and caller navigation now use
+            a read-only source search through import/include modules with macros.
+            Rename keeps the complete-coverage preflight and ambiguous bindings remain filtered.</p>
+            Adds native typing pairs, paired backspace, block Enter indentation,
+            function insertion and parameter help, instant structural errors and
+            compiler diagnostics from unsaved module snapshots.
         """.trimIndent()
     }
 }

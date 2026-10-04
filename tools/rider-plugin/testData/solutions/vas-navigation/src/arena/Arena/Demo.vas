@@ -1,0 +1,70 @@
+import Report;
+import Checks;
+
+namespace Arena
+{
+	int32 RunDemo(bool bVerbose)
+	{
+		println("=== VAS 模块化竞技场 v{} ===", VAS_ARENA_VERSION);
+		println("配置：最多 {} 回合，暴击率 {}%，日志宏 = {}", VAS_ARENA_MAX_ROUNDS, VAS_ARENA_CRIT_PERCENT, VAS_ARENA_VERBOSE);
+		// Configuration macros are exported transitively; print accepts primitives and concatenation.
+		print("预览：暴击伤害 = ");
+		print(VAS_ARENA_CRITICAL_DAMAGE(18));
+		println(" | " + "固定种子保证战斗可重放");
+		if (!AreSelfTestsPassing())
+		{
+			return 1;
+		}
+
+		array<FStanding@> Standings;
+		Standings.reserve(3);
+		for (uint32 Index = 0; Index < 3; ++Index)
+		{
+			Standings.insertLast(FStanding(CreateCombatant(Index).Name));
+		}
+		uint32 MatchCount = 0;
+		for (uint32 Left = 0; Left < 3; ++Left)
+		{
+			for (uint32 Right = Left + 1; Right < 3; ++Right)
+			{
+				++MatchCount;
+				println();
+				println("[比赛 {}] {} vs {}", MatchCount, Standings[Left].Name, Standings[Right].Name);
+				FBattleResult@ Result = SimulateBattle(CreateCombatant(Left), CreateCombatant(Right), 42 + MatchCount, bVerbose);
+				RecordResult(Standings[Left], Standings[Right], Result);
+				println("战报：{}，{} 回合，剩余 HP = {} / {}",
+						GetWinnerLabel(Result), Result.RoundCount, Result.LeftHealth, Result.RightHealth);
+			}
+		}
+		PrintStandings(Standings);
+		println("TOURNAMENT matches={} leader={} points={}", MatchCount, Standings[0].Name, Standings[0].GetPoints());
+		return 0;
+	}
+
+	void RunBatch(uint32 Count)
+	{
+		// Suppress round logs; create fresh combatants and change the seed for every battle.
+		uint32 Wins = 0;
+		uint32 Losses = 0;
+		uint32 Draws = 0;
+		uint64 Checksum = 0;
+		for (uint32 Index = 0; Index < Count; ++Index)
+		{
+			FBattleResult@ Result = SimulateBattle(CreateCombatant(0), CreateCombatant(1), 42 + Index, false);
+			if (Result.WinnerIndex == 0)
+			{
+				++Wins;
+			}
+			else if (Result.WinnerIndex == 1)
+			{
+				++Losses;
+			}
+			else
+			{
+				++Draws;
+			}
+			Checksum += uint64(Result.LeftHealth * 1000 + Result.RightHealth + Result.RoundCount);
+		}
+		println("BATCH count={} wins={} losses={} draws={} checksum={}", Count, Wins, Losses, Draws, Checksum);
+	}
+}

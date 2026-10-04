@@ -43,6 +43,12 @@
         <externalAnnotator
             language="VAS"
             implementationClass="com.verseangelscript.rider.diagnostics.VasExternalAnnotator"/>
+        <annotator language="VAS" implementationClass="com.verseangelscript.rider.lang.VasSemanticAnnotator"/>
+        <annotator language="VAS" implementationClass="com.verseangelscript.rider.lang.VasSyntaxAnnotator"/>
+        <typedHandler implementation="com.verseangelscript.rider.lang.VasTypedHandler"/>
+        <backspaceHandlerDelegate implementation="com.verseangelscript.rider.lang.VasBackspaceHandler"/>
+        <enterHandlerDelegate implementation="com.verseangelscript.rider.lang.VasEnterHandler"/>
+        <lang.parameterInfo language="VAS" implementationClass="com.verseangelscript.rider.lang.VasParameterInfoHandler"/>
         <consoleFilterProvider
             implementation="com.verseangelscript.rider.diagnostics.VasCompilerConsoleFilterProvider"/>
         <psi.referenceContributor
@@ -50,12 +56,14 @@
             implementation="com.verseangelscript.rider.lang.VasReferenceContributor"/>
         <gotoDeclarationHandler
             implementation="com.verseangelscript.rider.lang.VasGotoDeclarationHandler"/>
+        <gotoSymbolContributor implementation="com.verseangelscript.rider.lang.VasGotoSymbolContributor"/>
         <lang.directNavigationProvider
             language="VAS"
             implementationClass="com.verseangelscript.rider.lang.VasDirectNavigationProvider"/>
         <lang.findUsagesProvider
             language="VAS"
             implementationClass="com.verseangelscript.rider.lang.VasFindUsagesProvider"/>
+        <findUsagesHandlerFactory implementation="com.verseangelscript.rider.lang.VasFindUsagesHandlerFactory"/>
         <renamePsiElementProcessor
             implementation="com.verseangelscript.rider.lang.VasRenamePsiElementProcessor"/>
         <definitionsSearch
