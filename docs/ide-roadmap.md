@@ -47,7 +47,15 @@ Rider 的平面 token PSI 与符号扫描器目前依赖启发式解析，补全
 - 每个变更检查具体提交的 CI、代码审查和回归结果；区分通过、失败、未运行
 - Linux C++ 测试不能替代 Windows MSVC v145、Rider Solution Host 或 VS2026 扩展宿主测试
 - VS Code 的基础模块需真实 Extension Host 的可信/不可信工作区、build/run 与 Problems 测试
-- Visual Studio 采用 VSIX / `ILanguageClient` 内容类型注册路线，覆盖 Open Folder 与 `.sln` 两种方式；VS2026 兼容性必须用实际宿主确认
+- Visual Studio 使用 VSIX 原生编辑与显式构建入口，覆盖 Open Folder 与 `.sln`；共享语言服务器交付前不注册 `ILanguageClient`，VS2026 兼容性必须用实际宿主确认
 - Rider 继续使用固定 Build 262 API，迁移共享服务时保留已验证的原生交互，避免双重诊断与重命名
 
 参考：[VS Code LSP](https://code.visualstudio.com/api/language-extensions/language-server-extension-guide)、[Workspace Trust](https://code.visualstudio.com/api/extension-guides/workspace-trust)、[VS LSP 扩展](https://learn.microsoft.com/en-us/visualstudio/extensibility/adding-an-lsp-extension?view=visualstudio)、[VS2026 扩展兼容](https://learn.microsoft.com/en-us/visualstudio/extensibility/migration/extension-compatibility?view=visualstudio)、[JetBrains LSP](https://plugins.jetbrains.com/docs/intellij/language-server-protocol.html)
+
+## Visual Studio 2026 显式工程构建模块
+
+`tools/visualstudio-extension` 在既有七项原生编辑验收上增加 Build VAS Project / Cancel VAS Build、独立用户编译器设置、`.sln` / Open Folder 根目录与原生两阶段选择界面。先由用户选择 Read Project Units 调用原生描述器，再明确选择编译单元并构建；活动文件不决定入口，打开/编辑/索引/设置不自动执行工具。
+
+共享原生 JSONL 诊断进入 Error List；只有已验证的原生 loaded-source 内容证明、当前保存文件身份和编辑器文本一致时才将 UTF-8 字节列转换为 UTF-16 导航位置。包含依赖部分遍历、缺失路径规范 watch alias、脏物理别名、取消/关闭/更换编译器与旧结果抑制均有专门验收。实际 VS18 宿主测试与证据 gate 必须在目标提交 CI 通过；本地编译不替代 Windows 原生运行。
+
+公开 SDK 中未验证原生 workspace trust 查询，显式操作授权不等同于 VS 原生信任状态；该同步与真实 MOTW 提示行为须如实单列。当前范围不含 Run Project、LSP、调试器、未保存缓冲区完整语义或 C++ 功能对齐。详见 [模块验收](requirements/vs2026-project-build.md)。

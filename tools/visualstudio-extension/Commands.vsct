@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CommandTable xmlns="http://schemas.microsoft.com/VisualStudio/2005-10-18/CommandTable">
+  <Extern href="stdidcmd.h" /><Extern href="vsshlids.h" />
+  <Commands package="guidVasPackage">
+    <Groups><Group guid="guidVasCommands" id="VasBuildGroup" priority="0x0600"><Parent guid="guidSHLMainMenu" id="IDM_VS_MENU_TOOLS" /></Group></Groups>
+    <Buttons>
+      <Button guid="guidVasCommands" id="BuildVasProject" priority="0x0100" type="Button"><Parent guid="guidVasCommands" id="VasBuildGroup" /><Strings><ButtonText>Build VAS Project...</ButtonText><CommandName>VerseAngelScript.BuildProject</CommandName></Strings></Button>
+      <Button guid="guidVasCommands" id="CancelVasBuild" priority="0x0110" type="Button"><Parent guid="guidVasCommands" id="VasBuildGroup" /><Strings><ButtonText>Cancel VAS Build</ButtonText><CommandName>VerseAngelScript.CancelBuild</CommandName></Strings></Button>
+    </Buttons>
+  </Commands>
+  <Symbols>
+    <GuidSymbol name="guidVasPackage" value="{d3a6e112-5f40-4df1-8bb7-0b79f0e74226}" />
+    <GuidSymbol name="guidVasCommands" value="{540e5ef6-e458-48d9-941d-990c7cb7da39}"><IDSymbol name="VasBuildGroup" value="0x1020" /><IDSymbol name="BuildVasProject" value="0x0100" /><IDSymbol name="CancelVasBuild" value="0x0101" /></GuidSymbol>
+  </Symbols>
+</CommandTable>

@@ -1,4 +1,4 @@
-// Content-only registration. The grammar itself owns only the .vas extension.
+// Canonical editor registration. Executable package registration is generated separately. The grammar itself owns only the .vas extension.
 [$RootKey$\TextMate\Repositories]
 "VerseAngelScript"="$PackageFolder$\Grammars"
 
