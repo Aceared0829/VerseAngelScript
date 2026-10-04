@@ -263,3 +263,14 @@ test('snippets are well-formed and use standalone VAS syntax', () => {
   assert.ok(snippets['Include VAS file'].body[0].endsWith('.vas"'));
   assert.equal(snippets['VAS entry point'].body[0], 'void main()');
 });
+
+
+test('module imports, exported macro names and format fields have separate scopes', () => {
+  const lines = ['import Arena.Demo;', '#define VAS_ARENA_MAX_ROUNDS 12', 'println("ABC {} {1:04d} {{literal}}", Value, Other);'];
+  const tokens = tokenize(lines.join('\n'));
+  assertScope(tokens[0], lines[0], 'Arena.Demo', 'entity.name.namespace.vas');
+  assertScope(tokens[1], lines[1], 'VAS_ARENA_MAX_ROUNDS', 'entity.name.function.preprocessor.vas');
+  assertScope(tokens[2], lines[2], '{}', 'constant.other.placeholder.vas');
+  assertScope(tokens[2], lines[2], '{1:04d}', 'constant.other.placeholder.vas');
+  assertScope(tokens[2], lines[2], '{{', 'constant.character.escape.format.vas');
+});

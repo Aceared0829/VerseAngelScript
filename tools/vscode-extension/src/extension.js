@@ -156,6 +156,7 @@ async function buildProject(builds) {
 }
 
 function activate(context) {
+  if (vscode.languages.registerDefinitionProvider) require('./languageFeatures').registerLanguageFeatures(vscode, context);
   let collectionId = 0;
   const builds = {
     diagnostics: new BuildDiagnostics(() => vscode.languages.createDiagnosticCollection(`vas-build-${++collectionId}`)),

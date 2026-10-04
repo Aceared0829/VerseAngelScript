@@ -5,9 +5,11 @@
   "fileTypes": ["vas"],
   "patterns": [
     { "include": "#comments" },
+    { "include": "#macro-definition" },
     { "include": "#preprocessor" },
     { "include": "#strings" },
     { "include": "#numbers" },
+    { "include": "#module-import" },
     { "include": "#declarations" },
     { "include": "#keywords" },
     { "include": "#functions" },
@@ -49,6 +51,65 @@
         { "include": "#operators" }
       ]
     },
+    "macro-definition": {
+      "name": "meta.preprocessor.vas",
+      "begin": "^\\s*(#)(define)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.definition.directive.vas"
+        },
+        "2": {
+          "name": "keyword.control.directive.vas"
+        },
+        "3": {
+          "name": "entity.name.function.preprocessor.vas"
+        }
+      },
+      "end": "$",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#strings"
+        },
+        {
+          "include": "#numbers"
+        },
+        {
+          "include": "#keywords"
+        },
+        {
+          "include": "#operators"
+        }
+      ]
+    },
+    "module-import": {
+      "match": "\\b(import)\\s+([[:alpha:]_][[:alnum:]_]*(?:\\s*\\.\\s*[[:alpha:]_][[:alnum:]_]*)*)\\s*(;)",
+      "captures": {
+        "1": {
+          "name": "keyword.control.vas"
+        },
+        "2": {
+          "name": "entity.name.namespace.vas"
+        },
+        "3": {
+          "name": "punctuation.terminator.vas"
+        }
+      }
+    },
+    "format-fields": {
+      "patterns": [
+        {
+          "name": "constant.character.escape.format.vas",
+          "match": "\\{\\{|\\}\\}"
+        },
+        {
+          "name": "constant.other.placeholder.vas",
+          "match": "\\{(?:[0-9]+)?(?::[^{}]*(?:\\{[0-9]*\\}[^{}]*)*)?\\}"
+        }
+      ]
+    },
     "strings": {
       "patterns": [
         {
@@ -65,7 +126,7 @@
           "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.vas" } },
           "end": "\"|$",
           "endCaptures": { "0": { "name": "punctuation.definition.string.end.vas" } },
-          "patterns": [ { "include": "#escapes" } ]
+          "patterns": [ { "include": "#format-fields" }, { "include": "#escapes" } ]
         },
         {
           "name": "string.quoted.single.vas",
@@ -73,7 +134,7 @@
           "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.vas" } },
           "end": "'|$",
           "endCaptures": { "0": { "name": "punctuation.definition.string.end.vas" } },
-          "patterns": [ { "include": "#escapes" } ]
+          "patterns": [ { "include": "#format-fields" }, { "include": "#escapes" } ]
         }
       ]
     },

@@ -1,8 +1,8 @@
 # Verse AngelScript for VS Code
 
-VAS 的 VS Code 基础扩展：`.vas` 语法高亮、注释/括号/缩进、代码片段，以及由真实 `vasbuild` / `vasrun` 驱动的构建、运行和 Problems 错误列表。
+VAS 的 VS Code 扩展：`.vas` 词法/语义高亮、import/include F12、声明/成员/宏补全、文档符号与悬浮、注释/括号/缩进、代码片段，以及由真实 `vasbuild` / `vasrun` 驱动的构建、运行和 Problems 错误列表。
 
-当前已交付编辑/当前文件任务基础，并增加独立的编译器工程构建客户端。当前没有语义补全、跨文件重命名、格式化器、后台诊断或 IDE 断点调试；完整验收范围见 [IDE 路线图](https://github.com/Aceared0829/VerseAngelScript/blob/master/docs/ide-roadmap.md)。
+当前已交付编辑/当前文件任务基础，并增加独立的编译器工程构建客户端。编辑服务使用源码声明与依赖闭包，支持未保存模块修改失效；宏条件、复杂表达式和继承推导仍需编译器确定。当前没有跨文件重命名、格式化器或 IDE 断点调试；完整验收范围见 [IDE 路线图](https://github.com/Aceared0829/VerseAngelScript/blob/master/docs/ide-roadmap.md)。
 
 三端能力矩阵、可直接使用的工程与统一入门步骤见 [安装与使用指南](https://github.com/Aceared0829/VerseAngelScript/blob/master/docs/ide-setup.md)。
 
@@ -17,7 +17,7 @@ npm test
 npm run package
 ```
 
-在 VS Code 执行 **Extensions: Install from VSIX...**，选择生成的 `verseangelscript-vscode-0.1.0.vsix`。这里仅生成本地安装包，不发布到 Marketplace。
+在 VS Code 执行 **Extensions: Install from VSIX...**，选择生成的 `verseangelscript-vscode-0.3.0.vsix`。这里仅生成本地安装包，不发布到 Marketplace。
 
 从仓库根目录构建本机工具：
 
@@ -62,10 +62,10 @@ Windows 使用本机 `.exe`，如 `C:\\VAS\\vasbuild.exe`。不接受 PATH 查�
 - Build 使用原生 VS Code Task 和 CustomExecution/Pseudoterminal；扩展通过独立 stdout/stderr 管道启动 `vasbuild`，不经过 shell 或 Windows ConPTY。真实错误与警告直接进入原生 Problems，Unicode 路径不会经过终端屏幕文本重建；完整输出仍流式显示在任务终端
 - Build 将编译器的 UTF-8 字节列映射为 VS Code UTF-16 列，支持中文、emoji、制表符和 include 文件。不能读取源文件时退回到行定位
 - Build 按入口保存独立诊断集合；其他入口、工作区的构建或 Run 不会清除它。相同入口重建会替换旧诊断，较旧的并发构建不能覆盖新结果
-- 在 VS Code 编辑任何磁盘文件时，会保守地清除所有 Build 诊断并放弃旧位置结果；项目构建还监视工作区 VAS/manifest 与已观察到的配置/include 文件变更并失效项目结果。保存后需再次显式 Build；不会因打开、编辑或任务枚举启动编译器
+- 在 VS Code 编辑任何磁盘文件时，会保守地清除所有 Build 诊断并放弃旧位置结果；项目构建还监视工作区 VAS/manifest 与已观察到的配置/include 文件变更并失效项目结果。保存后需再次显式 Build；项目任务不会因打开、编辑或任务枚举自动启动；可配置的当前文件后台检查使用独立诊断集合
 - Run 保留 ProcessExecution，支持交互式程序和终端输入。其终端问题匹配器只定位到行、共用 Run 诊断集合；Windows ConPTY（尤其 VS Code 1.96）可能损坏终端重建的长 Unicode 路径。需要精确 Problems 时请执行 Build
 - 使用 VS Code 的 **Tasks: Terminate Task** 停止运行；程序可通过终端读取输入
-- Restricted Mode 保留静态编辑功能，但禁用构建和运行；仅打开/编辑文件不会启动工具
+- Restricted Mode 保留静态编辑与结构诊断，但禁用构建、运行及后台编译。已信任工作区配置 User/Remote 编译器后，可由打开/编辑文件触发后台检查
 
 仍可用原生当前文件任务固定入口（不读取工程 manifest），即使正在编辑辅助文件也能构建整个模块：
 
@@ -146,3 +146,7 @@ npm run test:integration
 ```
 
 Linux 无桌面环境时使用 `xvfb-run -a npm run test:integration`。默认验证最低支持版本 1.96.4；设置 `VSCODE_TEST_VERSION=stable` 验证当前稳定版。Windows、macOS 和 Linux 的真实客户端行为由 CI 分别测试，不用路径单元测试代替宿主验证。
+
+## 输入与后台检查（0.3.0）
+
+函数补全插入调用括号，原生 Signature Help 支持 `(` / `,` 触发；即时结构诊断检查未闭合符号。已信任工作区配置 `vas.compilerPath` 与 `vas.configFile` 后，`vas.liveDiagnostics`（默认 true）以 450 ms 防抖检查未保存模块快照；编辑后取消旧检查。入口上下文及范围见 [语言服务说明](https://github.com/Aceared0829/VerseAngelScript/blob/master/docs/ide-language-support.md)。
