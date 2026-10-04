@@ -22,7 +22,10 @@ async function audit() {
     for (const [name, event] of [['onDidCreate', 'create'], ['onDidChange', 'change'], ['onDidDelete', 'delete']]) {
       watcher[name] = listener => { watcher.on(event, listener); return { dispose: () => watcher.off(event, listener) }; };
     }
-    watcher.dispose = () => { watcher.disposed = true; };
+    watcher.dispose = function(...args) {
+      this.disposed = true; this.disposeContext = this; this.disposeArguments = args;
+      return 'original-dispose';
+    };
     watchers.push(watcher); return watcher;
   } } };
   class Observations { register() {} changed() {} invalidate() {} }
@@ -37,7 +40,7 @@ async function audit() {
     }
   };
   const source = await fs.readFile(path.join(__dirname, 'integration.js'), 'utf8');
-  vm.runInNewContext(source + '\nmodule.exports.audit = { processCalls, readyExtensionDirectory, postPublicationNotification, actualWatchListeners };',
+  vm.runInNewContext(source + '\nmodule.exports.audit = { processCalls, readyExtensionDirectory, readyRerunWatcher, postPublicationNotification, actualWatchListeners };',
     context, { filename: 'integration.js' });
   return { compiler, childProcess, children, vscode, watchers, ...context.module.exports.audit, calls: context.module.exports.audit.processCalls };
 }
@@ -125,4 +128,55 @@ test('post-publication wait rejects sentinel, old, missing, wrong-kind and diffe
     [{ order: 21, kind: 'change', watcherId: 7, path: path.resolve('.readiness-sentinel') }]]) assert.equal(select(events), undefined);
   const event = { order: 21, kind: 'change', watcherId: 7, path: include };
   assert.equal(select([event]), event);
+});
+
+test('rerun cannot proceed before the selected production watcher delivers its independent readiness receipt', async () => {
+  const state = await audit(), root = await fs.mkdtemp(path.join(os.tmpdir(), 'vas-rerun-watch-'));
+  const watcher = state.vscode.workspace.createFileSystemWatcher('**/*');
+  let release, reachedProbe, continued = 0;
+  const probeStarted = new Promise(resolve => { reachedProbe = resolve; });
+  const readyPromise = state.readyRerunWatcher(root, { writeProbe: file => new Promise(resolve => {
+    reachedProbe();
+    release = () => { watcher.emit('create', { scheme: 'file', fsPath: file }); resolve(); };
+  }) }).then(ready => { continued++; return ready; });
+  try {
+    await probeStarted;
+    assert.equal(continued, 0, 'a completed task or a pending watcher request is not readiness');
+    watcher.emit('change', { scheme: 'file', fsPath: path.join(root, 'selected.vas') });
+    await Promise.resolve(); assert.equal(continued, 0, 'even a target event is not the independent sentinel');
+    release();
+    const ready = await readyPromise;
+    assert.equal(continued, 1); assert.equal(ready.watcherId, 1);
+    ready.assertActive();
+    assert.equal(state.watchers.length, 1, 'the gate must reuse the existing production watcher');
+    assert.equal(state.actualWatchListeners.size, 0, 'readiness bridge closes before the save window');
+    assert.equal(watcher.disposed, undefined, 'closing the bridge must retain the actual subscription');
+    assert.equal(watcher.dispose('audit-argument'), 'original-dispose');
+    assert.equal(watcher.disposeContext, watcher); assert.deepEqual(watcher.disposeArguments, ['audit-argument']);
+    state.vscode.workspace.createFileSystemWatcher('**/*');
+    assert.ok(ready.lifetime.disposedOrder > ready.lifetime.createdOrder);
+    assert.throws(() => ready.assertActive(), /disposed or replaced/,
+      'a replacement watcher must not resurrect the selected subscription');
+  } finally {
+    release?.(); await readyPromise.catch(() => {});
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('missing or disposed rerun readiness fails before a continuation and cleans the audit bridge', async () => {
+  for (const mode of ['missing', 'disposed']) {
+    const state = await audit(), root = await fs.mkdtemp(path.join(os.tmpdir(), 'vas-rerun-watch-fail-'));
+    const watcher = state.vscode.workspace.createFileSystemWatcher('**/*');
+    let continued = 0;
+    try {
+      await assert.rejects(state.readyRerunWatcher(root, { timeoutMs: 10, probeIntervalMs: 1, writeProbe: async file => {
+        if (mode === 'disposed') {
+          watcher.emit('create', { scheme: 'file', fsPath: file }); watcher.dispose();
+        }
+      } }).then(() => { continued++; }), mode === 'missing' ? /independent directory watcher readiness/ : /disposed or replaced/);
+      assert.equal(continued, 0); assert.equal(state.actualWatchListeners.size, 0);
+      assert.equal(state.watchers.length, 1);
+      assert.equal(watcher.disposed, mode === 'disposed' ? true : undefined);
+    } finally { await fs.rm(root, { recursive: true, force: true }); }
+  }
 });

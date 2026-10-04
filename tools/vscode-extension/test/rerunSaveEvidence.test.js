@@ -14,9 +14,9 @@ const { sameFileName } = require('../src/toolchain');
 const { readyDirectoryWatch } = require('./watchReadiness');
 
 const file = path.resolve('rerun-save-fixture.vas'), text = 'void main() {}\n// saved 文😀\n';
-function fixture(read) {
+function fixture(read, options = {}) {
   const evidence = new RerunSaveEvidence({ files: [file], version: 2, text,
-    before: { kind: 'readable', digest: 'previous saved bytes' }, read });
+    before: { kind: 'readable', digest: 'previous saved bytes' }, read, ...options });
   const snapshot = { file, kind: 'readable', dev: '1', ino: '2', digest: evidence.expected.digest,
     byteLength: evidence.expected.byteLength };
   const proof = { sourceDigestVersion: 1, sourceDigestAlgorithm: 'sha256', sourceDigest: snapshot.digest,
@@ -24,7 +24,7 @@ function fixture(read) {
   return { evidence, snapshot, proof,
     will(order = 10) { evidence.willSave({ order, version: 2, dirty: true, digest: evidence.expected.documentDigest }); },
     saved(order = 20) { evidence.didSave({ order, version: 2, dirty: false, digest: evidence.expected.documentDigest }); },
-    event(order = 15, kind = 'change', name = file) { evidence.observed({ order, kind, path: name }); } };
+    event(order = 15, kind = 'change', name = file, watcherId) { evidence.observed({ order, kind, path: name, watcherId }); } };
 }
 
 for (const timing of ['before didSave', 'after didSave', 'after native close']) {
@@ -133,6 +133,25 @@ test('an admitted receipt unlocks notification waiting but cannot bypass wrong s
   } finally { await state.evidence.dispose(); }
 });
 
+test('ready watcher identity cannot be replaced by another watcher, sentinel, old event or no target receipt', async () => {
+  let reads = 0;
+  const state = fixture(async () => { reads++; return state.snapshot; }, { watcherId: 7 });
+  try {
+    state.event(5, 'change', file, 7);
+    state.will(); state.saved();
+    for (const id of [undefined, 0, 8]) state.event(25, 'change', file, id);
+    state.event(26, 'create', path.resolve('.vas-watch-ready-sentinel'), 7);
+    await state.evidence.settle();
+    assert.equal(reads, 0); assert.equal(state.evidence.events.length, 0);
+    assert.throws(() => state.evidence.verify(state.proof, state.snapshot), /actual scoped notification/);
+    state.event(27, 'change', file, 7);
+    await state.evidence.settle();
+    assert.equal(reads, 1); assert.equal(state.evidence.verify(state.proof, state.snapshot).length, 1);
+    assert.equal(state.evidence.snapshot().watcherId, 7);
+  } finally { await state.evidence.dispose(); }
+  for (const watcherId of [0, -1, '7', NaN]) assert.throws(() => fixture(() => {}, { watcherId }), /watcher identity/);
+});
+
 async function deadline(promise, label) {
   let timer;
   try { return await Promise.race([promise, new Promise((_, reject) => {
@@ -162,10 +181,10 @@ for (const mode of ['early entry', 'early include alias', 'late entry']) {
       let order = 0, notify;
       const received = new Promise(resolve => { notify = resolve; });
       evidence = new RerunSaveEvidence({ files: [input, await fs.realpath(input)], version: 2, text: nextText,
-        before: await readVersion(input), onReceipt: notify });
+        before: await readVersion(input), onReceipt: notify, watcherId: 1 });
       watcher = await readyDirectoryWatch(root, (kind, name) => {
         if (!name || !sameFileName(path.join(root, name), input)) return;
-        const event = { order: ++order, kind: kind === 'rename' ? 'create' : 'change', path: input };
+        const event = { order: ++order, kind: kind === 'rename' ? 'create' : 'change', path: input, watcherId: 1 };
         evidence.observed(event);
       });
       assert.equal(evidence.events.length, 0, 'independent readiness receipts cannot count as source notifications');

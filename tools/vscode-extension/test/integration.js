@@ -105,11 +105,19 @@ vscode.CustomExecution = class extends OriginalCustomExecution {
 const originalWatcher = vscode.workspace.createFileSystemWatcher;
 const actualWatchListeners = new Set();
 const actualWatchPatterns = new Map();
+const actualWatchLifetimes = new Map();
 let actualWatchSequence = 0;
 vscode.workspace.createFileSystemWatcher = function(...args) {
   const watcher = originalWatcher.apply(this, args), id = ++actualWatchSequence;
+  const lifetime = { watcherId: id, createdOrder: ++auditSequence };
+  actualWatchLifetimes.set(id, lifetime);
   actualWatchPatterns.set(id, typeof args[0] === 'string' ? args[0] : {
     base: args[0]?.baseUri?.fsPath || args[0]?.base, pattern: args[0]?.pattern });
+  const dispose = watcher.dispose;
+  watcher.dispose = function(...parameters) {
+    lifetime.disposedOrder ??= ++auditSequence;
+    return dispose.apply(this, parameters);
+  };
   const received = (kind, uri) => {
     fileAudit?.(kind, uri, id);
     for (const listener of actualWatchListeners) listener(kind, uri, id);
@@ -137,6 +145,23 @@ async function readyExtensionDirectory(directory, options = {}) {
   } });
   readiness.audit.pattern = actualWatchPatterns.get(readiness.audit.ready.watcherId);
   return readiness;
+}
+
+async function readyRerunWatcher(directory, options = {}) {
+  const readiness = await readyExtensionDirectory(directory, options);
+  try {
+    const watcherId = readiness.audit.ready.watcherId, lifetime = actualWatchLifetimes.get(watcherId);
+    const assertActive = () => {
+      assert.ok(Number.isSafeInteger(watcherId) && lifetime && actualWatchLifetimes.get(watcherId) === lifetime &&
+        lifetime.disposedOrder === undefined, 'The ready rerun production watcher was disposed or replaced');
+    };
+    assertActive();
+    return { watcherId, readiness: readiness.audit, lifetime, assertActive };
+  } finally {
+    // Stop only the sentinel audit bridge. The same production watcher remains
+    // active; its latched lifetime and selected-save receipts are checked below.
+    readiness.close();
+  }
 }
 
 function postPublicationNotification(events, afterOrder, watcherId, paths) {
@@ -537,6 +562,12 @@ async function userRerunTests(folder, fixture, inputKind = 'entry') {
     cachedTask = await projectTask(folder, alias.unit);
   }
   const entryPaths = [entry.uri.fsPath, await fs.realpath(entry.uri.fsPath)];
+  // Task completion does not prove delivery from the shared workspace backend.
+  // Require a real independent receipt before the single edit/save/rerun.
+  const readyWatch = await readyRerunWatcher(path.dirname(entry.uri.fsPath));
+  assert.ok(lastInputObservations, 'the initial native task must register its input observations');
+  assert.equal(lastInputObservations.dependencies.relevant(path.join(readyWatch.readiness.root, readyWatch.readiness.sentinel)),
+    false, 'the readiness sentinel must remain unrelated to compiler inputs');
   let saveEvidence;
   const fileEvents = [], diagnosticEvents = [], inputEvents = [], textEvents = [];
   inputAudit = event => { if (inputEvents.length < 64) inputEvents.push(event); };
@@ -545,9 +576,9 @@ async function userRerunTests(folder, fixture, inputKind = 'entry') {
       path: event.document.uri.fsPath, dirty: event.document.isDirty, version: event.document.version });
   });
   const { sameFileName } = require('../src/toolchain');
-  fileAudit = (kind, file) => {
+  fileAudit = (kind, file, watcherId) => {
     if (entryPaths.some(input => sameFileName(input, file.fsPath))) {
-      const event = { order: ++auditSequence, kind, path: file.fsPath };
+      const event = { order: ++auditSequence, kind, path: file.fsPath, watcherId };
       if (fileEvents.length < 64) fileEvents.push(event);
       saveEvidence?.observed(event);
     }
@@ -568,7 +599,7 @@ async function userRerunTests(folder, fixture, inputKind = 'entry') {
     assert.equal(vscode.languages.getDiagnostics(uri(alias.include)).length, 0);
   }
   saveEvidence = new RerunSaveEvidence({ files: entryPaths, version: entry.version, text: entry.getText(),
-    before: await readVersion(entry.uri.fsPath) });
+    before: await readVersion(entry.uri.fsPath), watcherId: readyWatch.watcherId });
   const rerunWillSaveListener = vscode.workspace.onWillSaveTextDocument(event => {
     if (event.document.uri.toString() === entry.uri.toString()) saveEvidence.willSave({ order: ++auditSequence,
       version: event.document.version, dirty: event.document.isDirty, digest: documentDigest(event.document.getText()) });
@@ -588,15 +619,17 @@ async function userRerunTests(folder, fixture, inputKind = 'entry') {
       event.execution.task.scope?.uri?.toString() === folder.uri.toString()) rerunExecution = event.execution;
   });
   try {
+    readyWatch.assertActive();
     const code = await taskExit(async () => {
       await execute('workbench.action.tasks.reRunTask');
       await eventually(() => rerunExecution !== undefined, 'the real Rerun Last Task to start the selected unit');
       return rerunExecution;
     }, 'user Rerun Last Task');
-    const audit = { inputKind, code, dirty: entry.isDirty, saved: rerunSaved, fileEvents, diagnosticEvents, inputEvents, textEvents,
+    const audit = { inputKind, code, dirty: entry.isDirty, watcher: readyWatch, saved: rerunSaved, fileEvents, diagnosticEvents, inputEvents, textEvents,
       processes: nativeCalls(rerunStart).map(call => ({ order: call.order, args: call.args, shell: call.options?.shell, editorState: call.editorState })),
       executions: customExecutions.slice(rerunCustom) };
     console.log('VAS user-rerun evidence:', JSON.stringify(audit));
+    readyWatch.assertActive();
     assert.equal(customExecutions.length - rerunCustom, 1, 'real user rerun must call a fresh CustomExecution');
     assert.deepEqual(customExecutions[rerunCustom].closeCodes, [code], JSON.stringify(audit));
     if (entry.isDirty) {
@@ -612,7 +645,7 @@ async function userRerunTests(folder, fixture, inputKind = 'entry') {
         'the observed workbench save must precede the native --project spawn');
       assert.ok(builds[0].order < customExecutions[rerunCustom].closeEvents[0].order, 'native spawn must precede successful PTY close');
       try {
-        await eventually(() => saveEvidence.currentNotifications().length > 0,
+        await eventually(() => { readyWatch.assertActive(); return saveEvidence.currentNotifications().length > 0; },
           'this rerun saved input notification on the extension actual watcher');
         const sectionPath = uri(inputKind === 'include-alias' ? alias.include : alias.entry).fsPath;
         const proof = builds[0].report?.find(record => record.type === 'section_loaded' && sameFileName(record.section, sectionPath));
@@ -624,6 +657,7 @@ async function userRerunTests(folder, fixture, inputKind = 'entry') {
         audit.saveEvidence = saveEvidence.snapshot();
         assert.ok(lastInputObservations, 'the actual task must register its production input observation barrier');
         await bounded(lastInputObservations.settle(), 'classify the saved input notification against its pre-compile baseline');
+        readyWatch.assertActive();
         audit.notificationBeforeDidSave = currentNotifications.some(event => event.order < saveEvidence.saved.order);
         audit.notificationAfterNativeClose = currentNotifications.some(event => event.order > customExecutions[rerunCustom].closeEvents[0].order);
         assert.ok(vscode.languages.getDiagnostics(uri(alias.include)).some(item => item.severity === vscode.DiagnosticSeverity.Warning),
