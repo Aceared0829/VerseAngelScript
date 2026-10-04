@@ -29,10 +29,12 @@ class PackageContract(unittest.TestCase):
     def test_production_package_manifest(self):
         manifest = ET.parse(ROOT / "source.extension.vsixmanifest").getroot()
         assets = manifest.findall("v:Assets/v:Asset", NS)
-        self.assertEqual(len(assets), 2)
-        self.assertTrue(all(a.attrib["Type"] == "Microsoft.VisualStudio.VsPackage" for a in assets))
-        self.assertEqual(assets[0].attrib["Path"], "VAS.pkgdef")
-        self.assertEqual(assets[1].attrib["Path"], "|%CurrentProject%;PkgdefProjectOutputGroup|")
+        self.assertEqual(len(assets), 3)
+        mef = [a for a in assets if a.attrib["Type"] == "Microsoft.VisualStudio.MefComponent"]
+        packages = [a for a in assets if a.attrib["Type"] == "Microsoft.VisualStudio.VsPackage"]
+        self.assertEqual(len(mef), 1)
+        self.assertEqual(mef[0].attrib["Path"], "|%CurrentProject%|")
+        self.assertEqual([a.attrib["Path"] for a in packages], ["VAS.pkgdef", "|%CurrentProject%;PkgdefProjectOutputGroup|"])
         target = manifest.find("v:Installation/v:InstallationTarget", NS)
         self.assertEqual(target.attrib["Version"], "[18.0,19.0)")
         self.assertEqual(target.find("v:ProductArchitecture", NS).text, "amd64")
@@ -90,6 +92,7 @@ def verify_vsix(path, evidence_path=None, pkgdef_evidence_path=None):
         manifest = ET.fromstring(archive.read("extension.vsixmanifest"))
         assets = manifest.findall("v:Assets/v:Asset", NS)
         assert [(a.attrib["Type"], a.attrib["Path"]) for a in assets] == [
+            ("Microsoft.VisualStudio.MefComponent", "VerseAngelScript.dll"),
             ("Microsoft.VisualStudio.VsPackage", "VAS.pkgdef"),
             ("Microsoft.VisualStudio.VsPackage", "VerseAngelScript.pkgdef")]
         # Only container bookkeeping may accompany the intentional payload.

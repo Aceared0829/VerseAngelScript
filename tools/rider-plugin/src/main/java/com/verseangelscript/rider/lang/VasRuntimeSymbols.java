@@ -4,7 +4,8 @@ import java.util.Map;
 
 public final class VasRuntimeSymbols {
     public static final Map<String, String> ALL = Map.ofEntries(
-        Map.entry("print", "void print(const string &in)"),
+        Map.entry("print", "void print(const string &in format, const ?&in ...) (+ primitive overloads; no newline)"),
+        Map.entry("println", "void println(const string &in format, const ?&in ...) (+ empty and primitive overloads)"),
         Map.entry("getInput", "string getInput()"),
         Map.entry("getCommandLineArgs", "array<string>@ getCommandLineArgs()"),
         Map.entry("exec", "int exec(const string &in)"),

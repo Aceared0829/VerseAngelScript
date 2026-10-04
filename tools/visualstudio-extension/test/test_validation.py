@@ -195,11 +195,14 @@ class VsixGateTests(unittest.TestCase):
 "{d3a6e112-5f40-4df1-8bb7-0b79f0e74226}"=", 1, 1"
 """
 
-    def write_package(self, altered=False, assembly=False, missing=False, registration_bytes=None):
+    def write_package(self, altered=False, assembly=False, missing=False, registration_bytes=None, missing_mef=False):
         if registration_bytes is None:
             registration_bytes = codecs.BOM_UTF16_LE + self.registration().encode("utf-16-le")
         with zipfile.ZipFile(self.path, "w") as archive:
             manifest = (ROOT / "source.extension.vsixmanifest").read_text().replace("|%CurrentProject%;PkgdefProjectOutputGroup|", "VerseAngelScript.pkgdef")
+            manifest = manifest.replace("|%CurrentProject%|", "VerseAngelScript.dll")
+            if missing_mef:
+                manifest = "\n".join(line for line in manifest.splitlines() if 'Type="Microsoft.VisualStudio.MefComponent"' not in line)
             archive.writestr("extension.vsixmanifest", manifest)
             archive.writestr("VerseAngelScript.dll", b"MZsynthetic managed payload")
             archive.writestr("Newtonsoft.Json.dll", b"MZsynthetic JSON dependency")
@@ -215,6 +218,11 @@ class VsixGateTests(unittest.TestCase):
     def test_byte_identical_package_with_exact_runtime_allowlist_passes(self):
         self.write_package()
         with contextlib.redirect_stdout(io.StringIO()):
+            verify_vsix(self.path)
+
+    def test_missing_editor_mef_registration_fails(self):
+        self.write_package(missing_mef=True)
+        with self.assertRaises(AssertionError):
             verify_vsix(self.path)
 
     def test_generated_registration_uses_strict_utf16le_bom(self):

@@ -1,5 +1,6 @@
 #include "scriptstdstring.h"
 #include <assert.h> // assert()
+#include <stdexcept>
 #include <sstream>  // std::stringstream
 #include <string.h> // strstr()
 #include <stdio.h>	// snprintf()
@@ -190,155 +191,122 @@ static bool StringIsEmpty(const string &str)
 }
 
 #if AS_NO_IMPL_OPS_WITH_STRING_AND_PRIMITIVE == 0
-static string &AssignUInt64ToString(asQWORD i, string &dest)
+// A stream backed by stack storage keeps floating-point/locale semantics while
+// avoiding ostringstream's growing buffer and the temporary stream.str() copy.
+class NumericBuffer : public std::streambuf
 {
-	ostringstream stream;
-	stream << i;
-	dest = stream.str();
+public:
+	char storage[128];
+	NumericBuffer() { setp(storage, storage + sizeof(storage)); }
+	size_t length() const { return size_t(pptr() - pbase()); }
+};
+
+class NumericText
+{
+	NumericBuffer buffer;
+	string fallback;
+	const char *text;
+	size_t size;
+
+	template<typename T> void FromStream(T value)
+	{
+		std::ostream stream(&buffer);
+		stream << value;
+		if (stream)
+		{
+			text = buffer.storage;
+			size = buffer.length();
+		}
+		else
+		{
+			// A host's custom num_put facet may emit arbitrarily long text.
+			ostringstream full;
+			full << value;
+			fallback = full.str();
+			text = fallback.data();
+			size = fallback.size();
+		}
+	}
+
+	void FromUnsigned(asQWORD value, bool negative)
+	{
+		char *end = buffer.storage + sizeof(buffer.storage), *begin = end;
+		do { *--begin = char('0' + value % 10); value /= 10; } while (value);
+		if (negative) *--begin = '-';
+		text = begin;
+		size = size_t(end - begin);
+	}
+public:
+	explicit NumericText(asQWORD value)
+	{
+		if (std::locale() == std::locale::classic()) FromUnsigned(value, false);
+		else FromStream(value);
+	}
+	explicit NumericText(asINT64 value)
+	{
+		if (std::locale() == std::locale::classic())
+			FromUnsigned(value < 0 ? asQWORD(0) - asQWORD(value) : asQWORD(value), value < 0);
+		else FromStream(value);
+	}
+	explicit NumericText(float value) { FromStream(value); }
+	explicit NumericText(double value) { FromStream(value); }
+	explicit NumericText(bool value) : text(value ? "true" : "false"), size(value ? 4 : 5) {}
+	const char *data() const { return text; }
+	size_t length() const { return size; }
+};
+
+template<typename T> static string &AssignNumber(T value, string &dest)
+{
+	NumericText text(value);
+	dest.assign(text.data(), text.length());
 	return dest;
 }
 
-static string &AddAssignUInt64ToString(asQWORD i, string &dest)
+template<typename T> static string &AppendNumber(T value, string &dest)
 {
-	ostringstream stream;
-	stream << i;
-	dest += stream.str();
+	NumericText text(value);
+	dest.append(text.data(), text.length());
 	return dest;
 }
 
-static string AddStringUInt64(const string &str, asQWORD i)
+template<typename T> static string AddNumber(const string &str, T value, bool numberFirst)
 {
-	ostringstream stream;
-	stream << i;
-	return str + stream.str();
+	NumericText text(value);
+	string result;
+	// Check the total length before addition to avoid unsigned wraparound.
+	if (text.length() > result.max_size() - str.size()) throw std::length_error("string too long");
+	result.reserve(str.size() + text.length());
+	if (numberFirst) result.append(text.data(), text.length());
+	result.append(str);
+	if (!numberFirst) result.append(text.data(), text.length());
+	return result;
 }
 
-static string AddInt64String(asINT64 i, const string &str)
-{
-	ostringstream stream;
-	stream << i;
-	return stream.str() + str;
-}
+static string &AssignUInt64ToString(asQWORD value, string &dest) { return AssignNumber(value, dest); }
+static string &AddAssignUInt64ToString(asQWORD value, string &dest) { return AppendNumber(value, dest); }
+static string AddStringUInt64(const string &str, asQWORD value) { return AddNumber(str, value, false); }
+static string AddUInt64String(asQWORD value, const string &str) { return AddNumber(str, value, true); }
 
-static string &AssignInt64ToString(asINT64 i, string &dest)
-{
-	ostringstream stream;
-	stream << i;
-	dest = stream.str();
-	return dest;
-}
+static string &AssignInt64ToString(asINT64 value, string &dest) { return AssignNumber(value, dest); }
+static string &AddAssignInt64ToString(asINT64 value, string &dest) { return AppendNumber(value, dest); }
+static string AddStringInt64(const string &str, asINT64 value) { return AddNumber(str, value, false); }
+static string AddInt64String(asINT64 value, const string &str) { return AddNumber(str, value, true); }
 
-static string &AddAssignInt64ToString(asINT64 i, string &dest)
-{
-	ostringstream stream;
-	stream << i;
-	dest += stream.str();
-	return dest;
-}
+static string &AssignDoubleToString(double value, string &dest) { return AssignNumber(value, dest); }
+static string &AddAssignDoubleToString(double value, string &dest) { return AppendNumber(value, dest); }
+static string AddStringDouble(const string &str, double value) { return AddNumber(str, value, false); }
+static string AddDoubleString(double value, const string &str) { return AddNumber(str, value, true); }
 
-static string AddStringInt64(const string &str, asINT64 i)
-{
-	ostringstream stream;
-	stream << i;
-	return str + stream.str();
-}
+static string &AssignFloatToString(float value, string &dest) { return AssignNumber(value, dest); }
+static string &AddAssignFloatToString(float value, string &dest) { return AppendNumber(value, dest); }
+static string AddStringFloat(const string &str, float value) { return AddNumber(str, value, false); }
+static string AddFloatString(float value, const string &str) { return AddNumber(str, value, true); }
 
-static string AddUInt64String(asQWORD i, const string &str)
-{
-	ostringstream stream;
-	stream << i;
-	return stream.str() + str;
-}
+static string &AssignBoolToString(bool value, string &dest) { return AssignNumber(value, dest); }
+static string &AddAssignBoolToString(bool value, string &dest) { return AppendNumber(value, dest); }
+static string AddStringBool(const string &str, bool value) { return AddNumber(str, value, false); }
+static string AddBoolString(bool value, const string &str) { return AddNumber(str, value, true); }
 
-static string &AssignDoubleToString(double f, string &dest)
-{
-	ostringstream stream;
-	stream << f;
-	dest = stream.str();
-	return dest;
-}
-
-static string &AddAssignDoubleToString(double f, string &dest)
-{
-	ostringstream stream;
-	stream << f;
-	dest += stream.str();
-	return dest;
-}
-
-static string &AssignFloatToString(float f, string &dest)
-{
-	ostringstream stream;
-	stream << f;
-	dest = stream.str();
-	return dest;
-}
-
-static string &AddAssignFloatToString(float f, string &dest)
-{
-	ostringstream stream;
-	stream << f;
-	dest += stream.str();
-	return dest;
-}
-
-static string &AssignBoolToString(bool b, string &dest)
-{
-	ostringstream stream;
-	stream << (b ? "true" : "false");
-	dest = stream.str();
-	return dest;
-}
-
-static string &AddAssignBoolToString(bool b, string &dest)
-{
-	ostringstream stream;
-	stream << (b ? "true" : "false");
-	dest += stream.str();
-	return dest;
-}
-
-static string AddStringDouble(const string &str, double f)
-{
-	ostringstream stream;
-	stream << f;
-	return str + stream.str();
-}
-
-static string AddDoubleString(double f, const string &str)
-{
-	ostringstream stream;
-	stream << f;
-	return stream.str() + str;
-}
-
-static string AddStringFloat(const string &str, float f)
-{
-	ostringstream stream;
-	stream << f;
-	return str + stream.str();
-}
-
-static string AddFloatString(float f, const string &str)
-{
-	ostringstream stream;
-	stream << f;
-	return stream.str() + str;
-}
-
-static string AddStringBool(const string &str, bool b)
-{
-	ostringstream stream;
-	stream << (b ? "true" : "false");
-	return str + stream.str();
-}
-
-static string AddBoolString(bool b, const string &str)
-{
-	ostringstream stream;
-	stream << (b ? "true" : "false");
-	return stream.str() + str;
-}
 #endif
 
 static char *StringCharAt(unsigned int i, string &str)

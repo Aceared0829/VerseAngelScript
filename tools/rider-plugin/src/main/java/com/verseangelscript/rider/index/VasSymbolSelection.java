@@ -128,7 +128,8 @@ public final class VasSymbolSelection {
                     return qualified;
                 }
                 return matches.size() == 1 && (matches.get(0).symbol().kind() == VasSymbolKind.CLASS
-                    || matches.get(0).symbol().kind() == VasSymbolKind.INTERFACE) ? qualified : null;
+                    || matches.get(0).symbol().kind() == VasSymbolKind.INTERFACE
+                    || allowNamespace && matches.get(0).symbol().kind() == VasSymbolKind.ENUM) ? qualified : null;
             }
         }
         return null;
@@ -136,7 +137,8 @@ public final class VasSymbolSelection {
 
     private static <T> List<Candidate<T>> inContainer(List<Candidate<T>> visible, String name, String container) {
         return visible.stream().filter(candidate -> candidate.symbol().name().equals(name)
-            && candidate.symbol().container().equals(container)).toList();
+            && (candidate.symbol().container().equals(container)
+                || candidate.symbol().kind() == VasSymbolKind.ENUM_MEMBER && candidate.symbol().declaredType().equals(container))).toList();
     }
 
     private static List<String> enclosingContainers(String container) {

@@ -59,6 +59,15 @@
     <None Include="src\shared-unit-root.vas" />
     <None Include="src\shared-unit-unrelated.vas" />
     <None Include="src\unicode-identifiers.vas" />
+    <None Include="src\arena\Arena\Battle.vas" />
+    <None Include="src\arena\Arena\Checks.vas" />
+    <None Include="src\arena\Arena\Combatant.vas" />
+    <None Include="src\arena\Arena\Config.vas" />
+    <None Include="src\arena\Arena\Demo.vas" />
+    <None Include="src\arena\Arena\Math.vas" />
+    <None Include="src\arena\Arena\Report.vas" />
+    <None Include="src\arena\Arena\Skills.vas" />
+    <None Include="src\arena\main.vas" />
     <None Include="unicode-identifiers.config.txt" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

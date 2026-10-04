@@ -161,6 +161,7 @@ jobs:
         $argvFixture = Join-Path $build 'Release/vas_rider_argv_fixture.exe'
         if (-not (Test-Path $argvFixture)) { throw 'Missing Rider native argument fixture' }
         "VAS_TEST_COMPILER=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        "VAS_TEST_CONFIG=$env:GITHUB_WORKSPACE/sdk/samples/asbuild/bin/config.txt" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
         "VAS_TEST_ARGV_FIXTURE=$argvFixture" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
     - name: set up Java 25
       uses: actions/setup-java@v4

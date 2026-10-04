@@ -1,0 +1,16 @@
+// Defaults are shared by the compilation unit and may be overridden by the entry point.
+#ifndef VAS_ARENA_VERBOSE
+#define VAS_ARENA_VERBOSE 1
+#endif
+#ifndef VAS_ARENA_MAX_ROUNDS
+#define VAS_ARENA_MAX_ROUNDS 12
+#endif
+#define VAS_ARENA_VERSION "1.0"
+#define VAS_ARENA_CRIT_PERCENT 25
+#define VAS_ARENA_CRITICAL_DAMAGE(Amount) ((Amount) * 2)
+#if VAS_ARENA_MAX_ROUNDS < 1 || VAS_ARENA_MAX_ROUNDS > 100
+#error VAS_ARENA_MAX_ROUNDS 必须在 1..100 范围内
+#endif
+#if VAS_ARENA_VERBOSE != 0 && VAS_ARENA_VERBOSE != 1
+#error VAS_ARENA_VERBOSE 只能是 0 或 1
+#endif

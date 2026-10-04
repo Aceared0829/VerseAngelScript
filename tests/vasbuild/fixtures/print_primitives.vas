@@ -1,0 +1,22 @@
+void main()
+{
+    int result2 = 50 + 22;
+    print(72); print("|"); print(result2); print("|");
+    int signedValue = -2147483647 - 1;
+    uint unsignedValue = 4294967295;
+    int64 signedWide = int64(-9223372036854775807) - 1;
+    uint64 unsignedWide = 18446744073709551615;
+    print(signedValue); print("|"); print(unsignedValue); print("|");
+    print(signedWide); print("|"); print(unsignedWide); print("|");
+    float singleValue = 1.25f;
+    double doubleValue = -2.5;
+    print(singleValue); print("|"); print(doubleValue); print("|");
+    print(true); print("|"); print(false); print("|");
+    int8 smallSigned = -128;
+    uint8 smallUnsigned = 255;
+    int16 shortSigned = -32768;
+    uint16 shortUnsigned = 65535;
+    print(smallSigned); print("|"); print(smallUnsigned); print("|");
+    print(shortSigned); print("|"); print(shortUnsigned); print("|");
+    print("" + result2); print("|string\n");
+}

@@ -1,0 +1,6 @@
+// 导入方预先定义的宏会影响这里；所有宏自动对导入方可见。
+#ifndef DEMO_BASE
+#define DEMO_BASE 10
+#endif
+#define DEMO_OFFSET (DEMO_BASE + 100)
+#define MODULE_SOURCE "demo_constants"

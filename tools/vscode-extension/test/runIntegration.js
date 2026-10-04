@@ -1,5 +1,6 @@
 'use strict';
 
+const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
@@ -320,6 +321,8 @@ async function main() {
         // Test extension dirty-input guards with deterministic unsaved editors.
         // The workbench's own save-before-run must not clear the test condition.
         'task.saveBeforeRun': 'never', 'files.autoSave': 'off',
+        // Project-command process audits are separate from live editing checks below.
+        'vas.liveDiagnostics': false,
         'vas.compilerPath': process.env.VAS_TEST_COMPILER,
         'vas.runnerPath': process.env.VAS_TEST_RUNNER
       });
@@ -341,6 +344,34 @@ async function main() {
       // Only mutate artifacts after the preceding host has completely exited.
       // Retain source/config bytes and hardlinks across alias and legacy modes.
       await removeBuildArtifacts(workspaces);
+    }
+    const editingWorkspace = path.join(root, 'language editing');
+    await fs.mkdir(path.join(editingWorkspace, '.vas'), { recursive: true });
+    await fs.copyFile(path.resolve(__dirname, '../../../sdk/samples/asbuild/bin/config.txt'),
+      path.join(editingWorkspace, '.vas', 'vasbuild.config.txt'));
+    for (const mode of ['language', 'editing']) {
+      const userData = path.join(root, mode);
+      await fs.mkdir(path.join(userData, 'User'), { recursive: true });
+      await writeJson(path.join(userData, 'User', 'settings.json'), {
+        'update.mode': 'none', 'telemetry.telemetryLevel': 'off', 'files.autoSave': 'off',
+        'vas.compilerPath': process.env.VAS_TEST_COMPILER,
+        'vas.liveDiagnostics': true
+      });
+      const key = mode === 'editing' ? 'VAS_EDITING_EVIDENCE' : 'VAS_LANGUAGE_EVIDENCE';
+      const previous = process.env[key];
+      const result = path.join(evidenceFile ? path.dirname(evidenceFile) : root, `${mode}-evidence.json`);
+      process.env[key] = result;
+      try {
+        await launch(executable, [editingWorkspace, '--user-data-dir', userData,
+          '--extensions-dir', path.join(userData, 'extensions'), '--disable-extensions',
+          '--disable-workspace-trust', '--skip-welcome', '--skip-release-notes', '--disable-updates', '--no-sandbox',
+          `--extensionDevelopmentPath=${path.resolve(__dirname, '..')}`,
+          `--extensionTestsPath=${path.join(__dirname, `${mode}Integration.js`)}`], mode);
+        const report = JSON.parse(await fs.readFile(result, 'utf8'));
+        assert.equal(report.host || report.version, identity?.version || report.host || report.version);
+      } finally {
+        if (previous === undefined) delete process.env[key]; else process.env[key] = previous;
+      }
     }
     if (evidenceFile) await runtimeEvidence.finish(evidenceFile, identity, process.env.VSCODE_TEST_VERSION || '1.96.4', passedModes);
   } catch (error) {

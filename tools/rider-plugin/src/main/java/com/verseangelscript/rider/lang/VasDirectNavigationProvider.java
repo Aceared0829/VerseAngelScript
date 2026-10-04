@@ -30,7 +30,7 @@ public final class VasDirectNavigationProvider implements DirectNavigationProvid
         if (element.getNode().getElementType() != VasTypes.IDENTIFIER) {
             return null;
         }
-        List<PsiElement> declarations = VasSymbolResolver.findDeclarations(element);
+        List<PsiElement> declarations = VasSymbolResolver.findNavigationDeclarations(element);
         return declarations.size() == 1 ? declarations.get(0) : null;
     }
 }

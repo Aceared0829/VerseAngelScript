@@ -4,6 +4,7 @@ public enum VasSymbolKind {
     CLASS("class"),
     INTERFACE("interface"),
     ENUM("enum"),
+    ENUM_MEMBER("enum value"),
     NAMESPACE("namespace"),
     TYPE_ALIAS("type alias"),
     FUNCTION("function"),

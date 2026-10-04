@@ -7,13 +7,18 @@ import java.util.ArrayDeque;
 import java.util.List;
 
 /**
- * Bounded dependency extraction matching scriptbuilder's ordinary #include syntax.
+ * Bounded extraction of VAS module imports and quoted/angle includes.
  * Directive names touch '#'; a single quoted value may follow immediately or after
  * whitespace, including newlines. Comments are not whitespace within a directive.
  * Unknown preprocessing is reported, never treated as a complete dependency graph.
  */
 public final class VasIncludeScanner {
-    public record Include(String path, int offset, int pathStart, int pathEnd, int end) { }
+    public enum Kind { QUOTED, SYSTEM, MODULE }
+    public record Include(String path, int offset, int pathStart, int pathEnd, int end, Kind kind) {
+        public Include(String path, int offset, int pathStart, int pathEnd, int end) {
+            this(path, offset, pathStart, pathEnd, end, Kind.QUOTED);
+        }
+    }
     public record Problem(int offset, String message) { }
     public record Result(List<Include> includes, List<Problem> problems) {
         public Result {
@@ -90,6 +95,7 @@ public final class VasIncludeScanner {
                         default -> "Unsupported preprocessor directive #" + directive;
                     };
                     problems.add(new Problem(start, reason));
+                    offset = lineEnd(source, offset);
                     continue;
                 }
                 // scriptbuilder skips one tokenizer whitespace token. A BOM is
@@ -100,6 +106,16 @@ public final class VasIncludeScanner {
                     while (offset < length && isAsciiWhitespace(source.charAt(offset))) {
                         offset++;
                     }
+                }
+                if (offset < length && source.charAt(offset) == '<') {
+                    int pathStart = ++offset;
+                    while (offset < length && source.charAt(offset) != '>' && !isWhitespace(source.charAt(offset))) offset++;
+                    if (offset < length && offset > pathStart && source.charAt(offset) == '>') {
+                        includes.add(new Include(source.subSequence(pathStart, offset).toString(), start, pathStart, offset, ++offset, Kind.SYSTEM));
+                    } else {
+                        problems.add(new Problem(start, "Invalid angle include path"));
+                    }
+                    continue;
                 }
                 if (offset == length || source.charAt(offset) != '\'' && source.charAt(offset) != '"') {
                     problems.add(new Problem(start, "Expected a quoted include path"));
@@ -124,8 +140,37 @@ public final class VasIncludeScanner {
             } else if (isIdentifierPart(character)) {
                 int start = offset;
                 offset = identifierEnd(source, offset);
+                String scannedWord = source.subSequence(start, offset).toString();
+                if (scannedWord.equals("import")) {
+                    int nameStart = skipTrivia(source, offset);
+                    int cursor = nameStart;
+                    StringBuilder path = new StringBuilder();
+                    boolean completeName = false;
+                    while (cursor < length && isIdentifierPart(source.charAt(cursor)) && !isDigit(source.charAt(cursor), 10)) {
+                        int nameEnd = identifierEnd(source, cursor);
+                        String part = source.subSequence(cursor, nameEnd).toString();
+                        if (VasKeywords.RESERVED.contains(part)) break;
+                        if (!path.isEmpty()) path.append('/');
+                        path.append(part);
+                        cursor = skipTrivia(source, nameEnd);
+                        if (cursor < length && source.charAt(cursor) == '.') cursor = skipTrivia(source, cursor + 1);
+                        else { completeName = true; break; }
+                    }
+                    if (completeName && !path.isEmpty() && cursor < length && source.charAt(cursor) == ';') {
+                        if (bracketDepth > 0 || parenthesisDepth > 0 || !containerBlocks.isEmpty()) {
+                            problems.add(new Problem(start, "Module imports must be at file scope"));
+                        } else {
+                            int nameEnd = cursor;
+                            while (nameEnd > nameStart && isWhitespace(source.charAt(nameEnd - 1))) nameEnd--;
+                            includes.add(new Include(path + ".vas", start, nameStart, nameEnd, cursor + 1, Kind.MODULE));
+                        }
+                        offset = cursor + 1;
+                        statementStart = true;
+                        continue;
+                    }
+                }
                 if (bracketDepth == 0) {
-                    String token = source.subSequence(start, offset).toString();
+                    String token = scannedWord;
                     if (statementStart && (token.equals("class") || token.equals("interface")
                         || token.equals("namespace"))) {
                         containerHeader = true;
@@ -162,6 +207,20 @@ public final class VasIncludeScanner {
             }
         }
         return new Result(includes, problems);
+    }
+
+    private static int skipTrivia(CharSequence source, int offset) {
+        for (;;) {
+            while (offset < source.length() && isWhitespace(source.charAt(offset))) offset++;
+            if (startsWith(source, offset, "//")) { offset = lineEnd(source, offset + 2); continue; }
+            if (startsWith(source, offset, "/*")) {
+                int end = offset + 2;
+                while (end < source.length() && !startsWith(source, end, "*/")) end++;
+                offset = Math.min(source.length(), end + 2);
+                continue;
+            }
+            return offset;
+        }
     }
 
     private static Quoted quoted(CharSequence source, int start) {

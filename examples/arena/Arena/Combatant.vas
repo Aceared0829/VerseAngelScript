@@ -1,0 +1,70 @@
+import Config;
+import Math;
+
+namespace Arena
+{
+	enum ECombatRole
+	{
+		Warrior,
+		Guardian,
+		Medic
+	}
+
+	class FCombatant
+	{
+		string Name;
+		ECombatRole Role;
+		int32 MaxHealth;
+		int32 Health;
+		int32 Attack;
+		int32 Armor;
+		int32 DamageDealt = 0;
+		int32 HealingDone = 0;
+
+		FCombatant(const string&in Label, ECombatRole Kind, int32 InitialHealth, int32 Power, int32 Defense)
+		{
+			Name = Label;
+			Role = Kind;
+			MaxHealth = InitialHealth;
+			Health = InitialHealth;
+			Attack = Power;
+			Armor = Defense;
+		}
+
+		bool IsAlive() const
+		{
+			return Health > 0;
+		}
+
+		// Return the actual change so excess damage and healing do not inflate statistics.
+		int32 ApplyDamage(int32 Amount)
+		{
+			int32 Actual = Clamp(Amount, 0, Health);
+			Health -= Actual;
+			return Actual;
+		}
+
+		int32 RestoreHealth(int32 Amount)
+		{
+			if (!IsAlive())
+			{
+				return 0; // Healing does not revive defeated combatants.
+			}
+			int32 Actual = Clamp(Amount, 0, MaxHealth - Health);
+			Health += Actual;
+			HealingDone += Actual;
+			return Actual;
+		}
+	}
+
+	FCombatant@ CreateCombatant(uint32 Index)
+	{
+		switch (Index)
+		{
+			case 0: return FCombatant("剑士", Warrior, 90, 18, 2);
+			case 1: return FCombatant("守卫", Guardian, 110, 14, 6);
+			case 2: return FCombatant("医师", Medic, 82, 12, 3);
+		}
+		return null;
+	}
+}

@@ -83,16 +83,18 @@ namespace VerseAngelScript.VisualStudio.Build
 
         /// <summary>The guard and line sink run on background threads; both must return promptly.</summary>
         public static Task<ProcessResult> RunAsync(string executable, IReadOnlyList<string> args, string cwd,
-            TimeSpan timeout, long stdoutLimit, CancellationToken cancellationToken, Action guard = null, Action<byte[]> lineSink = null)
+            TimeSpan timeout, long stdoutLimit, CancellationToken cancellationToken, Action guard = null, Action<byte[]> lineSink = null,
+            IReadOnlyDictionary<string, string> environment = null)
         {
             if (args == null) throw new ArgumentNullException(nameof(args));
             // Copy mutable callers' arrays before queuing work.
             string[] copy = args.ToArray();
-            return Task.Run(() => Run(executable, copy, cwd, timeout, stdoutLimit, cancellationToken, guard, lineSink), cancellationToken);
+            var env = environment?.ToDictionary(p => p.Key, p => p.Value);
+            return Task.Run(() => Run(executable, copy, cwd, timeout, stdoutLimit, cancellationToken, guard, lineSink, env), cancellationToken);
         }
 
         private static ProcessResult Run(string executable, IReadOnlyList<string> args, string cwd,
-            TimeSpan timeout, long stdoutLimit, CancellationToken token, Action guard, Action<byte[]> sink)
+            TimeSpan timeout, long stdoutLimit, CancellationToken token, Action guard, Action<byte[]> sink, IReadOnlyDictionary<string, string> environment)
         {
             if (!FullyQualifiedPath(executable) || !FullyQualifiedPath(cwd)) throw new IOException("Compiler and working-directory paths must be absolute.");
             if (timeout <= TimeSpan.Zero || stdoutLimit < 0 || stdoutLimit > int.MaxValue) throw new ArgumentOutOfRangeException(nameof(timeout));
@@ -108,6 +110,7 @@ namespace VerseAngelScript.VisualStudio.Build
             Exception primary = null;
             try
             {
+                if (environment != null) foreach (var entry in environment) process.StartInfo.EnvironmentVariables[entry.Key] = entry.Value;
                 token.ThrowIfCancellationRequested();
                 launched = process.Start();
                 if (!launched) throw new IOException("The native VAS compiler could not be started.");

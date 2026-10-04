@@ -7,19 +7,23 @@ import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiManager;
 import com.intellij.psi.PsiReferenceBase;
 import com.verseangelscript.rider.index.VasIncludeScanner;
+import com.verseangelscript.rider.index.VasDependencyPaths;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 public final class VasIncludeReference extends PsiReferenceBase<PsiElement> {
     private final String includePath;
+    private final VasIncludeScanner.Kind kind;
 
     private VasIncludeReference(
         @NotNull PsiElement element,
         @NotNull TextRange range,
-        @NotNull String includePath
+        @NotNull String includePath,
+        @NotNull VasIncludeScanner.Kind kind
     ) {
         super(element, range, true);
         this.includePath = includePath;
+        this.kind = kind;
     }
 
     public static @Nullable VasIncludeReference create(@NotNull PsiElement element) {
@@ -30,7 +34,7 @@ public final class VasIncludeReference extends PsiReferenceBase<PsiElement> {
         return new VasIncludeReference(
             element,
             new TextRange(include.pathStart(), include.pathEnd()),
-            include.path()
+            include.path(), include.kind()
         );
     }
 
@@ -67,7 +71,7 @@ public final class VasIncludeReference extends PsiReferenceBase<PsiElement> {
             || java.io.File.separatorChar != '\\' && includePath.indexOf('\\') >= 0) {
             return null;
         }
-        VirtualFile target = directory.findFileByRelativePath(includePath.replace('\\', '/'));
+        VirtualFile target = VasDependencyPaths.resolve(sourceFile, directory, includePath, kind);
         return target == null ? null : PsiManager.getInstance(myElement.getProject()).findFile(target);
     }
 }

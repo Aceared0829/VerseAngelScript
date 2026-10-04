@@ -1109,7 +1109,7 @@ namespace VerseAngelScript.VisualStudio.Tests
         {
             var type = package.GetType().Assembly.GetType("VerseAngelScript.VisualStudio.Build.NativeProcess", true);
             var method = type.GetMethod("RunAsync", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-            var task = (Task)method.Invoke(null, new object[] { executable, arguments, root, TimeSpan.FromSeconds(15), (long)(1024 * 1024), CancellationToken.None, null, null });
+            var task = (Task)method.Invoke(null, new object[] { executable, arguments, root, TimeSpan.FromSeconds(15), (long)(1024 * 1024), CancellationToken.None, null, null, null });
             await task;
             return Member(task, "Result");
         }

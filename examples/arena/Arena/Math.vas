@@ -1,0 +1,29 @@
+namespace Arena
+{
+	int32 Clamp(int32 Value, int32 Lower, int32 Upper)
+	{
+		return Value < Lower ? Lower : Value > Upper ? Upper : Value;
+	}
+
+	// A seeded generator for reproducible simulation, not cryptography.
+	class FDeterministicRandom
+	{
+		FDeterministicRandom(uint32 Seed)
+		{
+			State = Seed;
+		}
+
+		uint32 Next()
+		{
+			State = State * uint32(1664525) + uint32(1013904223);
+			return State;
+		}
+
+		uint32 NextBelow(uint32 Upper)
+		{
+			return Upper == 0 ? 0 : Next() % Upper;
+		}
+
+		private uint32 State;
+	}
+}

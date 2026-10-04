@@ -1,0 +1,36 @@
+// Configure macros before import; dependencies share this environment.
+#ifndef VAS_ARENA_VERBOSE
+#define VAS_ARENA_VERBOSE 1
+#endif
+import Arena.Demo;
+#include "Arena/Demo.vas"
+#include <Arena/Demo.vas>
+
+int32 main()
+{
+	array<string>@ Args = getCommandLineArgs();
+	if (Args.length() == 0)
+	{
+		return Arena::RunDemo(true);
+	}
+	if (Args.length() == 1 && Args[0] == "--quiet")
+	{
+		return Arena::RunDemo(false);
+	}
+	if (Args.length() == 1 && Args[0] == "--self-test")
+	{
+		return Arena::AreSelfTestsPassing() ? 0 : 1;
+	}
+	if (Args.length() == 2 && Args[0] == "--batch")
+	{
+		uint32 ParsedCharacters = 0;
+		uint64 Count = parseUInt(Args[1], 10, ParsedCharacters);
+		if (ParsedCharacters == Args[1].length() && Count >= 1 && Count <= 100000)
+		{
+			Arena::RunBatch(uint32(Count));
+			return 0;
+		}
+	}
+	println("用法：vasrun main.vas [--quiet | --self-test | --batch 1..100000]");
+	return 2;
+}

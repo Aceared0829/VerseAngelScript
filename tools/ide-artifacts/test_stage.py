@@ -2,6 +2,7 @@
 import contextlib
 import io
 import json
+import re
 from pathlib import Path
 import stat
 import struct
@@ -46,13 +47,17 @@ def raw_named_zip(name, local_name=None):
     return bytes(data)
 
 
+VSCODE_VERSION = stage.read_json(stage.ROOT / "tools/vscode-extension/package.json")["version"]
+RIDER_VERSION = re.search(r'^version = "([^\"]+)"$', (stage.ROOT / "tools/rider-plugin/build.gradle.kts").read_text(), re.M)[1]
+
+
 def vscode_entries():
     root = stage.ROOT / "tools/vscode-extension"
     entries = [(f"extension/{name}", (root / name).read_bytes()) for name in (
         "LICENSE.md", "package.json", "language-configuration.json", "syntaxes/vas.tmLanguage.json", "snippets/vas.code-snippets")]
     entries += [("extension/readme.md", (root / "README.md").read_bytes())]
     entries += [(f"extension/src/{p.name}", p.read_bytes()) for p in (root / "src").glob("*.js")]
-    entries += [("[Content_Types].xml", b"<Types/>"), ("extension.vsixmanifest", b'<PackageManifest xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011"><Metadata><Identity Version="0.1.0"/></Metadata></PackageManifest>')]
+    entries += [("[Content_Types].xml", b"<Types/>"), ("extension.vsixmanifest", f'<PackageManifest xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011"><Metadata><Identity Version="{VSCODE_VERSION}"/></Metadata></PackageManifest>'.encode())]
     return entries
 
 
@@ -62,9 +67,9 @@ def rider_entries():
                for p in (root / "src/main/resources").rglob("*") if p.is_file() and p.name != "plugin.xml"]
     entries += [(p.relative_to(root / "src/main/java").with_suffix(".class").as_posix(), b"synthetic-class")
                 for p in (root / "src/main/java").rglob("*.java")]
-    entries += [("META-INF/plugin.xml", b'<idea-plugin><id>com.verseangelscript.language</id><version>0.5.6</version><idea-version since-build="262" until-build="262.*"/></idea-plugin>')]
+    entries += [("META-INF/plugin.xml", f'<idea-plugin><id>com.verseangelscript.language</id><version>{RIDER_VERSION}</version><idea-version since-build="262" until-build="262.*"/></idea-plugin>'.encode())]
     prefix = "verse-angelscript-rider/lib/"
-    return [(prefix + "verse-angelscript-rider-0.5.6.jar", zipped(entries)),
+    return [(prefix + f"verse-angelscript-rider-{RIDER_VERSION}.jar", zipped(entries)),
             # The official Gson 2.13.2 JAR also ships this consumer ProGuard file.
             (prefix + "gson-2.13.2.jar", zipped([("com/google/gson/Gson.class", b"synthetic-class"),
                                                 ("META-INF/proguard/gson.pro", b"-keepattributes Signature\n")])),
@@ -148,7 +153,7 @@ class StageTests(unittest.TestCase):
 
     def test_vscode_only_current_production_bytes(self):
         entries = vscode_entries()
-        self.assertEqual(stage.vscode_package(zipped(entries)), ("0.1.0", {"vscodeEngine": "^1.96.0"}))
+        self.assertEqual(stage.vscode_package(zipped(entries)), (VSCODE_VERSION, {"vscodeEngine": "^1.96.0"}))
         for member in ("extension/test/private.js", "extension/.env", "extension/node_modules/sdk/index.js", "private.key"):
             with self.subTest(member=member), self.assertRaisesRegex(ValueError, "payload"):
                 stage.vscode_package(zipped(entries + [(member, b"private")]))
@@ -174,7 +179,7 @@ class StageTests(unittest.TestCase):
 
     def test_gson_proguard_entry_is_allowed_only_in_gson(self):
         entries = rider_entries()
-        self.assertEqual(stage.rider_package(zipped(entries))[0], "0.5.6")
+        self.assertEqual(stage.rider_package(zipped(entries))[0], RIDER_VERSION)
         # Do not broaden this exception to unrelated ProGuard data or another JAR.
         for index, member in ((1, "META-INF/proguard/private.pro"),
                               (1, "META-INF/private.txt"),

@@ -10,6 +10,15 @@ import static org.junit.Assert.assertTrue;
 
 public final class VasSymbolScannerTest {
     @Test
+    public void retainsLegacyFunctionImportsAlongsideModuleImportsAndMacros() {
+        var symbols = VasSymbolScanner.scan("import Arena.Math;\n#define VALUE 3\nimport int Host(int Value) from \"Native\";\nint Main() { return Host(1); }");
+        assertSymbol(symbols, "Host", VasSymbolKind.FUNCTION);
+        assertFalse(symbols.stream().filter(symbol -> symbol.name().equals("Host")).findFirst().orElseThrow().definition());
+        assertFalse(symbols.stream().anyMatch(symbol -> symbol.name().equals("Arena")));
+        assertEquals("VALUE", VasMacroScanner.scan("\"#define FALSE 1\"; // #define BAD 2\n#define VALUE 3\n").getFirst().name());
+    }
+
+    @Test
     public void discoversTypesFunctionsFieldsAndLocals() {
         String source = """
             namespace Gameplay {

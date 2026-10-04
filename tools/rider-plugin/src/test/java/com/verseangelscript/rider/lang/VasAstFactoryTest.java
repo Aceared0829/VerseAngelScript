@@ -22,11 +22,13 @@ public final class VasAstFactoryTest {
     }
 
     @Test
-    public void extractsOnlyQuotedIncludePaths() {
+    public void extractsQuotedAngleAndModulePaths() {
         assertEquals("shared/math.vas", VasIncludeReference.extractIncludePath(
             "  #include \"shared/math.vas\""
         ));
-        assertNull(VasIncludeReference.extractIncludePath("#include <shared/math.vas>"));
+        assertEquals("shared/math.vas", VasIncludeReference.extractIncludePath("#include <shared/math.vas>"));
+        assertEquals("Arena/Demo.vas", VasIncludeReference.extractIncludePath("import Arena.Demo;"));
+        assertNull(VasIncludeReference.extractIncludePath("import int Fn() from \"module\";"));
         assertNull(VasIncludeReference.extractIncludePath("#define path \"math.vas\""));
         assertEquals("shared/math.vas", VasIncludeReference.extractIncludePath("#include'shared/math.vas'"));
         assertEquals("shared/math.vas", VasIncludeReference.extractIncludePath("#include\"shared/math.vas\""));

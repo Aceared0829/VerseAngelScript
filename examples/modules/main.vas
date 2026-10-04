@@ -1,0 +1,72 @@
+// 三种写法共用加载与去重：math 只编译一次。
+#define DEMO_BASE 10
+import math;
+#include "math.vas"
+#include <math.vas>
+
+void main()
+{
+    int result = add(20, 22);
+    int result2 = add(50, 22);
+
+    println("=== VAS print / println 示例 ===");
+    println();
+
+    // 1. println 自动换行，可以直接输出数字和布尔值。
+    println("[直接输出]");
+    println(72);
+    println(result2);
+    println(1.25);
+    println(true);
+    println();
+
+    // 2. print 不自动换行，连续调用的内容会接在同一行。
+    print("[连续输出] result2 = ");
+    print(result2);
+    print("，这一句仍在同一行。");
+    println();
+    println();
+
+    // 3. 这里的整数变量用拼接和占位符写法，输出相同。
+    // 格式化写法省去拼接中间串，较长内容优先用这一种。
+    println("[字符串拼接 / 占位符]");
+    println("ABC + " + result2 + " ASDA");
+    println("ABC + {} ASDA", result2);
+    println("20 + 22 = {}，50 + 22 = {}", result, result2);
+
+    // print 也支持这两种写法，只是不追加换行。
+    print("ABC + " + result2 + " ASDA");
+    print(" | ABC + {} ASDA", result2);
+    println();
+    println();
+
+    // 4. 格式规格：补零、十六进制、保留小数位、字符串对齐。
+    println("[格式化]");
+    println("十进制补零：{:04d}，十六进制：{:04X}", result2, result2);
+    println("保留两位小数：{:.2f}", 3.14159);
+    println("右对齐：|{:>8}|", "VAS");
+    println();
+
+    // 5. 格式串中的字面花括号需要转义，参数中的花括号不需要。
+    println("[花括号]");
+    println("字面花括号：{{value}}");
+    println("参数内容：{}", "{value}");
+
+    // {} 必须传对应参数；不能省略 result2，也不会自动捕获变量。
+    // 字面量格式错误会在编译期被拒绝，下面两句取消注释即可查看诊断。
+    // println("result = {}");
+    // println("result = {:d}", "text");
+    println();
+    println("[模块导入 / 宏自动导出]");
+    println("来自 {}：{} v{}", MODULE_SOURCE, MATH_LABEL, MATH_VERSION);
+    println("函数宏：{} + {} = {}", result2, DEMO_BASE, MATH_ADD(result2, DEMO_BASE));
+    println("传递导出的宏：DEMO_OFFSET = {}", DEMO_OFFSET);
+#if defined(MATH_VERSION) && MATH_VERSION >= 1
+    println("导入后的宏也能用于条件编译。");
+#else
+#error math 模块的宏未导出
+#endif
+    // 同名同定义允许重复；不同定义会报错，并给出原定义位置。
+    // #define MATH_VERSION 2
+    println("=== 示例结束，result2 = {} ===", result2);
+}

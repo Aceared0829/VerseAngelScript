@@ -409,6 +409,11 @@ enum asEFuncType
 
 typedef void (*asFUNCTION_t)();
 typedef void (*asGENFUNC_t)(asIScriptGeneric *);
+// Host opt-in build-time validation. Null text denotes a non-literal format.
+// Return a negative value and a NUL-terminated diagnostic to reject the call.
+typedef int (*asFORMATSTRINGVALIDATOR_t)(const char *text, asUINT length,
+                                       const int *argumentTypes, asUINT argumentCount,
+                                       char *error, asUINT errorCapacity, void *userParam);
 typedef void *(*asALLOCFUNC_t)(size_t);
 typedef void (*asFREEFUNC_t)(void *);
 typedef void (*asCLEANENGINEFUNC_t)(asIScriptEngine *);
@@ -1182,6 +1187,8 @@ public:
 	virtual bool             IsExplicit() const = 0;
 	virtual bool             IsProperty() const = 0;
 	virtual bool             IsVariadic() const = 0;
+	virtual int              SetFormatStringValidator(asFORMATSTRINGVALIDATOR_t validator, void *userParam = 0) = 0;
+	virtual asFORMATSTRINGVALIDATOR_t GetFormatStringValidator() const = 0;
 	virtual asUINT           GetParamCount() const = 0;
 	virtual int              GetParam(asUINT index, int *typeId, asDWORD *flags = 0, const char **name = 0, const char **defaultArg = 0) const = 0;
 	virtual int              GetReturnTypeId(asDWORD *flags = 0) const = 0;

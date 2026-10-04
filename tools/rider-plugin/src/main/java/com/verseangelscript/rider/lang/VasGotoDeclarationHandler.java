@@ -48,10 +48,17 @@ public final class VasGotoDeclarationHandler implements GotoDeclarationHandler {
             PsiElement includeTarget = VasIncludeReference.resolveTarget(navigationElement);
             if (includeTarget != null) {
                 targets.add(includeTarget);
+            } else {
+                String text = navigationElement.getText();
+                int start = Math.max(0, Math.min(text.length(), offset - navigationElement.getTextOffset())), end = start;
+                while (start > 0 && Character.isJavaIdentifierPart(text.charAt(start - 1))) start--;
+                while (end < text.length() && Character.isJavaIdentifierPart(text.charAt(end))) end++;
+                if (end > start) targets.addAll(VasSymbolResolver.findMacroDeclarations(
+                    navigationElement.getContainingFile(), text.substring(start, end)));
             }
         }
         if (targets.isEmpty() && elementType == VasTypes.IDENTIFIER) {
-            targets.addAll(VasSymbolResolver.findDeclarations(navigationElement));
+            targets.addAll(VasSymbolResolver.findNavigationDeclarations(navigationElement));
         }
         return targets.isEmpty() ? null : targets.toArray(PsiElement.EMPTY_ARRAY);
     }

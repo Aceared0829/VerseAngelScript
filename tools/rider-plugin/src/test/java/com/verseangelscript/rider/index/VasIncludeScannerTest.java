@@ -63,7 +63,7 @@ public final class VasIncludeScannerTest {
 
     @Test
     public void directivesMustHaveExactNamesAndQuotedNonemptyPaths() {
-        for (String source : List.of("#include", "#include<api.vas>", "#include api.vas",
+        for (String source : List.of("#include", "#include api.vas",
             "#include ''", "#include \"\"", "#include_more 'api.vas'", "# include 'api.vas'")) {
             VasIncludeScanner.Result result = VasIncludeScanner.scan(source);
             assertFalse(source, result.complete());
@@ -143,6 +143,21 @@ public final class VasIncludeScannerTest {
         }
         assertFalse(VasIncludeScanner.scan("#include \uFEFF'api.vas'").complete());
         assertTrue(VasIncludeScanner.scan("int 😀value;\n#include 'api.vas'").complete());
+    }
+
+    @Test
+    public void moduleImportsAndAngleIncludesShareDependencyExtraction() {
+        String source = "import math;\nimport pkg /*comment*/ . tool;\n#include <api.vas>\n";
+        VasIncludeScanner.Result result = VasIncludeScanner.scan(source);
+        assertTrue(result.complete());
+        assertEquals(List.of("math.vas", "pkg/tool.vas", "api.vas"), paths(result));
+        assertEquals(VasIncludeScanner.Kind.MODULE, result.includes().getFirst().kind());
+        assertEquals(VasIncludeScanner.Kind.SYSTEM, result.includes().getLast().kind());
+        assertEquals("math", source.substring(result.includes().getFirst().pathStart(), result.includes().getFirst().pathEnd()));
+        assertTrue(VasIncludeScanner.scan("import pkg.; import 2bad; import pkg.int;").includes().isEmpty());
+        assertTrue(VasIncludeScanner.scan("import int host(int) from \"other\";").includes().isEmpty());
+        assertFalse(VasIncludeScanner.scan("void main(){ import math; }").complete());
+        assertTrue(VasIncludeScanner.scan("string s = \"import hidden;\"; // import hidden;\n").includes().isEmpty());
     }
 
     private static List<String> paths(VasIncludeScanner.Result result) {

@@ -7,6 +7,8 @@ import sys
 import xml.etree.ElementTree as ET
 
 EDITOR_EXPECTED = {
+    "TypingCompletionParameterHelpAndLiveErrors",
+    "ArenaModulesCompleteNavigateAndHaveSemanticColors",
     "RunsInsideVisualStudio2026ExperimentalHost",
     "ClassifiesUnicodeSpacePathAndReopens",
     "TripleStringsAndNonNestingCommentsUseCanonicalGrammar",

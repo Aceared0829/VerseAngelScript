@@ -12,6 +12,7 @@
 #include "../../common/vas_source_digest.h"
 #include "../../common/vas_build_report.h"
 #include "vas_project.h"
+#include "../../common/vas_format.h"
 #if defined(_MSC_VER)
 #include <crtdbg.h>
 #endif
@@ -25,7 +26,6 @@ int SaveBytecode(asIScriptEngine *engine, const char *outputFile, bool reportMod
 	const vas::Project *project, const vas::CompilationUnit *unit, const vector<string> &sections);
 static bool IsVasScriptFile(const char *filename);
 static int ReportInvalidVasScriptExtension(asIScriptEngine *engine, const char *filename, const char *role);
-static string ResolveIncludePath(const char *include, const char *from);
 static int VasIncludeCallback(const char *include, const char *from, CScriptBuilder *builder, void *userParam);
 
 void MessageCallback(const asSMessageInfo *msg, void *param)
@@ -334,7 +334,7 @@ int ConfigureEngine(asIScriptEngine *engine, const char *configFile)
 	}
 
 	// Configure the engine with the information from the file
-	r = ConfigEngineFromStream(engine, strm, configFile, &stringFactory);
+	r = ConfigEngineFromStream(engine, strm, configFile, &stringFactory, vas::ValidateFormat, engine);
 	if( r < 0 )
 	{
 		engine->WriteMessage(configFile, 0, 0, asMSGTYPE_ERROR, "Configuration failed");
@@ -386,6 +386,7 @@ int CompileScript(asIScriptEngine *engine, const char *scriptFile, vas::BuildRep
 	r = builder.StartNewModule(engine, "build");
 	if( r < 0 ) return -1;
 	builder.SetIncludeCallback(VasIncludeCallback, &context);
+	builder.SetMappedMessageCallback(MessageCallback, report);
 
 	r = builder.AddSectionFromFile(scriptFile);
 	if( r < 0 ) return -1;
@@ -434,29 +435,11 @@ static int ReportInvalidVasScriptExtension(asIScriptEngine *engine, const char *
 	return asERROR;
 }
 
-static string ResolveIncludePath(const char *include, const char *from)
-{
-	string includePath = include ? include : "";
-	if( includePath.find_first_of("/\\") != 0 && includePath.find_first_of(":") == string::npos )
-	{
-		string sourcePath = from ? from : "";
-		string::size_type slash = sourcePath.find_last_of("/\\");
-		if( slash != string::npos )
-			sourcePath.resize(slash + 1);
-		else
-			sourcePath = "";
-
-		return sourcePath + includePath;
-	}
-
-	return includePath;
-}
-
 static int VasIncludeCallback(const char *include, const char *from, CScriptBuilder *builder, void *userParam)
 {
 	IncludeContext *context = static_cast<IncludeContext *>(userParam);
 	vas::BuildReport *report = context->report;
-	string resolvedInclude = ResolveIncludePath(include, from);
+	string resolvedInclude = static_cast<vas::ScriptBuilder *>(builder)->ResolveDependency(include, from);
 	std::uint64_t attempt = 0;
 	if( report )
 	{
@@ -470,15 +453,17 @@ static int VasIncludeCallback(const char *include, const char *from, CScriptBuil
 		report->Write(record);
 	}
 
-	bool validExtension = IsVasScriptFile(resolvedInclude.c_str());
-	int result = validExtension ?
+	bool resolved = !resolvedInclude.empty();
+	if (!resolved) context->engine->WriteMessage(from, 0, 0, asMSGTYPE_ERROR, static_cast<vas::ScriptBuilder *>(builder)->GetResolutionError().c_str());
+	bool validExtension = resolved && IsVasScriptFile(resolvedInclude.c_str());
+	int result = !resolved ? -1 : validExtension ?
 		static_cast<vas::ScriptBuilder *>(builder)->AddSectionFromFile(resolvedInclude.c_str()) :
 		ReportInvalidVasScriptExtension(context->engine, resolvedInclude.c_str(), "included script");
 	if( report )
 	{
 		vas::BuildReportRecord record = report->Record("include_result");
 		record.Number("attemptSeq", attempt);
-		record.Text("status", !validExtension ? "rejected" : result < 0 ? "failed" : result == 0 ? "skipped" : "loaded");
+		record.Text("status", !resolved ? "failed" : !validExtension ? "rejected" : result < 0 ? "failed" : result == 0 ? "skipped" : "loaded");
 		report->Write(record);
 	}
 	return result;

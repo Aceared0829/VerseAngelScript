@@ -71,6 +71,61 @@ public final class VasRiderSolutionIntegrationTest extends PerTestSolutionTestBa
 
     @Test
     @Tag("season/vas")
+    void navigatesAndIndexesArenaModulesWithExportedMacros() {
+        Project project = getSolutionApiFacade().getProject();
+        Path sourceDirectory = getSolutionApiFacade().getActiveSolutionDirectory().resolve("src/arena");
+        ApplicationManager.getApplication().runReadAction(() -> {
+            PsiFile main = fixture(project, sourceDirectory, "main.vas");
+            PsiFile demo = fixture(project, sourceDirectory, "Arena/Demo.vas");
+            PsiFile config = fixture(project, sourceDirectory, "Arena/Config.vas");
+            assertProjectIndexedFile(project, demo, "RunDemo");
+            assertProjectIndexedFile(project, config, "VAS_ARENA_MAX_ROUNDS");
+            var symbols = new VasGotoSymbolContributor();
+            assertTrue(List.of(symbols.getNames(project, false)).contains("RunDemo"));
+            assertTrue(symbols.getItemsByName("RunDemo", "RunDemo", project, false).length > 0);
+            assertTrue(symbols.getItemsByName("VAS_ARENA_MAX_ROUNDS", "VAS_ARENA_MAX_ROUNDS", project, false).length > 0);
+            assertEquals(8, VasSymbolResolver.inspectDependencyClosure(main).includedFiles().size());
+            PsiElement imported = main.findElementAt(main.getText().indexOf("import Arena.Demo"));
+            assertEquals(demo, new VasDirectNavigationProvider().getNavigationElement(imported));
+            PsiElement runDemo = main.findElementAt(main.getText().indexOf("RunDemo("));
+            PsiElement target = new VasDirectNavigationProvider().getNavigationElement(runDemo);
+            assertNotNull(target, "macro/conditional directives must not erase known navigation candidates");
+            assertEquals(demo, target.getContainingFile());
+            assertEquals("RunDemo", target.getText());
+            assertTrue(VasSymbolResolver.findDeclarations(runDemo).isEmpty(), "rename coverage remains conservative");
+            PsiElement runBatch = demo.findElementAt(demo.getText().indexOf("RunBatch("));
+            var manager = ((com.intellij.find.impl.FindManagerImpl)com.intellij.find.FindManager.getInstance(project)).getFindUsagesManager();
+            var handler = manager.getFindUsagesHandler(runBatch, false);
+            assertNotNull(handler, "native Find Usages must have a VAS handler");
+            assertTrue(handler instanceof VasFindUsagesHandlerFactory.Handler, "the registered native handler must serve VAS");
+            var options = handler.getFindUsagesOptions(); options.searchScope = GlobalSearchScope.projectScope(project);
+            var usages = new java.util.ArrayList<com.intellij.usageView.UsageInfo>();
+            assertTrue(handler.processElementUsages(runBatch, info -> { usages.add(info); return true; }, options));
+            assertEquals(1, usages.size(), "RunBatch has one source usage even when imported modules contain macros");
+            assertEquals(main, usages.getFirst().getFile());
+            assertEquals(main.getText().indexOf("RunBatch("), usages.getFirst().getNavigationOffset());
+            assertEquals("1 usage", new VasReferencesCodeVisionProvider().getHint(runBatch, demo));
+            assertEquals(List.of("main"), VasSymbolResolver.findCallers(runBatch).stream().map(PsiElement::getText).toList());
+            PsiElement call = main.findElementAt(main.getText().indexOf("RunBatch("));
+            assertTrue(new VasFindUsagesProvider().canFindUsagesFor(call));
+            var callHandler = manager.getFindUsagesHandler(call, false);
+            assertNotNull(callHandler, "Find Usages must also work from a call, not only its declaration");
+            assertEquals(runBatch, callHandler.getPsiElement());
+            PsiFile combatant = fixture(project, sourceDirectory, "Arena/Combatant.vas");
+            assertTrue(VasSymbolResolver.navigationFiles(combatant).stream().anyMatch(file -> file.equals(config)));
+            assertTrue(VasSymbolResolver.navigationFiles(main).stream().anyMatch(file -> file.equals(combatant)));
+            assertProjectIndexedFile(project, combatant, "FCombatant");
+            assertProjectIndexedFile(project, combatant, "Warrior");
+            var role = combatant.findElementAt(combatant.getText().indexOf("Warrior, 90"));
+            var roleTarget = new VasDirectNavigationProvider().getNavigationElement(role);
+            assertNotNull(roleTarget);
+            assertEquals("Warrior", roleTarget.getText());
+            assertTrue(roleTarget.getTextOffset() < role.getTextOffset());
+        });
+    }
+
+    @Test
+    @Tag("season/vas")
     void resolvesNestedIncludeAndDeclarationInOpenedRiderSolution() {
         Project project = getSolutionApiFacade().getProject();
         assertFalse(project.isDefault(), "the Rider solution must be opened before navigation is tested");
@@ -234,6 +289,10 @@ public final class VasRiderSolutionIntegrationTest extends PerTestSolutionTestBa
             PsiElement ambiguous = markedIdentifier(api, "rename-ambiguous-declaration");
             assertTrue(ReferencesSearch.search(ambiguous).findAll().isEmpty(),
                 "an ambiguous call must not be claimed as a usage of either overload");
+            var ambiguousUsages = new java.util.ArrayList<PsiElement>();
+            com.verseangelscript.rider.index.VasUsageSearch.process(ambiguous, GlobalSearchScope.projectScope(project),
+                usage -> { ambiguousUsages.add(usage); return true; });
+            assertTrue(ambiguousUsages.isEmpty(), "read-only usage lookup must also retain overload ambiguity");
             String sourceBefore = source.getText();
             String apiBefore = api.getText();
             RuntimeException rejection = assertThrows(RuntimeException.class,

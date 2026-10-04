@@ -37,6 +37,7 @@ import com.jetbrains.rider.test.enums.sdk.SdkVersion;
 import com.jetbrains.rider.test.junit5.base.PerTestSolutionTestBase;
 import com.verseangelscript.rider.VasLanguage;
 import com.verseangelscript.rider.build.VasSettingsState;
+import com.verseangelscript.rider.build.VasToolchainSettings;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -62,6 +63,59 @@ public final class VasRiderTrustIntegrationTest extends PerTestSolutionTestBase 
         parameters.setWaitForCaches(true);
         parameters.setWaitForSolutionBuilder(true);
         parameters.setRestoreNuGetPackages(false);
+    }
+
+    @Test
+    @Tag("season/vas")
+    void usesApplicationCompilerWithUnsavedModuleAndIncludeSnapshots() throws Exception {
+        String compiler = System.getenv("VAS_TEST_COMPILER"), config = System.getenv("VAS_TEST_CONFIG");
+        org.junit.jupiter.api.Assumptions.assumeTrue(compiler != null && config != null, "Set native compiler/config to verify real background compilation");
+        Project project = getSolutionApiFacade().getProject();
+        Path root = getSolutionApiFacade().getActiveSolutionDirectory();
+        VirtualFile main = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(root.resolve("src/arena/main.vas"));
+        VirtualFile demo = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(root.resolve("src/arena/Arena/Demo.vas"));
+        assertNotNull(main); assertNotNull(demo);
+        PsiFile mainPsi = ReadAction.computeBlocking(() -> PsiManager.getInstance(project).findFile(main));
+        PsiFile demoPsi = ReadAction.computeBlocking(() -> PsiManager.getInstance(project).findFile(demo));
+        var documents = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance();
+        Document mainDocument = ReadAction.computeBlocking(() -> documents.getDocument(main));
+        Document demoDocument = ReadAction.computeBlocking(() -> documents.getDocument(demo));
+        String beforeMain = mainDocument.getText(), beforeDemo = demoDocument.getText();
+        byte[] beforeMainBytes = Files.readAllBytes(Path.of(main.getPath()));
+        var settings = VasSettingsState.getInstance(project); var app = VasToolchainSettings.getInstance();
+        String previousBuilder = settings.builderPath, previousConfig = settings.configPath, previousCompiler = app.compilerPath;
+        Disposable lifetime = Disposer.newDisposable("Native VAS editing snapshots");
+        try {
+            EdtTestUtil.runInEdtAndWait(() -> {
+                TrustedPaths isolatedTrust = new TrustedPaths(); isolatedTrust.loadState(TrustedPaths.getInstance().getState());
+                ServiceContainerUtil.replaceService(ApplicationManager.getApplication(), TrustedPaths.class, isolatedTrust, lifetime);
+                setTrust(project, true); settings.builderPath = ""; settings.configPath = config; app.compilerPath = compiler;
+                replaceText(project, mainDocument, beforeMain.replace("return 2;", "return MissingEditorName;"));
+            });
+            var annotator = registeredAnnotator();
+            var request = ReadAction.computeBlocking(() -> annotator.collectInformation(mainPsi));
+            var result = annotator.doAnnotate(request);
+            assertNotNull(result);
+            assertTrue(result.diagnostics().stream().anyMatch(d -> d.message().contains("MissingEditorName")), result.diagnostics().toString());
+            EdtTestUtil.runInEdtAndWait(() -> {
+                replaceText(project, mainDocument, beforeMain);
+                replaceText(project, demoDocument, beforeDemo + "\nvoid BrokenForEditor() { UnknownEditorCall(); }\n");
+            });
+            var moduleRequest = ReadAction.computeBlocking(() -> annotator.collectInformation(demoPsi));
+            var moduleResult = annotator.doAnnotate(moduleRequest);
+            assertNotNull(moduleResult);
+            assertTrue(moduleResult.diagnostics().stream().anyMatch(d -> d.message().contains("UnknownEditorCall")), moduleResult.diagnostics().toString());
+            EdtTestUtil.runInEdtAndWait(() -> replaceText(project, demoDocument, beforeDemo));
+            var fixed = annotator.doAnnotate(ReadAction.computeBlocking(() -> annotator.collectInformation(mainPsi)));
+            assertNotNull(fixed); assertTrue(fixed.diagnostics().isEmpty(), fixed.diagnostics().toString());
+            assertArrayEquals(beforeMainBytes, Files.readAllBytes(Path.of(main.getPath())), "native snapshot must not save the editor document");
+        } finally {
+            EdtTestUtil.runInEdtAndWait(() -> {
+                replaceText(project, mainDocument, beforeMain); replaceText(project, demoDocument, beforeDemo);
+                settings.builderPath = previousBuilder; settings.configPath = previousConfig; app.compilerPath = previousCompiler;
+                Disposer.dispose(lifetime);
+            });
+        }
     }
 
     @Test
