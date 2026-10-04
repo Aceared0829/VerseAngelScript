@@ -321,6 +321,8 @@ async function main() {
         // Test extension dirty-input guards with deterministic unsaved editors.
         // The workbench's own save-before-run must not clear the test condition.
         'task.saveBeforeRun': 'never', 'files.autoSave': 'off',
+        // Project-command process audits are separate from live editing checks below.
+        'vas.liveDiagnostics': false,
         'vas.compilerPath': process.env.VAS_TEST_COMPILER,
         'vas.runnerPath': process.env.VAS_TEST_RUNNER
       });
