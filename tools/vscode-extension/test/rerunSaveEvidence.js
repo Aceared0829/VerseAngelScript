@@ -10,7 +10,7 @@ const { documentDigest, readVersion } = require('../src/projectVersions');
 // A receipt inside this willSave epoch must observe the exact saved version;
 // it is not evidence that the OS attached this callback to a particular write.
 class RerunSaveEvidence {
-  constructor({ files, version, text, before, read = readVersion, onReceipt }) {
+  constructor({ files, version, text, before, read = readVersion, onReceipt, watcherId }) {
     const bytes = Buffer.from(text, 'utf8');
     assert.ok(bytes.length <= 64 * 1024, 'rerun audit fixture must remain small');
     this.expected = { version, documentDigest: documentDigest(text), byteLength: bytes.length,
@@ -18,6 +18,8 @@ class RerunSaveEvidence {
     assert.ok(this.expected.documentDigest, 'rerun text must be valid Unicode');
     assert.equal(before.kind, 'readable');
     assert.notEqual(before.digest, this.expected.digest, 'this rerun must save changed bytes, not a no-op');
+    assert.ok(watcherId === undefined || (Number.isSafeInteger(watcherId) && watcherId > 0), 'Invalid ready watcher identity');
+    this.watcherId = watcherId;
     this.files = files; this.read = read; this.onReceipt = onReceipt;
     this.events = []; this.pending = new Set(); this.cancel = { cancelled: false };
     this.budget = { bytes: 0 }; // readVersion bounds each read and the aggregate.
@@ -40,6 +42,7 @@ class RerunSaveEvidence {
   }
   observed(event) {
     if (this.cancel.cancelled || !this.will || event.order <= this.will.order ||
+      (this.watcherId !== undefined && event.watcherId !== this.watcherId) ||
       !['change', 'create'].includes(event.kind) || !this.files.some(file => sameFileName(file, event.path))) return;
     if (this.events.length >= 64) { this.error = new Error('Rerun saved-notification audit limit exceeded'); return; }
     const receipt = { ...event };
@@ -91,7 +94,7 @@ class RerunSaveEvidence {
       'observed editor path must still be the actual compiler section physical file');
     return events;
   }
-  snapshot() { return { expected: this.expected, will: this.will, saved: this.saved, events: this.events, error: this.error?.message }; }
+  snapshot() { return { expected: this.expected, watcherId: this.watcherId, will: this.will, saved: this.saved, events: this.events, error: this.error?.message }; }
   async dispose() { this.cancel.cancelled = true; await this.settle(); }
 }
 

@@ -2,6 +2,8 @@
 
 这是 VAS（Verse AngelScript）的 JetBrains Rider 插件源码工程，目标版本为 Rider 2026.2（Build 262）。
 
+当前三端能力、独立编译器设置和工程构建步骤见 [安装与使用指南](../../docs/ide-setup.md)。下述补全/引用等编辑能力采用启发式解析，不是编译器级语义服务。
+
 ## 已实现
 
 - 将小写 `.vas` 注册为 VAS 源文件。
@@ -18,11 +20,11 @@
 
 ## 构建
 
-本机安装 Rider 时：
+需要 Java 25。使用已安装的 Rider Build 262 时，在本目录运行：
 
 ```powershell
-$env:JAVA_HOME = 'C:\Program Files\JetBrains\JetBrains Rider 261.20362.35\jbr'
-.\gradlew.bat buildPlugin -PriderPath='C:\Program Files\JetBrains\JetBrains Rider 261.20362.35'
+$env:JAVA_HOME = 'C:\Path\To\JDK-25'
+.\gradlew.bat buildPlugin -PriderPath='C:\Path\To\Rider-262'
 ```
 
 未指定 `riderPath` 时，Gradle 会从 JetBrains 仓库获取 Rider 2026.2.0.2。
@@ -37,7 +39,7 @@ $env:JAVA_HOME = 'C:\Program Files\JetBrains\JetBrains Rider 261.20362.35\jbr'
 
 **Settings | Plugins | 齿轮菜单 | Install Plugin from Disk**
 
-选择 `VerseAngelScript-Rider-Plugin-0.5.6.zip` 后重启 Rider。仓库同时会在 `plugins/rider` 保留一份可直接安装的插件包。
+选择本次 `build/distributions` 生成的 ZIP 后按提示重启 Rider。仓库 `plugins/rider/VerseAngelScript-Rider-Plugin-0.5.6.zip` 是较早的已检入包，不能代表当前源码；源码版本号未变也不表示包内容相同。也可使用目标提交对应的完整成功 CI 运行所附安装产物（保留 7 天）；核对其中 manifest 与 SHA-256，解压 Actions 外层包后选择内部插件 ZIP。
 
 ## 后台诊断与项目安全
 

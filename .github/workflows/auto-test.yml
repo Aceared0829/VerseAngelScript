@@ -137,6 +137,8 @@ jobs:
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v4
+    - name: Validate install artifact staging
+      run: python -B -m unittest discover -s tools/ide-artifacts -p test_stage.py
     - name: validate Rider project fixture
       shell: powershell
       run: python tools/rider-plugin/scripts/check-project-fixture.py
@@ -178,6 +180,17 @@ jobs:
         if ($gradleExitCode -ne 0) { exit $gradleExitCode }
         if ($trustEvidenceExitCode -ne 0) { exit $trustEvidenceExitCode }
         exit $projectEvidenceExitCode
+
+    - name: Stage validated Rider install package
+      id: install_artifact
+      run: python -B tools/ide-artifacts/stage.py --ide rider --output out/ide-install/rider
+    - name: Upload validated Rider install package
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.install_artifact.outputs.name }}
+        path: ${{ steps.install_artifact.outputs.path }}
+        if-no-files-found: error
+        retention-days: 7
 
   Windows_x86-64_Clang-Cl:
     runs-on: windows-latest

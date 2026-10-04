@@ -4,6 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
+const runtimeEvidence = require('./runtimeEvidence');
 const { runtimeForIntegration } = require('./vscodeRuntime');
 
 const projectPaths = {
@@ -254,6 +255,13 @@ async function writeLegacyManifest(workspace, fixture) {
 }
 
 async function main() {
+  const evidenceFile = process.env.VAS_TEST_RUNTIME_EVIDENCE;
+  if (evidenceFile) {
+    await fs.mkdir(path.dirname(evidenceFile), { recursive: true });
+    await fs.rm(evidenceFile, { force: true });
+  }
+  let identity;
+  const passedModes = [];
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vas-vscode-test-'));
   let cleanupRoot = true;
   try {
@@ -298,7 +306,8 @@ async function main() {
     const workspaces = [workspace, secondWorkspace, singleWorkspace];
     // Separate hosts/profiles prevent queued saves, configuration updates and
     // filesystem events from a completed scenario invalidating the next one.
-    for (const mode of ['current', 'project', 'alias-dirty', 'alias-saved', 'user-rerun-alias', 'user-rerun', 'single-root', 'legacy', 'untrusted']) {
+    for (const mode of runtimeEvidence.modes) {
+      if (evidenceFile) await fs.rm(evidenceFile, { force: true });
       if (mode === 'legacy') await writeLegacyManifest(singleWorkspace, singleFixture);
       if (mode === 'untrusted') await writeLegacyManifest(workspace, fixture);
       const userData = path.join(root, mode);
@@ -322,6 +331,8 @@ async function main() {
         `--extensionDevelopmentPath=${path.resolve(__dirname, '..')}`,
         `--extensionTestsPath=${path.join(__dirname, 'integration.js')}`,
         ...(mode !== 'untrusted' ? ['--disable-workspace-trust'] : [])], mode);
+      if (evidenceFile) identity = await runtimeEvidence.readHost(evidenceFile, mode, identity);
+      passedModes.push(mode);
       if (mode === 'single-root') {
         const unit = singleFixture.manifest.compilationUnits[0];
         await fs.copyFile(path.join(singleWorkspace, unit.output),
@@ -331,6 +342,7 @@ async function main() {
       // Retain source/config bytes and hardlinks across alias and legacy modes.
       await removeBuildArtifacts(workspaces);
     }
+    if (evidenceFile) await runtimeEvidence.finish(evidenceFile, identity, process.env.VSCODE_TEST_VERSION || '1.96.4', passedModes);
   } catch (error) {
     cleanupRoot = !error.hostCleanupFailed;
     throw error;

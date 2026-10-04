@@ -5,6 +5,7 @@ on:
     branches: [master]
     paths:
       - 'tools/visualstudio-extension/**'
+      - 'tools/ide-artifacts/**'
       - 'tools/vscode-extension/syntaxes/**'
       - 'tools/vscode-extension/language-configuration.json'
       - 'sdk/samples/asbuild/**'
@@ -19,6 +20,7 @@ on:
     branches: [master]
     paths:
       - 'tools/visualstudio-extension/**'
+      - 'tools/ide-artifacts/**'
       - 'tools/vscode-extension/syntaxes/**'
       - 'tools/vscode-extension/language-configuration.json'
       - 'sdk/samples/asbuild/**'
@@ -49,9 +51,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      - name: Validate install artifact staging
+        run: python -B -m unittest discover -s tools/ide-artifacts -p test_stage.py
       - name: Build native compiler and exercise VS2026 editor and project commands
         shell: pwsh
         run: ./tools/visualstudio-extension/scripts/test-vs2026.ps1
+      - name: Stage validated VS2026 install package
+        id: install_artifact
+        run: python -B tools/ide-artifacts/stage.py --ide vs2026 --output out/ide-install/vs2026
+      - name: Upload validated VS2026 install package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.install_artifact.outputs.name }}
+          path: ${{ steps.install_artifact.outputs.path }}
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload focused test evidence
         if: always()
         uses: actions/upload-artifact@v4

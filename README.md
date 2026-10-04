@@ -61,23 +61,21 @@ VAS 源码 ──实时解析──► 语义模型 ──► 可视化 VAS 二�
 
 也可以直接打开仓库根目录的 `VerseAngelScript.sln`。该解决方案提供 `vasbuild`、`VAS Core`、`VAS Runner` 和 `VAS Tests` 四个统一入口，并复用上述 CMake/MSVC C++23 配置。
 
-## JetBrains Rider 插件
+## IDE 适配：Rider、VS Code、Visual Studio 2026
 
-VS Code 基础扩展源码与安装说明见 [`tools/vscode-extension`](tools/vscode-extension)。三种 IDE 的分阶段目标、真实语义能力边界与验收标准见 [IDE 路线图](docs/ide-roadmap.md)。
+三端当前源码均已实现显式 **Build Project**：独立配置原生 `vasbuild`，读取根目录 `vas-project.json`，确认编译单元，构建已保存输入并显示可导航的编译诊断。
 
-仓库内附带专门的 **Rider 插件**：
+**从这里开始：[三端安装、配置与使用指南](docs/ide-setup.md)**。其中包含宿主范围、源码打包、真实示例、Build/Cancel 和各端信任边界。
 
-- 可安装插件：`plugins/rider/VerseAngelScript-Rider-Plugin-0.5.6.zip`
-- 插件源码：`tools/rider-plugin`
-- Rider 起步项目模板：`templates/rider/vas-starter`
+| IDE | 当前入口 | 详细说明 |
+| --- | --- | --- |
+| Rider 2026.2 / Build 262 | Build → Build VAS Project；VAS Project Build 诊断窗口；保留 Current File Build/Run 与既有编辑服务 | [Rider 源码](tools/rider-plugin/README.md) |
+| VS Code | VAS: Build Project；Problems 与任务终端；保留 Current File Build/Run | [VS Code 扩展](tools/vscode-extension/README.md) |
+| Visual Studio 2026 / 18.x x64 | Tools → Build VAS Project... / Cancel VAS Build；Error List 与 Output | [VS2026 扩展](tools/visualstudio-extension/README.md) |
 
-当前版本面向 Rider 2026.2（Build 262），支持 `.vas` 文件识别、语法高亮、项目符号索引、当前文件及跨文件补全、`#include` 目标跳转、函数/变量/类型声明跳转、查找用法、转到函数实现、由真实 VAS 编译器提供的红色错误/黄色警告波浪线，以及 **Build | Build Current VAS File** 和 **Run | Run Current VAS File**。VAS 项目模板通过 Rider 使用的 .NET 模板系统注册；安装后可在 **New Project** 中搜索 **VAS** 或 **Verse AngelScript Project**。模板内置 Windows x64 构建器、运行器、MSBuild 解决方案和示例项目，创建后即可构建运行。安装方式见 `plugins/rider/README.md`。
+安装可选择目标提交对应的完整成功 CI 运行中的安装产物（保留 7 天），或自行打包；包内 manifest 记录实际源码提交、宿主范围与校验值。仓库中 `plugins/rider/VerseAngelScript-Rider-Plugin-0.5.6.zip` 是较早的已检入包，不能代表当前源码；模板附带的旧工具也不会自动升级。已有 [Rider 起步模板](templates/rider/vas-starter) 可直接打开 `.sln`，Build Project 仍需另选当前源码版编译器。
 
-0.5.0 进一步支持常见函数重载和成员类型解析、类/接口继承实现导航、声明/定义行标、引用数量 Code Vision，以及跨文件符号重命名。
-
-0.5.1 增加 **VAS Callers** 与 **VAS Callees** 调用关系导航。
-
-0.5.6 新增 Rider Solution Host 集成测试：CI 会实际启动 Rider 前后端、打开 `.sln` 测试项目，并验证 `#include` 文件跳转以及跨嵌套 include 的函数声明跳转。
+Rider 现有补全、导航和重命名依赖启发式解析及操作前检查，不等于编译器级语义绑定；VS Code/VS2026 的词法编辑资产也不提供语义补全。当前优先完成三端适配，语义补全及其前置模块暂缓。未实现的 Run Project、LSP/DAP、完整未保存语义与 UE/SDK 目标及历史验收计划见 [IDE 路线图](docs/ide-roadmap.md)。
 
 构建完成后，可按以下方式调用构建器：
 

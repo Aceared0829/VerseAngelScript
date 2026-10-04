@@ -5,6 +5,8 @@ A VSIX for `.vas` editing and explicit native project builds in Visual Studio 20
 pairs, indentation and ordinary editor undo. The extension does not claim `.as`,
 `.cpp`, or the C++ language/content type.
 
+中文安装、源码打包、示例与三端能力矩阵见 [安装与使用指南](../../docs/ide-setup.md)。
+
 ## Build a project
 
 1. Set **Tools → Options → VerseAngelScript → Toolchain → Compiler executable** to

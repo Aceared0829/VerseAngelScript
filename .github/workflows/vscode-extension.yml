@@ -24,9 +24,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       VAS_TEST_REQUIRE_SOURCE_PROOFS: '1'
+      VAS_TEST_RUNTIME_EVIDENCE: ${{ github.workspace }}/out/vscode-runtime.json
       VSCODE_TEST_VERSION: ${{ matrix.vscode }}
     steps:
       - uses: actions/checkout@v4
+      - name: Validate install artifact staging
+        run: python -B -m unittest discover -s tools/ide-artifacts -p test_stage.py
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -75,3 +78,13 @@ jobs:
           VAS_TEST_COMPILER: ${{ github.workspace }}/out/vscode-test/Release/vasbuild.exe
           VAS_TEST_RUNNER: ${{ github.workspace }}/out/vscode-test/Release/vasrun.exe
         run: npm run test:integration
+      - name: Stage validated VS Code install package
+        id: install_artifact
+        run: python -B tools/ide-artifacts/stage.py --ide vscode --output out/ide-install/vscode --requested-version "${{ matrix.vscode }}"
+      - name: Upload validated VS Code install package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.install_artifact.outputs.name }}
+          path: ${{ steps.install_artifact.outputs.path }}
+          if-no-files-found: error
+          retention-days: 7
