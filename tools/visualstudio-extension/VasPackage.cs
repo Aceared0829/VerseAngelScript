@@ -60,6 +60,10 @@ namespace VerseAngelScript.VisualStudio
         [DisplayName("Compiler executable")]
         [Description("Absolute path to your native vasbuild.exe. Project manifests never select an executable.")]
         public string CompilerPath { get; set; } = string.Empty;
+        [Category("Editor")]
+        [DisplayName("Check unsaved code with the compiler")]
+        [Description("Enable background compilation with the explicitly configured compiler. Structural syntax errors are checked without this option.")]
+        public bool LiveDiagnostics { get; set; }
 
         public override void LoadSettingsFromStorage()
         {
@@ -67,6 +71,7 @@ namespace VerseAngelScript.VisualStudio
             var store = new ShellSettingsManager(Site).GetReadOnlySettingsStore(SettingsScope.UserSettings);
             CompilerPath = store.CollectionExists(Collection) && store.PropertyExists(Collection, "CompilerPath")
                 ? store.GetString(Collection, "CompilerPath") : string.Empty;
+            LiveDiagnostics = store.CollectionExists(Collection) && store.PropertyExists(Collection, "LiveDiagnostics") && store.GetBoolean(Collection, "LiveDiagnostics");
         }
         public override void SaveSettingsToStorage()
         {
@@ -74,6 +79,7 @@ namespace VerseAngelScript.VisualStudio
             var store = new ShellSettingsManager(Site).GetWritableSettingsStore(SettingsScope.UserSettings);
             if (!store.CollectionExists(Collection)) store.CreateCollection(Collection);
             store.SetString(Collection, "CompilerPath", CompilerPath ?? string.Empty);
+            store.SetBoolean(Collection, "LiveDiagnostics", LiveDiagnostics);
         }
     }
 }

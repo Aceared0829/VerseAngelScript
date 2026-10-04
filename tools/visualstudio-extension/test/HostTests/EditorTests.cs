@@ -12,6 +12,7 @@ using EnvDTE;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.ComponentModelHost;
 using Microsoft.VisualStudio.Editor;
+using Microsoft.VisualStudio.Language.Intellisense;
 using Microsoft.VisualStudio.OLE.Interop;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
@@ -20,6 +21,9 @@ using Microsoft.VisualStudio.Text.Classification;
 using Microsoft.VisualStudio.Text.BraceCompletion;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
+using Microsoft.VisualStudio.Text.Tagging;
+using Microsoft.VisualStudio.Settings;
+using Microsoft.VisualStudio.Shell.Settings;
 using Xunit;
 using Xunit.Harness;
 
@@ -33,6 +37,135 @@ namespace VerseAngelScript.VisualStudio.Tests
     public sealed class EditorTests : IDisposable
     {
         private const string Source = "// Unicode 注释\r\nvoid Main() {\r\n    int count = 42;\r\n    string title = \"你好 VAS\";\r\n}\r\n";
+
+        [IdeFact(MinVersion = VisualStudioVersion.VS18, MaxVersion = VisualStudioVersion.VS18, RootSuffix = "VASIntegration", MaxAttempts = 1)]
+        public async Task TypingCompletionParameterHelpAndLiveErrors()
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+            const string collection = "VerseAngelScript/Toolchain";
+            var settings = new ShellSettingsManager(ServiceProvider.GlobalProvider).GetWritableSettingsStore(SettingsScope.UserSettings);
+            bool hadCompiler = settings.CollectionExists(collection) && settings.PropertyExists(collection, "CompilerPath");
+            bool hadLive = settings.CollectionExists(collection) && settings.PropertyExists(collection, "LiveDiagnostics");
+            string previousCompiler = hadCompiler ? settings.GetString(collection, "CompilerPath") : "";
+            bool previousLive = hadLive && settings.GetBoolean(collection, "LiveDiagnostics");
+            if (!settings.CollectionExists(collection)) settings.CreateCollection(collection);
+            settings.SetString(collection, "CompilerPath", Environment.GetEnvironmentVariable("VAS_NATIVE_COMPILER")); settings.SetBoolean(collection, "LiveDiagnostics", true);
+            string entry = WriteFixture("editing/editor.vas", "void Main() {}");
+            string examples = Environment.GetEnvironmentVariable("VAS_LANGUAGE_EXAMPLES");
+            string hostConfig = Path.GetFullPath(Path.Combine(examples, "../../sdk/samples/asbuild/bin/config.txt"));
+            string config = Path.Combine(Path.GetDirectoryName(entry), ".vas", "vasbuild.config.txt"); Directory.CreateDirectory(Path.GetDirectoryName(config)); File.Copy(hostConfig, config, true);
+            try {
+                using (var editor = Open(entry)) {
+                    var components = (IComponentModel)Package.GetGlobalService(typeof(SComponentModel));
+                    var completions = components.GetService<ICompletionBroker>(); var signatures = components.GetService<ISignatureHelpBroker>();
+                    using (var errors = components.GetService<IViewTagAggregatorFactoryService>().CreateTagAggregator<IErrorTag>(editor.View)) {
+                        Action<string> replace = text => {
+                            foreach (var completion in completions.GetSessions(editor.View)) completion.Dismiss();
+                            foreach (var signature in signatures.GetSessions(editor.View)) signature.Dismiss();
+                            using (var edit = editor.View.TextBuffer.CreateEdit()) { edit.Replace(0, editor.Text.Length, text); edit.Apply(); } editor.End();
+                        };
+                        Func<string, Task> waitError = async message => {
+                            for (int attempt = 0; attempt < 100; attempt++) {
+                                var span = new SnapshotSpan(editor.View.TextBuffer.CurrentSnapshot, 0, editor.Text.Length);
+                                if (errors.GetTags(span).Any(t => (t.Tag.ToolTipContent?.ToString() ?? "").Contains(message))) return;
+                                await Task.Delay(100);
+                            }
+                            Assert.Fail("Expected live squiggle: " + message);
+                        };
+                        string prefix = "int CalculateScore(int Left, int Right) { return Left + Right; }\nvoid Main() { Calcu";
+                        replace(prefix); await Task.Delay(250); await editor.ExecuteCommandAsync("Edit.ListMembers");
+                        var session = completions.GetSessions(editor.View).Single(); var set = session.CompletionSets.Single(s => s.Moniker == "VAS");
+                        var item = set.Completions.Single(c => c.DisplayText == "CalculateScore");
+                        session.SelectedCompletionSet = set; set.SelectionStatus = new CompletionSelectionStatus(item, true, true);
+                        editor.Command(VSConstants.VSStd2KCmdID.TAB);
+                        Assert.EndsWith("CalculateScore()", editor.Text); Assert.Equal(')', editor.Text[editor.View.Caret.Position.BufferPosition.Position]);
+                        await Task.Delay(250); await editor.ExecuteCommandAsync("Edit.ParameterInfo");
+                        var hint = signatures.GetSessions(editor.View).FirstOrDefault(s => s.Signatures.Any(signature => signature.Content.Contains("CalculateScore")));
+                        Assert.NotNull(hint); Assert.Equal(2, hint.Signatures.First(s => s.Content.Contains("CalculateScore")).Parameters.Count);
+                        replace("void Main() {"); await waitError("Expected '}'");
+                        replace("void Main() { int Value = MissingEditorName; }"); await waitError("MissingEditorName");
+                        replace("void Main() { int Value = 1 return; }"); await waitError("Expected");
+                        replace("void Main() { int Value = 1; }"); await Task.Delay(800);
+                        Assert.Empty(errors.GetTags(new SnapshotSpan(editor.View.TextBuffer.CurrentSnapshot, 0, editor.Text.Length)));
+                        File.WriteAllText(Path.Combine(Environment.GetEnvironmentVariable("VAS_TEST_RESULTS"), "vs-editing.json"),
+                            "{\"host\":\"VS18\",\"nativeFunctionCompletion\":true,\"parameterHelp\":true,\"structuralErrors\":true,\"nativeCompilerErrors\":true,\"missingSemicolon\":true,\"clearedErrorsAfterFix\":true}");
+                    }
+                }
+            } finally {
+                if (hadCompiler) settings.SetString(collection, "CompilerPath", previousCompiler); else settings.DeleteProperty(collection, "CompilerPath");
+                if (hadLive) settings.SetBoolean(collection, "LiveDiagnostics", previousLive); else settings.DeleteProperty(collection, "LiveDiagnostics");
+            }
+        }
+
+        [IdeFact(MinVersion = VisualStudioVersion.VS18, MaxVersion = VisualStudioVersion.VS18, RootSuffix = "VASIntegration", MaxAttempts = 1)]
+        public async Task ArenaModulesCompleteNavigateAndHaveSemanticColors()
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+            string examples = Environment.GetEnvironmentVariable("VAS_LANGUAGE_EXAMPLES");
+            Assert.True(Directory.Exists(examples), "Use the actual arena example as the editor fixture.");
+            string entry = null;
+            foreach (string file in Directory.GetFiles(examples, "*.vas", SearchOption.AllDirectories))
+            {
+                string relative = file.Substring(examples.TrimEnd('\\', '/').Length + 1);
+                string copied = WriteFixture("arena/" + relative, File.ReadAllText(file));
+                if (relative == "main.vas") entry = copied;
+            }
+            Assert.NotNull(entry);
+            using (var editor = Open(entry))
+            {
+                await AssertClassificationAsync(editor, "RunDemo", "VAS function");
+                var components = (IComponentModel)Package.GetGlobalService(typeof(SComponentModel));
+                var broker = components.GetService<ICompletionBroker>();
+                int call = editor.Text.IndexOf("RunDemo(", StringComparison.Ordinal);
+                editor.View.Caret.MoveTo(new SnapshotPoint(editor.View.TextBuffer.CurrentSnapshot, call));
+                await editor.ExecuteCommandAsync("Edit.ListMembers");
+                var session = broker.GetSessions(editor.View).Single();
+                // TextMate can contribute separate lexical word guesses. Verify the native VAS declaration set.
+                var names = session.CompletionSets.Single(set => set.Moniker == "VAS").Completions.Select(c => c.DisplayText).ToList();
+                Assert.Contains("RunDemo", names);
+                Assert.Contains("RunBatch", names);
+                Assert.DoesNotContain("VAS_ARENA_MAX_ROUNDS", names);
+                session.Dismiss();
+                editor.View.Caret.MoveTo(new SnapshotPoint(editor.View.TextBuffer.CurrentSnapshot, editor.Text.IndexOf("return 0;", StringComparison.Ordinal)));
+                await editor.ExecuteCommandAsync("Edit.ListMembers");
+                session = broker.GetSessions(editor.View).Single();
+                names = session.CompletionSets.Single(set => set.Moniker == "VAS").Completions.Select(c => c.DisplayText).ToList();
+                Assert.Contains("VAS_ARENA_MAX_ROUNDS", names);
+                Assert.Contains("println", names);
+                session.Dismiss();
+                editor.View.Caret.MoveTo(new SnapshotPoint(editor.View.TextBuffer.CurrentSnapshot, call));
+                await editor.ExecuteCommandAsync("Edit.GoToDefinition");
+                for (int attempt = 0; attempt < 100 && !editor.Dte.ActiveDocument.FullName.EndsWith("Demo.vas", StringComparison.OrdinalIgnoreCase); attempt++) await Task.Delay(100);
+                Assert.EndsWith("Demo.vas", editor.Dte.ActiveDocument.FullName);
+                string demoPath = editor.Dte.ActiveDocument.FullName;
+                using (var demo = Open(demoPath))
+                {
+                    int declaration = demo.Text.IndexOf("RunDemo(", StringComparison.Ordinal);
+                    using (var change = demo.View.TextBuffer.CreateEdit()) { change.Replace(declaration, 7, "RunChangedDemo"); change.Apply(); }
+                    editor.View.Caret.MoveTo(new SnapshotPoint(editor.View.TextBuffer.CurrentSnapshot, call));
+                    for (int attempt = 0; attempt < 100 && editor.HasClassification("RunDemo", "VAS function"); attempt++) await Task.Delay(100);
+                    AssertNoClassification(editor, "RunDemo", "VAS function");
+                    await editor.ExecuteCommandAsync("Edit.ListMembers");
+                    session = broker.GetSessions(editor.View).Single();
+                    names = session.CompletionSets.Single(set => set.Moniker == "VAS").Completions.Select(c => c.DisplayText).ToList();
+                    Assert.Contains("RunChangedDemo", names);
+                    Assert.DoesNotContain("RunDemo", names);
+                    session.Dismiss();
+                }
+                await AssertClassificationAsync(editor, "RunDemo", "VAS function");
+                using (var config = Open(Path.Combine(Path.GetDirectoryName(entry), "Arena", "Config.vas")))
+                    await AssertClassificationAsync(config, "VAS_ARENA_MAX_ROUNDS", "VAS macro");
+                using (var combatant = Open(Path.Combine(Path.GetDirectoryName(entry), "Arena", "Combatant.vas"))) {
+                    int valueUse = combatant.Text.IndexOf("Warrior, 90", StringComparison.Ordinal);
+                    combatant.View.Caret.MoveTo(new SnapshotPoint(combatant.View.TextBuffer.CurrentSnapshot, valueUse));
+                    await combatant.ExecuteCommandAsync("Edit.GoToDefinition");
+                    for (int attempt = 0; attempt < 100 && combatant.View.Caret.Position.BufferPosition.Position >= valueUse; attempt++) await Task.Delay(100);
+                    Assert.True(combatant.View.Caret.Position.BufferPosition.Position < valueUse, "Enum value F12 must navigate to its declaration.");
+                }
+                string results = Environment.GetEnvironmentVariable("VAS_TEST_RESULTS");
+                File.WriteAllText(Path.Combine(results, "vs-language.json"), "{\"host\":\"VS18\",\"fixtureFiles\":9,\"semanticColors\":true,\"completion\":true,\"macroCompletion\":true,\"f12\":true,\"unsavedInvalidation\":true,\"enumNavigation\":true}");
+            }
+        }
 
         [IdeFact(MinVersion = VisualStudioVersion.VS18, MaxVersion = VisualStudioVersion.VS18, RootSuffix = "VASIntegration", MaxAttempts = 1)]
         public async Task RunsInsideVisualStudio2026ExperimentalHost()
@@ -346,6 +479,7 @@ namespace VerseAngelScript.VisualStudio.Tests
                 do
                 {
                     await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                    if (!View.HasAggregateFocus) { Dte.MainWindow.Activate(); window.Activate(); View.VisualElement.Focus(); }
                     var activeResult = textManager.GetActiveView(1, null, out var activeNativeView);
                     var active = ErrorHandler.Succeeded(activeResult) && activeNativeView != null
                         && ReferenceEquals(View, adapters.GetWpfTextView(activeNativeView));

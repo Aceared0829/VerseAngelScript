@@ -19,10 +19,16 @@ internal static class Program
     private static int Main(string[] args)
     {
         if (args.Length >= 2 && args[0] == "--fixture") return Fixture(args[1]);
+        if (args.Length == 1 && args[0] == "--language")
+        {
+            try { LanguageModelTests.Run(Check); LanguageModelTests.Measure(); Console.WriteLine("PASS " + checks + " language assertions"); return 0; }
+            catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+        }
         try
         {
             DescriptorTests(); ReportTests(); PositionTests(); CompilerPathTests(); InputEventTests(); WorkspaceEventTests(); ProcessTests();
             FixtureMutationTests.Run(Check);
+            LanguageModelTests.Run(Check);
             string native = Environment.GetEnvironmentVariable("VAS_NATIVE_ARGV_FIXTURE");
             if (!string.IsNullOrEmpty(native)) NativeArguments(native);
             else if (Environment.OSVersion.Platform == PlatformID.Win32NT) throw new Exception("Windows core gate requires VAS_NATIVE_ARGV_FIXTURE (tests/vasbuild/rider_argv_fixture.cpp).");

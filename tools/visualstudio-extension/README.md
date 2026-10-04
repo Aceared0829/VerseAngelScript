@@ -2,7 +2,9 @@
 
 A VSIX for `.vas` editing and explicit native project builds in Visual Studio 2026
 (18.x, x64). Canonical TextMate assets provide syntax colors, comments, bracket
-pairs, indentation and ordinary editor undo. The extension does not claim `.as`,
+pairs, indentation and ordinary editor undo. Read-only MEF providers add
+import/include F12, native declaration/member/macro completion, async hover and
+type/function/macro semantic colors. Source graph scans run in the background. The extension does not claim `.as`,
 `.cpp`, or the C++ language/content type.
 
 中文安装、源码打包、示例与三端能力矩阵见 [安装与使用指南](../../docs/ide-setup.md)。
@@ -26,8 +28,7 @@ pairs, indentation and ordinary editor undo. The extension does not claim `.as`,
 The compiler owns the shared [project](../../docs/vas-project.md) and
 [JSONL report](../../docs/vas-build-report.md) contracts. Enumeration and selection
 create no output directories. Only a successful native compilation may create
-its configured output. Opening, indexing, editing and saving settings never
-execute the compiler. A repeated Build command while an operation is active is
+its configured output. Opening, indexing and editing do not start a project build. An independent current-file live checker runs only when explicitly enabled in user Toolchain settings. A repeated Build command while an operation is active is
 ignored; cancel it before starting another.
 
 Compiler errors, warnings and information appear in the native Error List and
@@ -66,7 +67,8 @@ workspace trust state remains unverified. Opening a solution or folder is not
 proof of native trust. The extension uses no reconstructed private COM interface,
 registry trust heuristic or `Microsoft.Internal` API.
 
-This module does not provide Run Project, semantic analysis, LSP, debugger/DAP,
+Conditional macro activation and complete compiler type binding are not inferred.
+This module does not provide Run Project, semantic diagnostics, LSP, debugger/DAP,
 SDK generation, Unreal integration, or C++ feature parity.
 
 ## Build and verify
@@ -131,3 +133,7 @@ References: [language configuration](https://learn.microsoft.com/en-us/visualstu
 [native trust behavior](https://learn.microsoft.com/en-us/visualstudio/ide/trust-settings?view=visualstudio),
 [Microsoft test harness](https://github.com/microsoft/vs-extension-testing),
 [runner images](https://github.com/actions/runner-images).
+
+## Editing diagnostics (0.3.0)
+
+Native function completion inserts call parentheses and Signature Help displays source parameters. Structural syntax errors have red squiggles without a compiler. Set the user Compiler executable and enable **Live diagnostics** to check unsaved source/dependency snapshots after a debounce. The nearest project ancestor must contain `.vas/vasbuild.config.txt`; checks publish current-file errors and reject stale snapshots. See [language service details](../../docs/ide-language-support.md).

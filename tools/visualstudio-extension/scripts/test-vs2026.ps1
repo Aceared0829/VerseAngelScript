@@ -28,6 +28,7 @@ $env:VAS_TEST_WORKSPACE = Join-Path $ResultsDirectory 'fixtures'
 $env:VAS_TEST_RESULTS = $ResultsDirectory
 $env:XUNIT_LOGS = Join-Path $ResultsDirectory 'harness'
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $extensionRoot '../..'))
+$env:VAS_LANGUAGE_EXAMPLES = Join-Path $repositoryRoot 'examples/arena'
 $nativeBuild = Join-Path $ResultsDirectory 'native-build'
 $projectEvidence = Join-Path $ResultsDirectory 'project-build'
 # Remove stale evidence before any run; a previous native pass cannot satisfy this gate.
