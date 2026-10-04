@@ -2,6 +2,8 @@
 
 此目录存放可直接安装到 JetBrains Rider 的 VAS 语言插件，不是 Visual Studio 扩展。
 
+此处 `0.5.6` ZIP 是较早的已检入安装包，以下为该包的说明。当前源码的 Build Project 及后续修复需重新打包；同版本号不能证明内容一致。请先阅读 [当前三端安装与使用指南](../../docs/ide-setup.md)。
+
 ## 安装
 
 1. 打开 Rider 的 **Settings | Plugins**。
