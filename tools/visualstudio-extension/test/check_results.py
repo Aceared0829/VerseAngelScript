@@ -30,7 +30,7 @@ PROJECT_EVIDENCE = {
     "CanonicalMissingIncludesAndAncestorChangesInvalidate": {"nativeMissingInclude", "canonicalAliasCreate", "ancestorRename", "ancestorDelete", "sameSessionUiInvalidated", "nativeSuccessRowsCleared", "staleSessionGuardsRejected", "staleNativeWarningDoesNotNavigate"},
     "FirstTraversalDirtyIncludeAliasBlocksPublication": {"firstTraversalObserved", "dirtyTxtHardLinkRejected", "noStalePublication", "unrelatedDirtyAllowed"},
     "MismatchedProofAndTruncatedReportsNeverPublish": {"mismatchedDigestRejected", "truncatedTerminalRejected", "noDiagnosticPublication", "actualProcessCalls"},
-    "BlockedBuildInputAndCompilerChangesInvalidate": {"sourceMutationCancels", "configMutationCancels", "manifestMutationCancels", "compilerSettingCancels", "lateOutputIgnored", "processesReaped", "concurrentWatcherCancelSafe"},
+    "BlockedBuildInputAndCompilerChangesInvalidate": {"sourceMutationCancels", "configMutationCancels", "manifestMutationCancels", "compilerSettingCancels", "lateOutputIgnored", "processesReaped", "concurrentWatcherCancelSafe", "sharingAcquisitionResponsive", "exactSingleInputMutation"},
     "DescriptorCancellationReapsProcessBeforeRestart": {"descriptorBlocked", "cancelCommand", "cleanupRetainsOwnership", "repeatIgnoredDuringCleanup", "processReaped", "restartAfterCleanup"},
     "DirtyAliasChangedAfterReadBlocksImmediateBuild": {"descriptorRead", "rdtAliasChanged", "immediateBuildBlocked", "zeroBuildProcesses"},
     "PackageDisposalCancelsRunningBuildAndLateResults": {"nativePackageClose", "processCancelled", "lateResultIgnored", "isolatedHostSuffix"},

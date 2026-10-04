@@ -11,6 +11,8 @@
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" Condition="'$(TargetFramework)' == 'net472'" />
     <Compile Include="Program.cs" />
+    <Compile Include="FixtureMutationTests.cs" />
+    <Compile Include="..\Shared\FixtureMutation.cs" Link="FixtureMutation.cs" />
     <Compile Include="..\..\Build\Protocol.cs" Link="Protocol.cs" />
     <Compile Include="..\..\Build\NativeProcess.cs" Link="NativeProcess.cs" />
     <Compile Include="..\..\Build\FileIdentity.cs" Link="FileIdentity.cs" />
