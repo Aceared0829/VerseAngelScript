@@ -8,6 +8,7 @@ const os = require('node:os');
 const { createHash } = require('node:crypto');
 const { StringDecoder } = require('node:string_decoder');
 const { spawn } = require('node:child_process');
+const { EventEmitter } = require('node:events');
 const { projectPlan, projectRequest } = require('../src/project');
 const { ProjectBuildProcess, ProjectDependencies } = require('../src/projectReport');
 const { createProjectTerminal } = require('../src/projectTask');
@@ -15,7 +16,9 @@ const { ProjectInputObservations } = require('../src/projectObservations');
 const { createProjectWatchers } = require('../src/projectWatch');
 const { BuildDiagnostics } = require('../src/diagnostics');
 const { documentDigest } = require('../src/projectVersions');
+const { configuredRuntime } = require('./vscodeRuntime');
 const { readyDirectoryWatch } = require('./watchReadiness');
+const { sameFileName } = require('../src/toolchain');
 
 // These are native-process/component tests, not extension-host or native Windows
 // UI tests. An old compiler is covered by the other compatibility tests. CI's
@@ -327,35 +330,65 @@ test('a first real native include proof preserves warnings across pending and la
     });
   });
 
-test('real native publication survives a single metadata-only change delivered by a ready Node filesystem watcher', nativeProofOptions,
+test('real native publication survives a single metadata-only change delivered by the selected VS Code Parcel backend', nativeProofOptions,
   async () => fixture(async state => {
-    let armed = false;
+    const runtime = await configuredRuntime();
+    const parcel = require(runtime.parcel);
+    const root = await fs.realpath(state.root), included = await fs.realpath(state.include);
+    const audit = { version: runtime.version, commit: runtime.commit, parcelVersion: runtime.parcelVersion, backend: runtime.backend,
+      parcel: runtime.parcel, phase: 'subscribe', events: [], dropped: 0 };
+    let armed = false, watcherError, subscription, readiness, observeReadiness, bridge;
     const received = deferred();
-    // This is a native-process/component test. The separate Extension Host
-    // fixture must establish readiness on the extension's own VS Code watcher.
-    const watcher = await readyDirectoryWatch(state.root, (kind, name) => {
-      if (armed && kind === 'change' && name && samePath(path.join(state.root, name), state.include)) {
-        state.fsChanged(state.include); received.resolve();
-      }
-    });
     try {
+      // Use the product's actual native module/backend. Node fs.watch's macOS
+      // rename/change classification is not Parcel's stat-based update mapping.
+      // Parcel exposes subscription completion; the GUI fixture still proves
+      // delivery through the extension's own existing FileSystemWatcher.
+      subscription = await parcel.subscribe(root, (error, events) => {
+        if (error) { watcherError = error; audit.error = error.message; bridge?.emit('error', error); received.resolve(); return; }
+        for (const event of events) {
+          if (audit.events.length < 64) audit.events.push({ type: event.type, path: event.path, phase: audit.phase }); else audit.dropped++;
+          if (sameFileName(path.dirname(event.path), root)) observeReadiness?.(event.type, path.basename(event.path));
+          if (armed && event.type === 'update' && sameFileName(event.path, included)) {
+            state.fsChanged(state.include); received.resolve();
+          }
+        }
+      }, { backend: runtime.backend });
+      assert.ifError(watcherError);
+      audit.phase = 'readiness';
+      readiness = await readyDirectoryWatch(root, () => {}, { createWatcher(_directory, receive) {
+        // Forward this same Parcel subscription, never create a Node watcher.
+        observeReadiness = receive; bridge = new EventEmitter();
+        bridge.close = () => { observeReadiness = undefined; };
+        return bridge;
+      } });
+      audit.readiness = readiness.audit;
+      audit.phase = 'compile';
       const build = state.start();
       assert.equal(await bounded(build.closed.promise, 'single native build'), 0, build.output.join(''));
       assertActualProof(state, build); assertNativeSuccess(build);
       const publication = warningEntries(state)[0]; assert.ok(publication);
       const before = await fs.stat(state.include, { bigint: true });
+      assert.ifError(watcherError);
       armed = true;
+      audit.phase = 'post-publication-touch';
       await fs.utimes(state.include, Number(before.atimeNs) / 1e9, Number(before.mtimeNs) / 1e9 + 2);
-      await bounded(watcher.wait(received.promise), 'post-publication metadata notification');
+      await bounded(received.promise, 'post-publication Parcel metadata notification');
+      assert.ifError(watcherError);
       await bounded(state.observations.settle(), 'classify the actual metadata notification');
       const after = await fs.stat(state.include, { bigint: true });
+      audit.mtime = { before: before.mtimeNs.toString(), after: after.mtimeNs.toString() };
       assert.notEqual(after.mtimeNs, before.mtimeNs);
       assert.equal(after.dev, before.dev); assert.equal(after.ino, before.ino); assert.equal(after.size, before.size);
       assert.deepEqual(await fs.readFile(state.include), state.bytes);
       assert.equal(warningEntries(state)[0], publication);
       assert.deepEqual(build.closeCodes, [0]);
       assert.equal(build.wire.filter(record => record.type === 'start').length, 1);
-    } finally { watcher.close(); }
+    } finally {
+      readiness?.close();
+      try { await subscription?.unsubscribe(); assert.ifError(watcherError); }
+      finally { console.log('VAS Parcel metadata evidence:', JSON.stringify(audit)); }
+    }
   }));
 
 test('real cold-include proofs retain mandatory dirty and clean physical-alias checks', nativeProofOptions, async () => {
