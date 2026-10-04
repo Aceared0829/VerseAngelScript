@@ -8,6 +8,13 @@ const os = require('node:os');
 const { createHash } = require('node:crypto');
 const { inspectRuntime, configuredRuntime, prepareRuntime, runtimeForIntegration, subscribeRuntimeParcel } = require('./vscodeRuntime');
 
+async function looseParcelFixture(parcel) {
+  await fs.mkdir(path.join(parcel, 'build/Release'), { recursive: true });
+  await fs.writeFile(path.join(parcel, 'build/Release/watcher.node'), 'native fixture, never executed');
+  await fs.writeFile(path.join(parcel, 'index.js'), 'entry point fixture, never executed');
+  await fs.writeFile(path.join(parcel, 'package.json'), JSON.stringify({ name: '@parcel/watcher', version: '2.1.0', main: 'index.js' }));
+}
+
 async function fixture(run, platform = process.platform) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vas-code-runtime-'));
   const executable = platform === 'darwin' ? path.join(root, 'Visual Studio Code.app/Contents/MacOS/Code') :
@@ -16,12 +23,9 @@ async function fixture(run, platform = process.platform) {
   const parcel = path.join(app, 'node_modules/@parcel/watcher'), version = '1.96.4', commit = 'c'.repeat(40);
   try {
     await fs.mkdir(path.dirname(executable), { recursive: true }); await fs.writeFile(executable, 'layout fixture, never executed');
-    await fs.mkdir(path.join(parcel, 'build/Release'), { recursive: true });
-    await fs.writeFile(path.join(parcel, 'build/Release/watcher.node'), 'native fixture, never executed');
-    await fs.writeFile(path.join(parcel, 'index.js'), 'entry point fixture, never executed');
+    await looseParcelFixture(parcel);
     await fs.writeFile(path.join(app, 'package.json'), JSON.stringify({ version }));
     await fs.writeFile(path.join(app, 'product.json'), JSON.stringify({ version, commit }));
-    await fs.writeFile(path.join(parcel, 'package.json'), JSON.stringify({ name: '@parcel/watcher', version: '2.1.0', main: 'index.js' }));
     await run({ root, executable, app, parcel, version, commit });
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 }
@@ -89,6 +93,7 @@ async function archiveFixture(state, { platform = process.platform, versioned = 
     await fs.rename(state.app, app);
     await fs.rmdir(path.join(state.root, 'resources'));
     state.app = app;
+    state.parcel = path.join(app, 'node_modules/@parcel/watcher');
   }
   const bytes = Buffer.from('native fixture, never executed');
   const parcelBinding = path.join(state.app, 'node_modules.asar.unpacked/@parcel/watcher/build/Release/watcher.node');
@@ -228,18 +233,26 @@ test('native subscription preserves Parcel callback, options, readiness, unsubsc
     () => { throw new Error('unverified load'); }), /parcelBinding changed/);
 }));
 
-test('loose runtime rejects a competing archive or preferred platform binding', async () => {
-  for (const mode of ['archive', 'preferred', 'nested-preferred']) await fixture(async state => {
-    if (mode === 'archive') {
-      await archiveFixture(state);
-      await fs.mkdir(state.parcel, { recursive: true });
-      await fs.writeFile(path.join(state.parcel, 'package.json'), JSON.stringify({ name: '@parcel/watcher', version: '2.5.6', main: 'index.js' }));
-    }
-    else await fs.mkdir(path.join(mode === 'preferred' ? path.dirname(state.parcel) : path.join(state.parcel, 'node_modules/@parcel'),
-      `watcher-${process.platform}-${process.arch}`), { recursive: true });
-    await assert.rejects(inspectRuntime(state.executable), /Ambiguous|preferred Parcel/);
+for (const platform of ['linux', 'darwin', 'win32']) {
+  test(`loose ${platform} runtime rejects a competing archive or preferred platform binding`, async () => {
+    for (const mode of ['archive', 'preferred', 'nested-preferred']) await fixture(async state => {
+      const initial = await inspectRuntime(state.executable, platform);
+      assert.equal(initial.parcelLayout, 'loose'); assert.equal(initial.app, state.app);
+      if (mode === 'archive') {
+        await archiveFixture(state, { platform });
+        const archived = await inspectRuntime(state.executable, platform);
+        assert.equal(archived.parcelLayout, 'asar'); assert.equal(archived.app, state.app);
+        // Compete inside the one verified app. Recreating the old Windows app
+        // directory would test application discovery ambiguity instead.
+        assert.equal(state.parcel, path.join(archived.app, 'node_modules/@parcel/watcher'));
+        await looseParcelFixture(state.parcel);
+      } else await fs.mkdir(path.join(mode === 'preferred' ? path.dirname(state.parcel) : path.join(state.parcel, 'node_modules/@parcel'),
+        `watcher-${platform}-${process.arch}`), { recursive: true });
+      await assert.rejects(inspectRuntime(state.executable, platform), mode === 'archive' ?
+        /Ambiguous loose and archived Parcel layouts/ : /Unsupported preferred Parcel platform binding/);
+    }, platform);
   });
-});
+}
 
 test('legacy loose watcher remains supported beside an unrelated ASAR', async () => fixture(async state => {
   const header = Buffer.from(JSON.stringify({ files: { unrelated: { size: 1, offset: '0' } } }));
