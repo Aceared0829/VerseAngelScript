@@ -26,10 +26,11 @@ async function readyDirectoryWatch(root, onEvent, { createWatcher = watch, write
     controller.abort(error); signalError(error);
   }
   const aborted = () => fail(new Error('Directory watcher readiness cancelled'));
-  function record(kind, filename) {
+  function record(kind, filename, watcherId) {
     if (closed) return;
     const rawName = filename == null ? null : String(filename);
     const event = { kind, name: rawName?.slice(0, 1024) ?? null, phase: audit.phase };
+    if (Number.isSafeInteger(watcherId) && watcherId > 0) event.watcherId = watcherId;
     if (audit.events.length < 64) audit.events.push(event); else audit.dropped++;
     if (rawName === name && !ready) { ready = true; audit.ready = { ...event }; signalReady(); }
     try { onEvent(kind, filename); } catch (error) { fail(error); }

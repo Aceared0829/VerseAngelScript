@@ -24,6 +24,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       VAS_TEST_REQUIRE_SOURCE_PROOFS: '1'
+      VSCODE_TEST_VERSION: ${{ matrix.vscode }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -39,6 +40,9 @@ jobs:
       - name: Install extension test dependencies
         working-directory: tools/vscode-extension
         run: npm ci
+      - name: Prepare shared official VS Code test runtime
+        working-directory: tools/vscode-extension
+        run: node test/vscodeRuntime.js
       - name: Unit and real TextMate/native project tests
         working-directory: tools/vscode-extension
         env:

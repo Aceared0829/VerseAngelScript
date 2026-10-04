@@ -5,8 +5,10 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { StringDecoder } = require('node:string_decoder');
+const { EventEmitter } = require('node:events');
 const vscode = require('vscode');
 const { RerunSaveEvidence } = require('./rerunSaveEvidence');
+const { readyDirectoryWatch } = require('./watchReadiness');
 const { documentDigest, readVersion } = require('../src/projectVersions');
 
 // Observe the real child-process boundary before activating the extension. These
@@ -101,13 +103,47 @@ vscode.CustomExecution = class extends OriginalCustomExecution {
 // Observe notifications on the extension's actual watchers. This neither
 // substitutes a separate watcher nor changes the production event callbacks.
 const originalWatcher = vscode.workspace.createFileSystemWatcher;
+const actualWatchListeners = new Set();
+const actualWatchPatterns = new Map();
+let actualWatchSequence = 0;
 vscode.workspace.createFileSystemWatcher = function(...args) {
-  const watcher = originalWatcher.apply(this, args);
-  watcher.onDidCreate(uri => fileAudit?.('create', uri));
-  watcher.onDidChange(uri => fileAudit?.('change', uri));
-  watcher.onDidDelete(uri => fileAudit?.('delete', uri));
+  const watcher = originalWatcher.apply(this, args), id = ++actualWatchSequence;
+  actualWatchPatterns.set(id, typeof args[0] === 'string' ? args[0] : {
+    base: args[0]?.baseUri?.fsPath || args[0]?.base, pattern: args[0]?.pattern });
+  const received = (kind, uri) => {
+    fileAudit?.(kind, uri, id);
+    for (const listener of actualWatchListeners) listener(kind, uri, id);
+  };
+  watcher.onDidCreate(uri => received('create', uri));
+  watcher.onDidChange(uri => received('change', uri));
+  watcher.onDidDelete(uri => received('delete', uri));
   return watcher;
 };
+
+async function readyExtensionDirectory(directory, options = {}) {
+  const real = await fs.realpath(directory), { sameFileName } = require('../src/toolchain');
+  const readiness = await readyDirectoryWatch(directory, () => {}, { ...options, createWatcher(_directory, receive) {
+    // Bridge only the extension's existing FileSystemWatcher callbacks. This
+    // creates no Node or VS Code watcher and never disposes a production one.
+    const listener = (kind, uri, id) => {
+      if (uri.scheme === 'file' && [directory, real].some(dir => sameFileName(dir, path.dirname(uri.fsPath)))) {
+        receive(kind, path.basename(uri.fsPath), id);
+      }
+    };
+    const bridge = new EventEmitter();
+    actualWatchListeners.add(listener);
+    bridge.close = () => actualWatchListeners.delete(listener);
+    return bridge;
+  } });
+  readiness.audit.pattern = actualWatchPatterns.get(readiness.audit.ready.watcherId);
+  return readiness;
+}
+
+function postPublicationNotification(events, afterOrder, watcherId, paths) {
+  const { sameFileName } = require('../src/toolchain');
+  return events.find(event => event.order > afterOrder && event.kind === 'change' && event.watcherId === watcherId &&
+    paths.some(file => sameFileName(file, event.path)));
+}
 
 let lastStage = 'initializing';
 function stage(value) { lastStage = value; console.log(`VAS_TEST_STAGE:${process.env.VAS_TEST_MODE}:${value}`); }
@@ -387,8 +423,9 @@ async function savedIncludeAliasTests(folder, fixture) {
     }));
   }
   const before = await inputEvidence(), fileEvents = [], diagnosticEvents = [], inputEvents = [], textEvents = [];
+  let postPublication;
   const from = processCalls.length, customFrom = customExecutions.length;
-  fileAudit = (kind, file) => { if (fileEvents.length < 64) fileEvents.push({ order: ++auditSequence, kind, path: file.fsPath }); };
+  fileAudit = (kind, file, watcherId) => { if (fileEvents.length < 64) fileEvents.push({ order: ++auditSequence, kind, path: file.fsPath, watcherId }); };
   inputAudit = event => { if (inputEvents.length < 64) inputEvents.push(event); };
   const diagnosticListener = vscode.languages.onDidChangeDiagnostics(event => {
     for (const file of event.uris) if (diagnosticEvents.length < 64) diagnosticEvents.push({ order: ++auditSequence, uri: file.toString(),
@@ -416,19 +453,51 @@ async function savedIncludeAliasTests(folder, fixture) {
     const proven = loaded.length > 0 && loaded.every(record => record.sourceDigestVersion === 1 && record.sourceDigestAlgorithm === 'sha256');
     if (process.env.VAS_TEST_REQUIRE_SOURCE_PROOFS === '1') assert.equal(proven, true, 'this CI build must use the real proof-producing compiler');
     if (proven) {
-      // Force a real, late OS notification after successful publication. This
-      // does not retry compilation or rely on the host delaying a save event.
-      const included = uri(alias.include).fsPath, real = await fs.realpath(included), afterOrder = auditSequence;
-      const stat = await fs.stat(included);
-      await fs.utimes(included, stat.atime, new Date(stat.mtimeMs + 2000));
-      const { sameFileName } = require('../src/toolchain');
-      await eventually(() => fileEvents.some(event => event.order > afterOrder && event.kind === 'change' &&
-        [included, real].some(file => sameFileName(file, event.path))), 'a real post-publication include notification');
-      assert.ok(lastInputObservations);
-      await bounded(lastInputObservations.settle(), 'validate the late include notification using native loaded-byte proof');
-      assert.ok(vscode.languages.getDiagnostics(uri(alias.include)).some(item => item.severity === vscode.DiagnosticSeverity.Warning),
-        'a verified same-byte include notification must preserve the compiler-owned warning');
-      assert.equal(buildCalls(from).length, 1, 'late notification proof must not trigger a retry or rebuild');
+      // First prove delivery from this source directory through an actual
+      // production watcher. Metadata-only changes can otherwise precede the
+      // workspace backend's asynchronous subscription and be lost entirely.
+      const included = uri(alias.include).fsPath, real = await fs.realpath(included);
+      const readiness = await readyExtensionDirectory(path.dirname(included));
+      postPublication = { readiness: readiness.audit };
+      try {
+        const baseline = await readVersion(included), stat = await fs.stat(included, { bigint: true });
+        const afterOrder = ++auditSequence, watcherId = readiness.audit.ready.watcherId;
+        assert.ok(Number.isSafeInteger(watcherId), 'readiness must identify an actual extension watcher');
+        assert.ok(inputEvents.some(event => event.action === 'publish' && event.published && event.order < afterOrder),
+          'the trigger must follow a successful production publication');
+        assert.ok(lastInputObservations);
+        const sentinel = path.join(path.dirname(included), readiness.audit.sentinel);
+        assert.equal(lastInputObservations.dependencies.relevant(sentinel), false, 'readiness sentinel must not become a compiler dependency');
+        assert.ok(vscode.languages.getDiagnostics(uri(alias.include)).some(item => item.severity === vscode.DiagnosticSeverity.Warning),
+          'the independent readiness handshake must retain the published warning');
+        readiness.audit.phase = 'post-publication-touch';
+        postPublication.triggerStart = afterOrder;
+        // Keep the original single metadata-only trigger: no source rewrite,
+        // replacement, compilation retry, or dependence on a delayed save event.
+        await fs.utimes(included, Number(stat.atimeNs) / 1e9, Number(stat.mtimeNs) / 1e9 + 2);
+        postPublication.triggerEnd = ++auditSequence;
+        const touched = await fs.stat(included, { bigint: true });
+        assert.notEqual(touched.mtimeNs, stat.mtimeNs, 'the single touch must change the saved file timestamp');
+        postPublication.mtime = { before: stat.mtimeNs.toString(), after: touched.mtimeNs.toString() };
+        await eventually(() => postPublicationNotification(fileEvents, afterOrder, watcherId, [included, real]),
+          'a real post-publication include notification');
+        postPublication.notification = postPublicationNotification(fileEvents, afterOrder, watcherId, [included, real]);
+        await bounded(lastInputObservations.settle(), 'validate the late include notification using native loaded-byte proof');
+        const current = await readVersion(included);
+        const { sameFileName } = require('../src/toolchain');
+        postPublication.classification = inputEvents.find(event => event.action === 'changed' && !event.cleanDocument &&
+          event.order > postPublication.notification.order && [included, real].some(file => sameFileName(file, event.file)));
+        assert.ok(postPublication.classification, 'the actual include notification must reach the production input observer');
+        const proof = loaded.find(record => sameFileName(record.section, included));
+        assert.equal(current.kind, 'readable');
+        assert.equal(current.dev, baseline.dev); assert.equal(current.ino, baseline.ino);
+        assert.equal(current.digest, baseline.digest); assert.equal(current.byteLength, baseline.byteLength);
+        assert.equal(current.digest, proof?.sourceDigest); assert.equal(current.byteLength, proof?.sourceByteLength);
+        postPublication.current = current;
+        assert.ok(vscode.languages.getDiagnostics(uri(alias.include)).some(item => item.severity === vscode.DiagnosticSeverity.Warning),
+          'a verified same-byte include notification must preserve the compiler-owned warning');
+        assert.equal(buildCalls(from).length, 1, 'late notification proof must not trigger a retry or rebuild');
+      } finally { readiness.close(); }
     }
     assert.equal(vscode.languages.getDiagnostics(document.uri).length, 0,
       'physical safety checks must not rewrite compiler diagnostic paths to the .txt editor alias');
@@ -440,7 +509,7 @@ async function savedIncludeAliasTests(folder, fixture) {
     try {
       let after;
       try { after = await inputEvidence(); } catch (error) { after = { evidenceError: error.message }; }
-      console.log('VAS saved-alias evidence:', JSON.stringify({ before, after, fileEvents, diagnosticEvents, inputEvents, textEvents,
+      console.log('VAS saved-alias evidence:', JSON.stringify({ before, after, fileEvents, diagnosticEvents, inputEvents, textEvents, postPublication,
         processes: nativeCalls(from).map(call => ({ order: call.order, args: call.args, report: call.report, reportTruncated: call.reportTruncated, nativeClose: call.nativeClose })),
         executions: customExecutions.slice(customFrom) }));
     } finally {

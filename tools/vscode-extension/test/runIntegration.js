@@ -4,6 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
+const { runtimeForIntegration } = require('./vscodeRuntime');
 
 const projectPaths = {
   source: 'project sources 文😀 $&;',
@@ -256,8 +257,9 @@ async function main() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vas-vscode-test-'));
   let cleanupRoot = true;
   try {
-    const { downloadAndUnzipVSCode } = require('@vscode/test-electron');
-    const executable = await downloadAndUnzipVSCode(process.env.VSCODE_TEST_VERSION || '1.96.4');
+    // CI prepares this once before component tests so their Parcel binary and
+    // all GUI sessions come from exactly the same selected VS Code build.
+    const { executable } = await runtimeForIntegration();
     // Exercise native UTF-16 argv/filesystem boundaries on Windows, including
     // surrogate pairs, spaces and literal shell metacharacters in project paths.
     const workspace = path.join(root, 'VAS project 工程 文😀 with spaces $&;');
